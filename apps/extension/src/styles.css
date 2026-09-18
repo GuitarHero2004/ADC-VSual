@@ -1,0 +1,130 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #162238;
+  background: #ffffff;
+  line-height: 1.6;
+  font-synthesis: none;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.panel {
+  max-width: 42rem;
+  margin-inline: auto;
+  padding: 1.25rem;
+  overflow-wrap: anywhere;
+}
+
+h1,
+h2,
+p {
+  margin-block: 0 1rem;
+}
+
+h1 {
+  font-size: 1.65rem;
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: 1.2rem;
+  line-height: 1.4;
+}
+
+.eyebrow {
+  margin-bottom: 0.5rem;
+  font-weight: 700;
+  color: #374c69;
+}
+
+section {
+  margin-top: 1.5rem;
+}
+
+.notice {
+  padding: 1rem;
+  border: 2px solid #536887;
+  border-radius: 0.5rem;
+  background: #eff4fa;
+}
+
+.notice p:last-child {
+  margin-bottom: 0;
+}
+
+label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 700;
+}
+
+textarea,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+textarea {
+  display: block;
+  width: 100%;
+  min-height: 9rem;
+  padding: 0.75rem;
+  border: 2px solid #536887;
+  border-radius: 0.375rem;
+  background: #ffffff;
+  resize: vertical;
+}
+
+.field-help {
+  margin-top: 0.5rem;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+button {
+  min-height: 2.75rem;
+  padding: 0.625rem 0.875rem;
+  border: 2px solid #162238;
+  border-radius: 0.375rem;
+  background: #ffffff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:hover:enabled {
+  background: #e3edf8;
+}
+
+button:disabled {
+  border-color: #6a7686;
+  color: #465265;
+  background: #edf0f4;
+  cursor: not-allowed;
+}
+
+:focus-visible {
+  outline: 3px solid #005fcc;
+  outline-offset: 3px;
+}
+
+.status {
+  min-height: 1.6em;
+  margin-top: 1rem;
+}
+
+@media (forced-colors: active) {
+  :focus-visible {
+    outline-color: Highlight;
+  }
+}

@@ -1,0 +1,12 @@
+# Keep implementation formatting stable on Windows without normalizing references.
+/apps/** text eol=lf
+/packages/** text eol=lf
+/*.json text eol=lf
+/*.mjs text eol=lf
+/README.md text eol=lf
+/.editorconfig text eol=lf
+/.gitattributes text eol=lf
+/.gitignore text eol=lf
+/.npmrc text eol=lf
+/.nvmrc text eol=lf
+/.prettierignore text eol=lf
