@@ -90,6 +90,27 @@ panel reflow and zoom. NVDA and actual unpacked-extension loading must be
 verified manually; automated lint/build checks do not establish screen-reader
 usability or accessibility conformance.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on pull requests targeting `main` and pushes to
+`main`. It uses Node from `.nvmrc`, npm from `package.json`'s `packageManager`,
+and `npm ci --include=dev --include-workspace-root` with the committed lockfile.
+It runs the existing type, lint, formatting and build checks from the repository
+root. Contracts are type-checked and bundled from source by both apps, so they
+do not need a separate build. There are no tests yet; no placeholder test step
+is included. No AI, database or Vercel credentials are needed.
+
+For main branch protection, select **Foundation checks** (workflow **CI**) after
+its first GitHub run. Reproduce the checks locally with:
+
+```sh
+npm ci --include=dev --include-workspace-root
+npm run check
+```
+
+Deployment remains with Vercel's existing GitHub integration; CI only validates
+the repository.
+
 ## Vercel builds
 
 Keep **Framework Preset: Next.js**, **Root Directory: `apps/web`**, and
