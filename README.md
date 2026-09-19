@@ -90,13 +90,39 @@ panel reflow and zoom. NVDA and actual unpacked-extension loading must be
 verified manually; automated lint/build checks do not establish screen-reader
 usability or accessibility conformance.
 
+## Vercel builds
+
+Keep **Framework Preset: Next.js**, **Root Directory: `apps/web`**, and
+**Node.js Version: 24.x**. Keep **Include source files outside of the Root
+Directory in the Build Step** enabled so the app can use the shared contracts,
+root TypeScript configuration and workspace lockfile. Use the preset's default
+build command and output directory.
+
+`apps/web/vercel.json` sets the Install Command to
+`npm ci --include=dev --include-workspace-root`. This overrides the dashboard's
+Install Command. `--include=dev` keeps build tooling installed even when the
+environment requests production-only dependencies; `--include-workspace-root`
+includes the root's pinned TypeScript and React/Node type packages during an
+app-scoped install. No package version changes or duplicate declarations are
+needed. Next.js TypeScript checking remains enabled.
+
+To verify from the repository root:
+
+```sh
+npm ci --include=dev --include-workspace-root
+npm run build --workspace=@adc/web
+npm run typecheck
+npm run lint
+```
+
 ## Repository boundaries
 
 - `apps/extension`: React + Vite, Chromium Manifest V3. Future capture and browser
   execution stay here.
 - `apps/web`: Next.js App Router; synthetic demo website and the single backend.
   `/v1/health` is the only implemented API route. Vercel is the intended host;
-  no deployment or cloud resources are configured by this foundation.
+  its install command is configured in `apps/web/vercel.json`. No cloud resources
+  are provisioned by this repository.
   Next.js agent-file generation is disabled to keep implementation notes here.
 - `packages/contracts`: browser-safe Zod schemas and inferred types, plus the
   shared request-length bound. Next.js and Vite consume TypeScript source
