@@ -48,6 +48,9 @@ jobs:
       - name: Check formatting
         run: npm run format:check
 
-      # Contracts export TypeScript source; both apps bundle it directly.
+      - name: Test voice, authentication and request boundaries without credentials
+        run: npm test
+
+      # Shared packages export TypeScript source; both apps bundle it directly.
       - name: Build web and extension
         run: npm run build
