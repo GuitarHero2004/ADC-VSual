@@ -1,0 +1,10 @@
+node_modules/
+**/dist/
+**/.next/
+**/next-env.d.ts
+**/*.tsbuildinfo
+package-lock.json
+.npm-cache/
+.vercel/
+docs/
+core-context/

@@ -1,0 +1,57 @@
+:root {
+  font-family: Arial, Helvetica, sans-serif;
+  color: #182b3a;
+  background: #f3f6f8;
+  color-scheme: light;
+  line-height: 1.6;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 48rem;
+  margin-inline: auto;
+  padding: clamp(1rem, 5vw, 4rem);
+  overflow-wrap: anywhere;
+}
+
+h1,
+h2 {
+  line-height: 1.2;
+}
+
+h1 {
+  font-size: clamp(2rem, 5vw, 3rem);
+}
+
+.eyebrow {
+  font-weight: 700;
+}
+
+.intro {
+  font-size: 1.25rem;
+}
+
+section {
+  margin-block: 2rem;
+  padding: 1.25rem;
+  border: 2px solid #526a7b;
+  border-radius: 0.5rem;
+  background: #fff;
+}
+
+a {
+  color: #064f9c;
+  text-underline-offset: 0.2em;
+}
+
+:focus-visible {
+  outline: 3px solid #6b21a8;
+  outline-offset: 4px;
+}
