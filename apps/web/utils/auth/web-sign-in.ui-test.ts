@@ -70,6 +70,7 @@ test('actual website sign-in connects only the initiating extension account, ann
     'navigator',
     'HTMLElement',
     'HTMLInputElement',
+    'localStorage',
   ] as const)
     expose(name, dom.window[name]);
   expose('IS_REACT_ACT_ENVIRONMENT', true);
@@ -177,6 +178,7 @@ test('actual website sign-in connects only the initiating extension account, ann
   const { createRoot } = await import('react-dom/client');
   const { default: SignIn } =
     await import('../../app/auth/sign-in/sign-in.tsx');
+  const { default: SiteShell } = await import('../../app/site-shell.tsx');
   const root = createRoot(dom.window.document.getElementById('root')!);
   const document = dom.window.document;
   const button = (name: string) =>
@@ -202,10 +204,12 @@ test('actual website sign-in connects only the initiating extension account, ann
   const render = async () => {
     await act(async () =>
       root.render(
-        createElement(SignIn, {
-          key: attemptId,
-          googleEnabled: false,
-          siteUrl: 'https://app.example.test',
+        createElement(SiteShell, {
+          children: createElement(SignIn, {
+            key: attemptId,
+            googleEnabled: false,
+            siteUrl: 'https://app.example.test',
+          }),
         }),
       ),
     );
@@ -231,6 +235,30 @@ test('actual website sign-in connects only the initiating extension account, ann
       /website and extension sessions are separate/,
     );
     assert.match(document.body.textContent!, /Google sign-in is not available/);
+    await fill('email', extensionAccount.email);
+    const emailField =
+      document.querySelector<HTMLInputElement>('input[name=email]')!;
+    await act(async () => button('Language')!.click());
+    const language =
+      document.querySelector<HTMLSelectElement>('#website-language')!;
+    await act(async () => {
+      language.value = 'vi';
+      language.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    });
+    assert.ok(button('Đăng nhập'));
+    assert.equal(document.querySelector('input[name=email]'), emailField);
+    assert.equal(emailField.value, extensionAccount.email);
+    assert.equal(
+      messages.length,
+      1,
+      'language changes do not reconnect authentication',
+    );
+    await act(async () => {
+      language.value = 'en';
+      language.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    });
+    await act(async () => button('Back to page')!.click());
+    assert.equal(document.activeElement, button('Language'));
     await submit();
     assert.match(
       document.querySelector('[role=alert]')!.textContent!,

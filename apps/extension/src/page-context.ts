@@ -14,6 +14,7 @@ export interface OrdersContext {
   origin: string | null;
   pathname: string | null;
   reason: 'unsupported' | 'unavailable' | null;
+  title?: string;
 }
 export type PageContextInfo = OrdersContext;
 export type OrdersInvalidation = 'page' | 'tab' | 'unavailable';
@@ -131,6 +132,9 @@ export class OrdersPageContext {
         origin: parsed?.origin ?? null,
         pathname: parsed?.pathname ?? null,
         reason: parsed ? null : tab?.url ? 'unsupported' : 'unavailable',
+        ...(parsed && typeof tab?.title === 'string'
+          ? { title: tab.title.slice(0, 300) }
+          : {}),
       };
     } catch {
       return {

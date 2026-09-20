@@ -3,22 +3,37 @@ import type { VoiceNotice } from './controller.ts';
 
 const en = {
   heading: 'Voice test',
+  questionHeading: 'Your question',
+  questionHelp:
+    'Compare two months of completed orders. Review, then choose Ask VSual.',
+  questionCharacters: 'characters',
+  questionTooLong: 'Shorten your question to 1,000 characters before asking.',
+  questionRecord: 'Record question',
+  questionStop: 'Stop recording',
+  questionClear: 'Clear question',
+  questionUnavailable:
+    'Wait for this request to finish or cancel it before recording.',
+  questionMicrophone:
+    'Optional recording, up to 30 seconds. Stop transcribes; Cancel discards.',
+  questionProcessing: 'Finished recordings go to ElevenLabs for transcription.',
+  questionPrivacy:
+    'Review the transcript before asking. Recordings are not saved to Supabase. ElevenLabs may retain them under its own policy.',
   explanation:
-    'Record a short request or type below. Read back repeats your supplied text; it does not answer questions or inspect a page. Page assistance will be connected later.',
+    'Record or type, then hear your text read back. This test does not answer questions or read pages.',
   uiLanguage: 'Interface language',
   recognitionLanguage: 'Recognition and speech language',
   languageHelp:
-    'Auto detects the recording language. This does not change the interface language or translate your text.',
+    'Auto detects the spoken language. Your text is not translated.',
   auto: 'Auto detect',
   start: 'Start recording',
   finish: 'Finish and transcribe',
   cancelRecording: 'Cancel recording',
   cancel: 'Cancel operation',
   microphone:
-    'Microphone permission is separate for this surface. Allow access when your browser asks. Recording stops after 30 seconds; this is recorded transcription, not live transcription.',
+    'Allow microphone access when asked. Record up to 30 seconds; transcription follows when you finish.',
   transcript: 'Transcript or typed text',
   transcriptHelp:
-    'Review and edit before read-back. Your words, digits and punctuation are kept as supplied.',
+    'Review and edit before read-back. Your text is kept as supplied.',
   characters: 'characters for read-back',
   tooLong: 'Shorten the text to 1,000 characters before read-back.',
   read: 'Read back',
@@ -31,12 +46,15 @@ const en = {
   cues: 'Play a short local recording-start cue',
   speed: 'Playback speed',
   replayHelp:
-    'Play / Repeat and speed changes reuse the latest audio without generating it again. Editing text or changing language clears that audio.',
+    'Repeat and speed changes reuse the audio. Editing text or changing language clears it.',
+  processing:
+    'ElevenLabs processes finished recordings and text you choose to read back.',
+  privacyDetails: 'Voice privacy and controls',
   privacy:
-    'Finishing sends your recording to ElevenLabs for transcription. Read back sends the current text to ElevenLabs. This app keeps recording, text and speech only in this session and does not save them to Supabase. ElevenLabs may retain submitted data under its own policy; the Free plan is not a promise of zero retention.',
+    'Recordings, text and generated speech stay in this app only for the session; they are not saved to Supabase. ElevenLabs may retain submitted data under its own policy.',
   privacyLink: 'ElevenLabs privacy policy',
   cancellation:
-    'Escape cancels the current operation here. Cancellation stops local work and cannot reverse provider processing or charges already started.',
+    'Escape cancels local work. Provider processing or charges already started may continue.',
   unavailable: 'Sign in to use the voice test.',
   loading: 'Preparing voice controls…',
   retry: 'No speech recognised. Start recording to try again, or type below.',
@@ -44,22 +62,36 @@ const en = {
 type Labels = typeof en;
 const vi: Labels = {
   heading: 'Thử giọng nói',
+  questionHeading: 'Câu hỏi của bạn',
+  questionHelp:
+    'So sánh số đơn hoàn thành giữa hai tháng. Kiểm tra rồi chọn Hỏi VSual.',
+  questionCharacters: 'ký tự',
+  questionTooLong: 'Rút ngắn câu hỏi còn tối đa 1.000 ký tự trước khi hỏi.',
+  questionRecord: 'Ghi âm câu hỏi',
+  questionStop: 'Dừng ghi âm',
+  questionClear: 'Xóa câu hỏi',
+  questionUnavailable: 'Chờ yêu cầu hoàn tất hoặc hủy trước khi ghi âm.',
+  questionMicrophone:
+    'Ghi âm tùy chọn, tối đa 30 giây. Dừng để chép lời; Hủy để bỏ bản ghi.',
+  questionProcessing:
+    'Bản ghi khi kết thúc được gửi đến ElevenLabs để chép lời.',
+  questionPrivacy:
+    'Kiểm tra văn bản trước khi hỏi. Bản ghi không lưu vào Supabase. ElevenLabs có thể lưu theo chính sách riêng.',
   explanation:
-    'Ghi một yêu cầu ngắn hoặc nhập bên dưới. Đọc lại chỉ lặp lại nội dung bạn cung cấp, không trả lời câu hỏi hay xem trang web. Tính năng hỗ trợ trang sẽ được kết nối sau.',
+    'Ghi âm hoặc nhập, rồi nghe đọc lại văn bản. Phần thử này không trả lời câu hỏi hay đọc trang web.',
   uiLanguage: 'Ngôn ngữ giao diện',
   recognitionLanguage: 'Ngôn ngữ nhận dạng và đọc',
-  languageHelp:
-    'Tự động nhận dạng ngôn ngữ bản ghi. Tùy chọn này không đổi ngôn ngữ giao diện hoặc dịch nội dung.',
+  languageHelp: 'Tự động nhận dạng ngôn ngữ nói. Văn bản không được dịch.',
   auto: 'Tự động nhận dạng',
   start: 'Bắt đầu ghi âm',
   finish: 'Kết thúc và chuyển thành văn bản',
   cancelRecording: 'Hủy ghi âm',
   cancel: 'Hủy thao tác',
   microphone:
-    'Quyền micrô được cấp riêng cho giao diện này. Cho phép khi trình duyệt hỏi. Ghi âm dừng sau 30 giây; văn bản chỉ được tạo sau khi ghi xong, không phải trực tiếp.',
+    'Cho phép micrô khi được hỏi. Ghi tối đa 30 giây; văn bản được tạo sau khi kết thúc.',
   transcript: 'Bản chép lời hoặc nội dung nhập',
   transcriptHelp:
-    'Kiểm tra và sửa trước khi đọc lại. Từ ngữ, chữ số và dấu câu được giữ nguyên như nội dung cung cấp.',
+    'Kiểm tra và sửa trước khi đọc lại. Văn bản được giữ nguyên như bạn cung cấp.',
   characters: 'ký tự để đọc lại',
   tooLong: 'Rút gọn nội dung còn tối đa 1.000 ký tự trước khi đọc lại.',
   read: 'Đọc lại',
@@ -72,12 +104,15 @@ const vi: Labels = {
   cues: 'Phát âm báo ngắn khi bắt đầu ghi âm',
   speed: 'Tốc độ phát',
   replayHelp:
-    'Phát / Lặp lại và đổi tốc độ sử dụng lại âm thanh gần nhất, không tạo lần nữa. Sửa văn bản hoặc đổi ngôn ngữ sẽ xóa âm thanh đó.',
+    'Lặp lại và đổi tốc độ dùng lại âm thanh. Sửa văn bản hoặc đổi ngôn ngữ sẽ xóa âm thanh đó.',
+  processing:
+    'ElevenLabs xử lý bản ghi đã kết thúc và văn bản bạn chọn đọc lại.',
+  privacyDetails: 'Quyền riêng tư và điều khiển giọng nói',
   privacy:
-    'Kết thúc gửi bản ghi đến ElevenLabs để chép lời. Đọc lại gửi văn bản hiện tại đến ElevenLabs. Ứng dụng chỉ giữ bản ghi, văn bản và âm thanh trong phiên này, không lưu vào Supabase. ElevenLabs có thể lưu dữ liệu theo chính sách riêng; gói Free không bảo đảm không lưu dữ liệu.',
+    'Bản ghi, văn bản và âm thanh chỉ được giữ trong phiên ứng dụng này, không lưu vào Supabase. ElevenLabs có thể lưu dữ liệu theo chính sách riêng.',
   privacyLink: 'Chính sách quyền riêng tư của ElevenLabs',
   cancellation:
-    'Nhấn Escape để hủy thao tác trong giao diện này. Hủy dừng thao tác cục bộ nhưng không hoàn tác việc xử lý hoặc chi phí nhà cung cấp đã bắt đầu.',
+    'Escape hủy thao tác trên thiết bị. Việc xử lý hoặc tính phí đã bắt đầu ở nhà cung cấp có thể tiếp tục.',
   unavailable: 'Đăng nhập để thử giọng nói.',
   loading: 'Đang chuẩn bị điều khiển giọng nói…',
   retry:
@@ -231,6 +266,34 @@ export function labels(language: UiLanguage): Labels {
 }
 export function noticeText(language: UiLanguage, notice: VoiceNotice): string {
   return notices[language][notice];
+}
+export function questionNoticeText(
+  language: UiLanguage,
+  notice: VoiceNotice,
+): string {
+  const messages: Partial<Record<VoiceNotice, [string, string]>> = {
+    recording: [
+      'Recording started. Stop to transcribe, or Cancel to discard.',
+      'Đã bắt đầu ghi âm. Dừng để chuyển thành văn bản hoặc Hủy để bỏ bản ghi.',
+    ],
+    transcribing: [
+      'Transcribing your question.',
+      'Đang chuyển câu hỏi thành văn bản.',
+    ],
+    ready: [
+      'Your question is ready to review.',
+      'Câu hỏi đã sẵn sàng để kiểm tra.',
+    ],
+    no_speech: [
+      'No speech recognised. Record again or type your question.',
+      'Không nhận dạng được lời nói. Ghi âm lại hoặc nhập câu hỏi.',
+    ],
+    cleared: ['Question cleared.', 'Đã xóa câu hỏi.'],
+  };
+  const message = messages[notice];
+  return message
+    ? message[language === 'vi' ? 1 : 0]
+    : noticeText(language, notice);
 }
 export function errorText(language: UiLanguage, code: string): string {
   const entry = errors[code] ?? errors.request_failed!;

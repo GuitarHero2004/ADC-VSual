@@ -14,10 +14,12 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { OrdersPageContext } from './page-context.ts';
 import { ordersOrigins } from './config-values.ts';
 import { GroundedController } from './grounded-controller.ts';
@@ -34,6 +36,7 @@ interface Props {
   getHeaders(): Promise<Record<string, string>>;
   onExpired(): void;
   onReady(activate: () => void, cancel: () => void): () => void;
+  settingsTarget?: HTMLElement | null;
 }
 interface Mounted {
   controller: GroundedController;
@@ -142,20 +145,44 @@ function Companion({
   );
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [voiceReady, setVoiceReady] = useState(false);
-  const [section, setSection] = useState<'answer' | 'evidence' | 'table'>(
-    'answer',
-  );
   const [returnStatus, setReturnStatus] = useState('');
   const answerHeading = useRef<HTMLHeadingElement>(null);
-  const evidenceHeading = useRef<HTMLHeadingElement>(null);
-  const tableHeading = useRef<HTMLHeadingElement>(null);
+  const evidenceDetails = useRef<HTMLDetailsElement>(null);
+  const pageHeading = useRef<HTMLHeadingElement>(null);
+  const initialFocus = useRef(false);
+  const permissionFocus = useRef(false);
+  const permissionDetails = useRef<HTMLDetailsElement>(null);
   const surface = useRef<HTMLDivElement>(null);
   const resultText = state.result?.status === 'answer' ? state.result.text : '';
   const resultLanguage = state.resultLanguage ?? props.language;
   const allowed =
     state.context?.supported && state.context.origin === state.consentOrigin;
   const busy = state.phase === 'reading' || state.phase === 'understanding';
-  const focusSection = useRef(false);
+  useLayoutEffect(() => {
+    // Keep the disclosure mounted so a context change preserves summary focus.
+    if (permissionDetails.current) permissionDetails.current.open = !allowed;
+    if (!allowed || !permissionFocus.current) return;
+    permissionFocus.current = false;
+    if (
+      (document.activeElement === document.body ||
+        permissionDetails.current?.contains(document.activeElement)) &&
+      !surface.current?.closest('[hidden]')
+    )
+      surface.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus();
+  }, [allowed]);
+  useEffect(() => {
+    if (initialFocus.current || !state.context) return;
+    initialFocus.current = true;
+    // Never move focus after the user has begun interacting or opened Settings.
+    if (
+      document.activeElement !== document.body ||
+      surface.current?.closest('[hidden]')
+    )
+      return;
+    if (allowed)
+      surface.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus();
+    else pageHeading.current?.focus();
+  }, [state.context, allowed]);
 
   useEffect(() => {
     const element = surface.current;
@@ -233,54 +260,129 @@ function Companion({
       /* Optional non-sensitive preferences only. */
     }
   }, [audio.speechEnabled, audio.playbackRate]);
-  useEffect(() => {
-    if (!focusSection.current) return;
-    focusSection.current = false;
-    (section === 'answer'
-      ? answerHeading
-      : section === 'evidence'
-        ? evidenceHeading
-        : tableHeading
-    ).current?.focus();
-  }, [section]);
-  const navigate = (next: typeof section) => {
-    if (next === section) {
-      (next === 'answer'
-        ? answerHeading
-        : next === 'evidence'
-          ? evidenceHeading
-          : tableHeading
-      ).current?.focus();
-    } else {
-      focusSection.current = true;
-      setSection(next);
-    }
-  };
   const status = state.error
     ? groundedError(props.language, state.error)
     : state.phase === 'stale'
       ? t.previous
-      : t[state.phase === 'error' ? 'idle' : state.phase];
-
+      : state.phase === 'ready'
+        ? state.result?.status === 'answer'
+          ? t.answerReady
+          : state.result
+            ? t.clarification
+            : t.tableReady
+        : state.phase === 'idle'
+          ? ''
+          : t[state.phase === 'error' ? 'idle' : state.phase];
+  const playbackActive = ['generating', 'speaking'].includes(audio.phase);
+  const focusQuestion = () =>
+    surface.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus();
+  const speechPreferences = (
+    <fieldset>
+      <legend>{t.playback}</legend>
+      <label className="checkbox-row" htmlFor="answer-speech-enabled">
+        <input
+          id="answer-speech-enabled"
+          type="checkbox"
+          checked={audio.speechEnabled}
+          onChange={(event) => speech.setSpeechEnabled(event.target.checked)}
+        />
+        {t.speech}
+      </label>
+      <p>{t.speechHelp}</p>
+      <label htmlFor="answer-speed">{t.speed}</label>
+      <select
+        id="answer-speed"
+        value={audio.playbackRate}
+        onChange={(event) => speech.setPlaybackRate(Number(event.target.value))}
+      >
+        {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => (
+          <option key={rate} value={rate}>
+            {rate}×
+          </option>
+        ))}
+      </select>
+      {props.settingsTarget && playbackActive && (
+        <button
+          type="button"
+          onClick={() => {
+            speech.cancel();
+            document.getElementById('answer-speech-enabled')?.focus();
+          }}
+        >
+          {t.stop}
+        </button>
+      )}
+    </fieldset>
+  );
+  const permissionContent = (
+    <>
+      {allowed ? <p>{t.permissionSaved}</p> : <p>{t.permissionIntro}</p>}
+      <details>
+        <summary>{t.permissionDetail}</summary>
+        <p>{t.notice}</p>
+        <a
+          href="https://www.avis.net/docs/2.%20Avis%20-%20Ch%C3%ADnh%20s%C3%A1ch%20b%E1%BA%A3o%20m%E1%BA%ADt.pdf"
+          target="_blank"
+          rel="noreferrer"
+        >
+          {t.privacy}
+        </a>
+      </details>
+      {!allowed ? (
+        <button
+          type="button"
+          disabled={!state.context?.supported}
+          aria-describedby={
+            !state.context?.supported ? 'page-permission-help' : undefined
+          }
+          onClick={(event) => {
+            permissionFocus.current =
+              document.activeElement === event.currentTarget;
+            void controller.allow();
+          }}
+        >
+          {t.allow}
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            controller.revoke();
+            pageHeading.current?.focus();
+          }}
+        >
+          {t.deny}
+        </button>
+      )}
+    </>
+  );
   return (
     <div className="grounded-panel" ref={surface} lang={props.language}>
-      <section aria-labelledby="page-context-heading">
-        <h2 id="page-context-heading">{t.page}</h2>
+      <section aria-labelledby="page-context-heading" className="page-context">
+        <h2 id="page-context-heading" ref={pageHeading} tabIndex={-1}>
+          {t.page}
+        </h2>
+        {state.context?.title && (
+          <p className="page-title">{state.context.title}</p>
+        )}
+        {state.context?.origin && (
+          <p className="field-help">
+            {new URL(state.context.origin).host}/orders
+          </p>
+        )}
         <p role="status" aria-atomic="true">
-          {state.context === null
-            ? t.checking
-            : state.context.supported
-              ? t.supported
-              : t.unsupported}
+          {state.error === 'PAGE_UNAVAILABLE'
+            ? t.unavailablePage
+            : state.context === null
+              ? t.checking
+              : state.context.reason === 'unavailable'
+                ? t.unavailablePage
+                : !state.context.supported
+                  ? t.unsupported
+                  : allowed
+                    ? t.readyPage
+                    : t.needConsent}
         </p>
-        {state.context?.supported && <p>{state.context.origin}/orders</p>}
-        <p>{t.scope}</p>
-      </section>
-      <section
-        className="notice"
-        aria-labelledby="processing-permission-heading"
-      >
-        <h2 id="processing-permission-heading">{t.permission}</h2>
         {!state.context?.supported && (
           <div id="page-permission-help">
             <p>{t.permissionHelp}</p>
@@ -288,7 +390,7 @@ function Companion({
               {supportedOrigins.map((origin) => (
                 <li key={origin}>
                   <a href={`${origin}/orders`} target="_blank" rel="noreferrer">
-                    {origin}/orders
+                    {new URL(origin).host}/orders
                   </a>
                 </li>
               ))}
@@ -296,131 +398,238 @@ function Companion({
             <p>{t.recheckHelp}</p>
           </div>
         )}
-        {allowed ? (
-          <p>{t.allowed}</p>
-        ) : (
-          <>
-            <p>{t.notice}</p>
-            <a
-              href="https://www.avis.net/docs/2.%20Avis%20-%20Ch%C3%ADnh%20s%C3%A1ch%20b%E1%BA%A3o%20m%E1%BA%ADt.pdf"
-              target="_blank"
-              rel="noreferrer"
-            >
-              {t.privacy}
-            </a>
-          </>
-        )}
-        <div className="controls">
-          {!allowed && (
-            <button
-              type="button"
-              disabled={!state.context?.supported}
-              aria-describedby={
-                !state.context?.supported ? 'page-permission-help' : undefined
-              }
-              onClick={() => {
-                void controller.allow();
-              }}
-            >
-              {t.allow}
-            </button>
-          )}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void controller.refreshContext()}
+        >
+          {t.recheck}
+        </button>
+      </section>
+      <section
+        aria-labelledby="processing-permission-heading"
+        className="processing-consent"
+      >
+        <details ref={permissionDetails}>
+          <summary id="processing-permission-heading">{t.permission}</summary>
+          {permissionContent}
+        </details>
+      </section>
+      <section
+        aria-label={
+          props.language === 'vi' ? 'Câu hỏi của bạn' : 'Your question'
+        }
+        className="question-composer"
+      >
+        <VoiceTest
+          sessionKey={props.sessionKey}
+          transport={props.voiceTransport}
+          uiLanguage={props.language}
+          preferencesKey="voice:extension-preferences"
+          mode="question"
+          questionActions={
+            <>
+              <button
+                type="button"
+                className="primary"
+                disabled={
+                  busy ||
+                  voiceBusy ||
+                  !allowed ||
+                  !state.question.trim() ||
+                  unicodeLength(state.question) > GROUNDED_QUESTION_MAX_LENGTH
+                }
+                onClick={() => {
+                  setReturnStatus('');
+                  void controller.ask(props.language);
+                }}
+              >
+                {t.ask}
+              </button>
+              {busy && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    controller.cancel();
+                    focusQuestion();
+                  }}
+                >
+                  {t.cancel}
+                </button>
+              )}
+            </>
+          }
+          onController={attachVoice}
+          disabled={busy}
+          {...(props.settingsTarget !== undefined
+            ? { preferencesTarget: props.settingsTarget }
+            : {})}
+        />
+        <div className="controls composer-actions">
           <button
             type="button"
-            disabled={busy}
+            disabled={busy || voiceBusy}
             onClick={() => {
-              void controller.refreshContext();
+              questionVoice.current?.editText(t.sampleText);
+              focusQuestion();
             }}
           >
-            {t.recheck}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              controller.revoke();
-              setSection('answer');
-            }}
-          >
-            {t.deny}
+            {t.sample}
           </button>
         </div>
       </section>
-      <VoiceTest
-        sessionKey={props.sessionKey}
-        transport={props.voiceTransport}
-        uiLanguage={props.language}
-        preferencesKey="voice:extension-preferences"
-        mode="question"
-        onController={attachVoice}
-        disabled={busy}
-      />
-      <div className="controls">
-        <button
-          type="button"
-          disabled={busy || voiceBusy}
-          onClick={() => {
-            questionVoice.current?.editText(t.sampleText);
-            surface.current
-              ?.querySelector<HTMLTextAreaElement>('textarea')
-              ?.focus();
-          }}
-        >
-          {t.sample}
-        </button>
-        <button
-          type="button"
-          className="primary"
-          disabled={
-            busy ||
-            voiceBusy ||
-            !allowed ||
-            !state.question.trim() ||
-            unicodeLength(state.question) > GROUNDED_QUESTION_MAX_LENGTH
-          }
-          onClick={() => {
-            setSection('answer');
-            setReturnStatus('');
-            void controller.ask(props.language);
-          }}
-        >
-          {t.ask}
-        </button>
-        {busy && (
-          <button type="button" onClick={controller.cancel}>
-            {t.cancel}
-          </button>
-        )}
-      </div>
       <p role="status" aria-atomic="true" className="status">
         {status}
       </p>
       {state.snapshot && state.stale && <p className="notice">{t.previous}</p>}
-      <div className="controls">
-        {state.snapshot && (
-          <button type="button" onClick={() => navigate('table')}>
-            {t.viewTable}
+      {state.result && (
+        <>
+          <button
+            type="button"
+            className="quiet-action"
+            onClick={() => answerHeading.current?.focus()}
+          >
+            {t.goAnswer}
           </button>
-        )}
+          <section aria-labelledby="answer-heading" className="answer-section">
+            <h2 id="answer-heading" ref={answerHeading} tabIndex={-1}>
+              {t.answer}
+            </h2>
+            <p className="answer-text" lang={resultLanguage}>
+              {state.result.text}
+            </p>
+            {state.result.status === 'answer' && (
+              <>
+                <p className="field-help">{t.capturedOnly}</p>
+                <div className="controls">
+                  <button
+                    type="button"
+                    disabled={
+                      !playbackActive &&
+                      (!audio.speechEnabled || busy || voiceBusy || state.stale)
+                    }
+                    onClick={() => {
+                      if (playbackActive) speech.cancel();
+                      else if (audio.hasAudio) void speech.play();
+                      else {
+                        speech.editText(resultText);
+                        void speech.readBack();
+                      }
+                    }}
+                  >
+                    {playbackActive
+                      ? t.stop
+                      : audio.hasAudio
+                        ? t.readAgain
+                        : t.read}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || voiceBusy}
+                    onClick={() => {
+                      speech.cancel();
+                      focusQuestion();
+                    }}
+                  >
+                    {t.askAnother}
+                  </button>
+                </div>
+                {!audio.speechEnabled && (
+                  <p className="field-help">{t.speechOff}</p>
+                )}
+                <p role="status" aria-atomic="true">
+                  {audio.errorCode
+                    ? voiceErrorText(props.language, audio.errorCode)
+                    : audio.phase === 'generating'
+                      ? t.speechPending
+                      : audio.phase === 'speaking'
+                        ? t.speechPlaying
+                        : audio.notice === 'stopped' ||
+                            audio.notice === 'cancelled'
+                          ? t.speechStopped
+                          : ''}
+                </p>
+                <details ref={evidenceDetails} className="evidence-disclosure">
+                  <summary>{t.viewEvidence}</summary>
+                  <h3 id="evidence-heading">{t.evidence}</h3>
+                  <p>
+                    {t.region}: {state.result.evidence.region}. {t.year}:{' '}
+                    {state.result.evidence.year}. {t.unit}.
+                  </p>
+                  <SourceTable
+                    rows={state.result.evidence.rows}
+                    caption={state.result.evidence.table_title}
+                    language={props.language}
+                    sourceLanguage={state.snapshot?.locale ?? 'en-US'}
+                  />
+                  <p lang={resultLanguage}>
+                    {state.result.evidence.calculation.description}
+                  </p>
+                  {state.result.evidence.calculation.limitation && (
+                    <p lang={resultLanguage}>
+                      {state.result.evidence.calculation.limitation}
+                    </p>
+                  )}
+                  <p>
+                    {state.result.evidence.origin}
+                    {state.result.evidence.pathname}
+                  </p>
+                  <p>
+                    {t.captured}:{' '}
+                    <time dateTime={state.result.evidence.captured_at}>
+                      {new Date(
+                        state.result.evidence.captured_at,
+                      ).toLocaleString(props.language)}
+                    </time>
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (evidenceDetails.current) {
+                        evidenceDetails.current.open = false;
+                        evidenceDetails.current
+                          .querySelector('summary')
+                          ?.focus();
+                      }
+                    }}
+                  >
+                    {t.closeEvidence}
+                  </button>
+                </details>
+              </>
+            )}
+            {state.result.status !== 'answer' && (
+              <button type="button" onClick={focusQuestion}>
+                {t.askAnother}
+              </button>
+            )}
+          </section>
+        </>
+      )}
+      <details className="source-disclosure">
+        <summary>{t.inspect}</summary>
+        <p>{t.empty}</p>
         <button
           type="button"
           disabled={!allowed || busy || voiceBusy}
-          onClick={() => {
-            navigate('table');
-            void controller.inspect();
-          }}
+          onClick={() => void controller.inspect()}
         >
           {state.snapshot ? t.refresh : t.capture}
         </button>
-      </div>
-      {section === 'answer' && (
-        <section aria-labelledby="answer-heading">
-          <h2 id="answer-heading" ref={answerHeading} tabIndex={-1}>
-            {t.answer}
-          </h2>
-          <p lang={state.result ? resultLanguage : props.language}>
-            {state.result?.text ?? t.empty}
-          </p>
-          {state.snapshot && (
+        {state.snapshot && (
+          <section aria-labelledby="source-table-heading">
+            <h3 id="source-table-heading">{t.table}</h3>
+            {state.stale && <p className="notice">{t.previous}</p>}
+            <p>
+              {t.region}: {state.snapshot.region}. {t.year}:{' '}
+              {state.snapshot.year}. {t.unit}.
+            </p>
+            <SourceTable
+              rows={state.snapshot.rows}
+              caption={state.snapshot.table_title}
+              language={props.language}
+              sourceLanguage={state.snapshot.locale}
+            />
             <p>
               {t.captured}:{' '}
               <time dateTime={state.snapshot.captured_at}>
@@ -429,168 +638,15 @@ function Companion({
                 )}
               </time>
             </p>
-          )}
-          {state.result?.status === 'answer' && (
-            <>
-              <p>{t.capturedOnly}</p>
-              <button type="button" onClick={() => navigate('evidence')}>
-                {t.viewEvidence}
-              </button>
-            </>
-          )}
-        </section>
-      )}
-      {section === 'evidence' && state.result?.status === 'answer' && (
-        <section aria-labelledby="evidence-heading">
-          <h2 id="evidence-heading" ref={evidenceHeading} tabIndex={-1}>
-            {t.evidence}
-          </h2>
-          <p lang={resultLanguage}>{state.result.text}</p>
-          <p>
-            {t.region}: {state.result.evidence.region}. {t.year}:{' '}
-            {state.result.evidence.year}. {t.unit}.
-          </p>
-          <SourceTable
-            rows={state.result.evidence.rows}
-            caption={state.result.evidence.table_title}
-            language={props.language}
-            sourceLanguage={state.snapshot?.locale ?? 'en-US'}
-          />
-          <p lang={resultLanguage}>
-            {state.result.evidence.calculation.description}
-          </p>
-          {state.result.evidence.calculation.limitation && (
-            <p lang={resultLanguage}>
-              {state.result.evidence.calculation.limitation}
-            </p>
-          )}
-          <p>
-            {state.result.evidence.origin}
-            {state.result.evidence.pathname}
-          </p>
-          <p>
-            {t.captured}:{' '}
-            <time dateTime={state.result.evidence.captured_at}>
-              {new Date(state.result.evidence.captured_at).toLocaleString(
-                props.language,
-              )}
-            </time>
-          </p>
-          <button type="button" onClick={() => navigate('answer')}>
-            {t.back}
-          </button>
-        </section>
-      )}
-      {section === 'table' && (
-        <section aria-labelledby="source-table-heading">
-          <h2 id="source-table-heading" ref={tableHeading} tabIndex={-1}>
-            {t.table}
-          </h2>
-          {state.snapshot && (
-            <>
-              <p>
-                {t.region}: {state.snapshot.region}. {t.year}:{' '}
-                {state.snapshot.year}. {t.unit}.
-              </p>
-              <SourceTable
-                rows={state.snapshot.rows}
-                caption={state.snapshot.table_title}
-                language={props.language}
-                sourceLanguage={state.snapshot.locale}
-              />
-              <p>
-                {t.captured}:{' '}
-                <time dateTime={state.snapshot.captured_at}>
-                  {new Date(state.snapshot.captured_at).toLocaleString(
-                    props.language,
-                  )}
-                </time>
-              </p>
-            </>
-          )}
-          <button type="button" onClick={() => navigate('answer')}>
-            {t.back}
-          </button>
-        </section>
-      )}
-      {state.result?.status === 'answer' && (
-        <fieldset>
-          <legend>{t.read}</legend>
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={audio.speechEnabled}
-              onChange={(event) =>
-                speech.setSpeechEnabled(event.target.checked)
-              }
-            />
-            {t.speech}
-          </label>
-          <p>{t.speechHelp}</p>
-          <div className="controls">
-            <button
-              type="button"
-              disabled={
-                !audio.speechEnabled ||
-                busy ||
-                voiceBusy ||
-                audio.phase === 'generating' ||
-                state.stale
-              }
-              onClick={() => {
-                speech.editText(resultText);
-                void speech.readBack();
-              }}
-            >
-              {t.read}
-            </button>
-            <button
-              type="button"
-              disabled={
-                !audio.speechEnabled ||
-                !audio.hasAudio ||
-                voiceBusy ||
-                audio.phase === 'generating' ||
-                state.stale
-              }
-              onClick={() => {
-                void speech.play();
-              }}
-            >
-              {t.repeat}
-            </button>
-            <button
-              type="button"
-              disabled={!['generating', 'speaking'].includes(audio.phase)}
-              onClick={() => speech.cancel()}
-            >
-              {t.stop}
-            </button>
-          </div>
-          <label htmlFor="answer-speed">{t.speed}</label>
-          <select
-            id="answer-speed"
-            value={audio.playbackRate}
-            onChange={(event) =>
-              speech.setPlaybackRate(Number(event.target.value))
-            }
-          >
-            {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => (
-              <option key={rate} value={rate}>
-                {rate}×
-              </option>
-            ))}
-          </select>
-          <p role="status" aria-atomic="true">
-            {audio.errorCode
-              ? voiceErrorText(props.language, audio.errorCode)
-              : audio.phase === 'generating'
-                ? t.speechPending
-                : ''}
-          </p>
-        </fieldset>
-      )}
-      <section>
+          </section>
+        )}
+      </details>
+      {props.settingsTarget === undefined
+        ? speechPreferences
+        : props.settingsTarget
+          ? createPortal(speechPreferences, props.settingsTarget)
+          : null}
+      <div className="return-controls">
         <button
           type="button"
           disabled={!state.context?.supported}
@@ -608,7 +664,7 @@ function Companion({
         <p role="status" aria-atomic="true">
           {returnStatus}
         </p>
-      </section>
+      </div>
     </div>
   );
 }

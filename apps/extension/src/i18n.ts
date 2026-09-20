@@ -19,17 +19,18 @@ export const text = {
     signedout: 'Signed out. Pending recording and speech have been cleared.',
     signinFirst: 'Sign in before starting the voice test.',
     shortcut: 'Keyboard shortcut',
+    shortcutHelpLabel: 'Shortcut help',
     shortcutLoading: 'Checking assigned shortcut…',
     unassigned: 'No shortcut assigned.',
     shortcutFailed: 'The assigned shortcut could not be read.',
     shortcutHelp:
-      'While the browser is focused, the shortcut starts recording, finishes a recording, cancels a request or stops speech.',
+      'In this browser: start or finish recording, cancel a request, or stop speech.',
     changeShortcut: 'Change shortcut',
     shortcutLocation:
       'Open chrome://extensions/shortcuts in Chrome or edge://extensions/shortcuts in Edge. Set the command to “In Chrome” or “In Microsoft Edge”, not Global.',
     microphone: 'Microphone setup',
     microphoneHelp:
-      'Allow this extension to use your microphone when prompted. A website microphone test does not grant extension permission. If the side panel cannot show a permission prompt, open this same voice test in a tab and allow access there.',
+      'Recording is optional. If the panel cannot request microphone access, open setup in a tab. Website permission is separate.',
     openSetup: 'Open microphone setup in a tab',
     tabHelp:
       'This is the extension’s own setup tab. Start recording below to request microphone permission, then cancel to discard the recording. Return to the side panel afterwards.',
@@ -55,17 +56,18 @@ export const text = {
     signedout: 'Đã đăng xuất. Bản ghi âm và âm thanh đang xử lý đã được xóa.',
     signinFirst: 'Hãy đăng nhập trước khi thử giọng nói.',
     shortcut: 'Phím tắt',
+    shortcutHelpLabel: 'Hướng dẫn phím tắt',
     shortcutLoading: 'Đang kiểm tra phím tắt…',
     unassigned: 'Chưa gán phím tắt.',
     shortcutFailed: 'Không đọc được phím tắt đã gán.',
     shortcutHelp:
-      'Khi trình duyệt được chọn, phím tắt bắt đầu ghi âm, kết thúc ghi âm, hủy yêu cầu hoặc dừng phát âm thanh.',
+      'Trong trình duyệt: bắt đầu hoặc kết thúc ghi âm, hủy yêu cầu hay dừng giọng đọc.',
     changeShortcut: 'Đổi phím tắt',
     shortcutLocation:
       'Mở chrome://extensions/shortcuts trong Chrome hoặc edge://extensions/shortcuts trong Edge. Chọn phạm vi “In Chrome” hoặc “In Microsoft Edge”, không chọn Global.',
     microphone: 'Thiết lập micro',
     microphoneHelp:
-      'Cho phép tiện ích dùng micro khi được hỏi. Kiểm tra micro trên trang web không cấp quyền cho tiện ích. Nếu bảng bên không hiển thị yêu cầu cấp quyền, hãy mở trang thử này trong một thẻ và cấp quyền tại đó.',
+      'Ghi âm là tùy chọn. Nếu bảng không hỏi quyền micro, mở thiết lập trong thẻ. Quyền trên trang web được cấp riêng.',
     openSetup: 'Mở thiết lập micro trong thẻ',
     tabHelp:
       'Đây là thẻ thiết lập của tiện ích. Bắt đầu ghi âm bên dưới để cấp quyền micro, rồi hủy để bỏ bản ghi. Sau đó quay lại bảng bên.',

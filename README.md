@@ -13,6 +13,34 @@ The separate **`/voice` setup** remains a labelled speech test: its read-back re
 supplied text. In the companion, **Read answer** speaks the validated answer instead.
 App speech and recording cues are off by default; text and evidence work without TTS.
 
+## Companion interface
+
+The extension is the working interface: **Current page → Your question → Ask VSual
+→ Answer → View evidence**. The page status distinguishes unsupported pages,
+missing page access and processing consent; account and workspace access remain
+separate. Recording fills an editable question and never submits it. The example
+question also only fills the input. Enter inserts a newline; use **Ask VSual** to
+submit. **Go to answer** moves focus deliberately; an arriving answer does not.
+
+**Settings** contains the actual assigned shortcut, optional microphone setup,
+interface/recording language, answer speech and playback speed. Both interfaces
+use a light theme with large default text (22.5px body, 25px answers), without
+appearance controls. Browser zoom and operating-system forced colours remain
+available. **Back to companion** restores focus to Settings without clearing the
+question or answer. Website **Language** changes English/Vietnamese without
+leaving the current page or restarting sign-in.
+
+Language and speech preferences are local and separate for the website and
+extension. English/Vietnamese interface changes do not translate source evidence.
+New users have app speech off; existing explicit speech choices are preserved.
+Secondary help is expandable; labels, status messages and evidence remain
+available to keyboard and screen-reader users.
+
+The homepage introduces the supported scope; **Get started** opens `/voice` with
+practical extension setup and an optional website voice test. There is no published
+store-install link or claimed automatic website/extension connection. `/orders`
+keeps its synthetic English source table and capture identifiers unchanged.
+
 ## Install and run
 
 Use **Node.js 24.x and npm 11.x** (`.nvmrc`, `packageManager` and engine checks
@@ -199,18 +227,20 @@ npm run build --workspace=@adc/extension
    the side panel. Choose **Sign in on the VSual website**, complete sign-in in the
    opened tab, and choose **Return to VSual**. Account identity and workspace
    access are reported separately. No token copying or automatic recording occurs.
-5. The panel displays the actual shortcut. **Alt+Shift+A** is suggested; change
+5. **Settings** displays the actual shortcut. **Alt+Shift+A** is suggested; change
    it at `chrome://extensions/shortcuts` or `edge://extensions/shortcuts`.
    It is browser-scoped toggle activation, not global hold-to-talk.
-6. Start recording and grant microphone permission. If the side panel cannot
-   show permission setup, use its **Open microphone setup** button to open the
+6. Optionally record and grant microphone permission; typed questions need neither.
+   If the side panel cannot show permission setup, use **Settings → Open microphone
+   setup in a tab** to open the
    same extension UI in a tab, grant permission there, then return to the panel.
    Website permission does not establish extension permission.
 
 Shortcut: idle → open/start recording; recording → finish/transcribe; pending
 request → cancel; speaking → stop. The toolbar opens without recording. A
 readiness/acknowledgement handshake handles cold workers and new panels. Escape
-cancels within the extension or web voice surface. A narrowly matched content script
+cancels within the companion or web voice surface; in extension Settings it returns
+to the companion. A narrowly matched content script
 reads the orders table only after permission and an explicit capture/Ask action.
 There is no offscreen document or background microphone.
 Reload the extension and reopen the panel after any build/configuration change.
@@ -301,7 +331,7 @@ in the extension. See [Supabase Google setup](https://supabase.com/docs/guides/a
 
 ### Authentication acceptance
 
-Local verification on Node 24.17.0 / npm 11.13.0: clean `npm ci` and
+Accessible-auth baseline verification on Node 24.17.0 / npm 11.13.0: clean `npm ci` and
 `npm run check` passed (302 tests, typecheck, lint, formatting and both builds).
 The mocked integration exercises website commands, the actual extension session
 manager/Supabase SDK, backend identity/workspace checks, grounded evidence,
@@ -316,7 +346,8 @@ Supabase Auth settings check confirmed Google and email providers are enabled;
 the maintainer subsequently reported Google sign-in working during local testing.
 The detailed browser acceptance sequence below, NVDA, password-manager integration
 and focus/zoom checks still require manual verification. No browser automation
-surface was available here to independently verify the interactive journey.
+surface was available during that earlier implementation to independently verify
+the interactive journey.
 
 1. Start the web server and build/load the extension as above. Open `/orders`.
    Choose extension Sign in, enter an existing provisioned user's credentials on
@@ -355,12 +386,14 @@ surface was available here to independently verify the interactive journey.
    Recording only fills editable question text; review it before **Ask VSual**.
 4. Expect a decrease of **300 orders (25%)**, from July 1,200 to August 900 in 2026.
    **View evidence** shows both original values, row identifiers and the calculation.
-5. **View captured table** makes no extra AI call. **Capture source table** also
+5. Expand **Inspect the source table without AI**. **Capture source table** also
    works when Avis is unavailable. **Return to page** attempts to restore the
    original usable focus target, otherwise the supported page heading.
-6. Optionally enable app speech and choose **Read answer**, **Stop speech** or
-   **Play / Repeat**. These controls remain available in Answer, Evidence and
-   Captured table views. Repeat and speed changes reuse session audio.
+6. Optionally enable app speech in **Settings**. **Read answer** becomes
+   **Stop speech** while preparing/playing, then **Read again** when audio is
+   available. Read again and speed changes reuse session audio. Evidence expands
+   below the answer without hiding playback controls; **Close evidence** returns
+   focus to its disclosure. **Ask another question** returns to the editable input.
 
 Supported questions compare completed-order counts for one region and two months.
 An explicit baseline is respected; neutral comparisons use the earlier month.
@@ -435,6 +468,61 @@ rate reservations, Unicode/input limits, final chunks, delayed microphone
 permission, actual DOM mutation, deterministic calculations, model refusals,
 stale responses, cancellation, playback reuse and logout cleanup.
 They do not substitute for real PostgreSQL RLS/concurrency or browser tests.
+
+### Companion UI: keyboard and NVDA check
+
+Use Chrome or Edge on Windows with NVDA running. Keep app speech off initially.
+These steps exercise the installed extension; a web preview does not verify its
+permissions, activation or messaging. Configure an existing account and the local
+or deployed backend as above.
+
+1. Open the extension from its toolbar, find the actual shortcut in **Settings**,
+   return to the companion, then try that shortcut. Confirm browser-scoped
+   activation, predictable focus and reachable recording cancellation.
+2. Identify account/workspace status and **Current page**. If signed out, complete
+   the website sign-in using Tab, Shift+Tab, Enter/Space and a password manager or
+   Google, then **Return to VSual**. Verify the correct account and separate
+   workspace access. Open the supported `/orders` page and choose **Allow page
+   processing**; permission alone must not capture/upload anything.
+3. Enter the canonical comparison below using only the keyboard. Enter adds a
+   newline; **Ask VSual** submits once. The microphone can remain denied or unused.
+4. Hear the brief result status without losing focus. Use **Go to answer**, then
+   **View evidence**. Read both source rows, the calculation and capture time.
+   **Close evidence** returns focus to its disclosure.
+5. Enable app speech deliberately in **Settings**, return, choose **Read answer**
+   and **Stop speech**. **Read again** and playback-speed changes must reuse the
+   generated audio; check that the browser sends no additional synthesis request.
+6. Select **Ask another question**. Confirm focus returns to the editable question
+   and another explicit Ask is needed. Do not expect conversation memory.
+7. Choose **Record question**, speak, then **Stop recording**. Review and edit the
+   transcript before asking; stopping recording must never submit automatically.
+   Repeat using **Cancel recording** and confirm no transcription upload occurs.
+8. Deny microphone permission or disconnect the network. Retain the typed question,
+   hear a useful error and retry deliberately. Cancel pending work and sign out
+   during a request; late text, answers or audio must not return.
+9. Change EN/VI language and speech preferences. Return from **Settings** and
+   verify draft/answer preservation and visible focus on its trigger. Check a narrow
+   panel, 200% browser zoom, long labels and Windows contrast themes. On the website,
+   repeat using **Language** while email is entered; sign-in must not
+   restart. Read the English orders source unchanged in the Vietnamese interface.
+10. Navigate or select another tab. Earlier evidence must be cleared or explicitly
+    marked as previous context, playback must stop, and no page content should be
+    transmitted automatically. Return to the supported page and ask deliberately.
+
+Focused automated coverage includes settings focus/persistence, retained drafts,
+unchanged captured source evidence across language changes, explicit
+transcript submission and existing cancellation/authentication boundaries. Local
+rendered checks in Chrome 153 covered the fixed light palette (including a dark
+system preference), large default text, 320/1280-CSS-pixel layouts, Vietnamese,
+200% text with spacing overrides, and emulated forced colours.
+The actual unpacked extension and service worker were loaded in a disposable
+profile: keyboard Settings navigation, preference persistence on reload, real
+website sign-in handoff and cancellation passed without entering credentials or
+calling a billable provider. This exercised the extension document in a tab, not
+the docked side panel or physical shortcut activation. NVDA, actual microphone
+permissions, live OAuth, audible speech and the full authenticated extension journey
+still require the manual sequence above. Automated checks do not establish WCAG
+conformance or screen-reader usability.
 
 CI runs on PRs targeting `main` or `dev` and pushes to either, using the committed lockfile
 and declared Node/npm versions. Branch-protection check: **Foundation checks**
@@ -511,12 +599,12 @@ recordings and text are sent to ElevenLabs under its
 
 ### Grounded-read acceptance (all real-browser steps currently not run)
 
-Run the journey in **Ask about captured orders**, then check:
+Run the journey in the companion panel, then check:
 
 - [ ] Windows Chrome/Edge: cold shortcut, toolbar without microphone activation,
       initial focus, sign-in, allow/withdraw permission and unsupported-page refusal.
 - [ ] English and Vietnamese questions: both cited rows, period direction, capture
-      time, evidence heading focus, Back to answer and Return to page focus.
+      time, Go to answer, evidence disclosure/Close evidence and Return to page focus.
 - [ ] In browser DevTools, change the displayed August cell from `900` to `1,050`.
       Old evidence must become stale; a fresh Ask must show a decrease of **150
       (12.5%)**. Changing the rendered DOM this way is also covered by automated tests.
@@ -527,14 +615,16 @@ Run the journey in **Ask about captured orders**, then check:
 - [ ] Keyboard-only and NVDA: labels, brief announcements, no unexpected focus move
       on answer arrival, semantic evidence, 200–400% zoom and narrow-panel reflow.
 - [ ] Reviewed STT populates a question without submitting. Read answer speaks the
-      answer, Stop is immediate, Repeat/speed add no TTS calls, and TTS failure leaves
-      evidence usable. Switch to Evidence and Captured table while speaking or
-      generating speech; Stop must remain available. Repeat with app speech disabled.
+      answer, Stop speech is immediate, Read again/speed add no TTS calls, and TTS
+      failure leaves evidence usable. Expand evidence and the source table while
+      speaking or generating speech; Stop speech must remain available. Repeat
+      with app speech disabled.
 - [ ] Repeat against the configured Vercel Preview/Production origin, separately
       checking deployment protection, Supabase sign-in and workspace access.
 
 Automated tests mock providers and browser interfaces; they are not live acceptance.
-No browser automation surface or NVDA was available during this implementation.
+No browser automation surface or NVDA was available during the earlier grounded-read
+implementation; current UI checks are recorded separately above.
 On 20 September 2026, the configured Avis model passed one live English and one live
 Vietnamese synthetic provider check: both returned valid structured interpretations,
 then application code calculated the expected decrease of 300 orders (25%). These
@@ -580,8 +670,8 @@ Ask. Its answer controller sends only the validated answer text through the exis
 `/api/voice/speak` transport. This is the bounded integration point for later
 reasoning work. Model/page content never grants action authority.
 
-Review this work on `feat/accessible-auth`, based on `dev` at grounded-read merge
-`ea753af`. Merge a reviewed feature before starting a separate follow-up branch
+Review this work on `feat/companion-ui`, based on `dev` at accessible-auth merge
+`721a5e1`. Merge a reviewed feature before starting a separate follow-up branch
 for broader scope or pending acceptance. When committing a completed feature,
 split changes into focused commits with concise messages that explain their purpose
 to technical and non-technical readers. Keep related tests with their implementation.

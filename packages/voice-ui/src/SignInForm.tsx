@@ -132,7 +132,11 @@ export function SignInForm({
         >
           {visible ? copy.hide : copy.show}
         </button>
-        <button type="submit" disabled={disabled || working}>
+        <button
+          type="submit"
+          className="primary"
+          disabled={disabled || working}
+        >
           {working ? copy.working : copy.signIn}
         </button>
         {onGoogle && (

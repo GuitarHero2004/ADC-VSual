@@ -29,6 +29,7 @@ function SignedInVoice({
   onReady,
   onExpired,
   onActivity,
+  settingsTarget,
 }: {
   userId: string;
   epoch: string;
@@ -36,6 +37,7 @@ function SignedInVoice({
   onReady: (activate: () => void, cancel: () => void) => () => void;
   onExpired: () => void;
   onActivity: () => void;
+  settingsTarget: HTMLElement | null;
 }) {
   const alive = useRef(true);
   useEffect(() => {
@@ -74,6 +76,7 @@ function SignedInVoice({
           uiLanguage={language}
           onReady={onReady}
           preferencesKey="voice:extension-preferences"
+          preferencesTarget={settingsTarget}
         />
       ) : (
         <GroundedPanel
@@ -84,6 +87,7 @@ function SignedInVoice({
           getHeaders={requestOptions.getHeaders}
           onExpired={onExpired}
           onReady={onReady}
+          settingsTarget={settingsTarget}
         />
       )}
     </div>
@@ -92,6 +96,57 @@ function SignedInVoice({
 
 export function App() {
   const [language, setLanguage] = useState<UiLanguage>(initialLanguage);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTarget, setSettingsTarget] = useState<HTMLDivElement | null>(
+    null,
+  );
+  const settingsButton = useRef<HTMLButtonElement>(null);
+  const settingsHeading = useRef<HTMLHeadingElement>(null);
+  const settingsNavigation = useRef(false);
+  const activationFocus = useRef(false);
+  const recoveryFocus = useRef(false);
+  const openSettings = useCallback(() => {
+    settingsNavigation.current = true;
+    setSettingsOpen(true);
+  }, []);
+  const closeSettings = useCallback(() => {
+    settingsNavigation.current = true;
+    setSettingsOpen(false);
+  }, []);
+  useEffect(() => {
+    if (!settingsOpen && recoveryFocus.current) {
+      recoveryFocus.current = false;
+      document
+        .querySelector<HTMLElement>(
+          '#companion-content .account-setup h2, #companion-content .account-summary summary',
+        )
+        ?.focus();
+      return;
+    }
+    if (!settingsOpen && activationFocus.current) {
+      activationFocus.current = false;
+      const control =
+        document.querySelector<HTMLElement>(
+          '#companion-content .voice-controls button:not(:disabled)',
+        ) ?? signInButton.current;
+      control?.focus();
+      return;
+    }
+    if (!settingsNavigation.current) return;
+    settingsNavigation.current = false;
+    (settingsOpen ? settingsHeading : settingsButton).current?.focus();
+  }, [settingsOpen]);
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const back = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeSettings();
+    };
+    document.addEventListener('keydown', back, true);
+    return () => document.removeEventListener('keydown', back, true);
+  }, [settingsOpen, closeSettings]);
   const t = text[language];
   const [status, setStatus] = useState('');
   const [shortcut, setShortcut] = useState<string | null>(null);
@@ -105,15 +160,31 @@ export function App() {
     activityChannel.current?.postMessage('claim');
   }, []);
   const session = useExtensionSession(!!configuration, clearWork);
+  const previouslyAllowed = useRef(false);
+  useEffect(() => {
+    const lostAccess = previouslyAllowed.current && !session.allowed;
+    previouslyAllowed.current = session.allowed;
+    if (!lostAccess || !settingsOpen) return;
+    // Session controls disappear on expiry or temporary verification failure.
+    // Reveal account recovery before focusing it on the following DOM update.
+    recoveryFocus.current = true;
+    activationFocus.current = false;
+    settingsNavigation.current = false;
+    setSettingsOpen(false);
+  }, [session.allowed, settingsOpen]);
   useEffect(() => {
     if (session.status?.account) setStatus('');
   }, [session.status?.account?.id]);
   const guestActivation = useRef(() => {});
   guestActivation.current = () => {
+    activationFocus.current = !!document.activeElement?.closest(
+      '#companion-settings',
+    );
+    setSettingsOpen(false);
     setStatus(
       configuration ? text[language].signinFirst : text[language].setup,
     );
-    signInButton.current?.focus();
+    if (!activationFocus.current) signInButton.current?.focus();
   };
   const activate = useRef<() => void>(() => guestActivation.current());
   const claimVoiceSurface = useCallback(() => {
@@ -121,6 +192,10 @@ export function App() {
   }, []);
   const onReady = useCallback((handler: () => void, cancel: () => void) => {
     activate.current = () => {
+      activationFocus.current = !!document.activeElement?.closest(
+        '#companion-settings',
+      );
+      setSettingsOpen(false);
       activityChannel.current?.postMessage('claim');
       handler();
     };
@@ -217,48 +292,87 @@ export function App() {
     void session.run({ type: 'auth:status' });
   }, [clearWork, session.run]);
 
+  const ui =
+    language === 'vi'
+      ? {
+          settings: 'Cài đặt',
+          back: 'Quay lại trợ lý',
+          companion: 'Trợ lý trình duyệt',
+          welcome: 'Bắt đầu với VSual',
+          guidance:
+            'Đăng nhập rồi mở bảng đơn hàng mẫu. Bạn có thể nhập hoặc ghi âm câu hỏi.',
+          stop: 'Hủy thao tác hiện tại',
+          demo: 'Mở bảng đơn hàng mẫu',
+        }
+      : {
+          settings: 'Settings',
+          back: 'Back to companion',
+          companion: 'Browser companion',
+          welcome: 'Get started with VSual',
+          guidance:
+            'Sign in, then open sample orders. You can type or record a question.',
+          stop: 'Cancel current operation',
+          demo: 'Open sample orders',
+        };
   return (
     <div className="panel">
-      <header>
-        <p className="eyebrow">
-          {setupTab
-            ? t.label
-            : language === 'vi'
-              ? 'Trợ lý đọc bảng đơn hàng'
-              : 'Orders reading companion'}
-        </p>
-        <h1>VSual</h1>
-        <p>
-          {setupTab
-            ? t.description
-            : language === 'vi'
-              ? 'Hỏi về số đơn hoàn thành trên bảng mẫu và kiểm tra dữ liệu nguồn.'
-              : 'Ask about completed orders on the demo dashboard and inspect the source evidence.'}
-        </p>
-        <label htmlFor="interface-language">{t.uiLanguage}</label>
-        <select
-          id="interface-language"
-          value={language}
-          onChange={(event) =>
-            setLanguage(event.target.value === 'vi' ? 'vi' : 'en')
-          }
+      <header className="panel-header">
+        <div>
+          <h1>VSual</h1>
+          <p className="eyebrow">{setupTab ? t.label : ui.companion}</p>
+        </div>
+        <button
+          ref={settingsButton}
+          type="button"
+          aria-expanded={settingsOpen}
+          aria-controls="companion-settings"
+          onClick={settingsOpen ? closeSettings : openSettings}
         >
-          <option value="en">English</option>
-          <option value="vi">Tiếng Việt</option>
-        </select>
+          {ui.settings}
+        </button>
       </header>
       <main>
-        <section aria-labelledby="shortcut-heading">
-          <h2 id="shortcut-heading">{t.shortcut}</h2>
-          <p>
-            {shortcutFailed
-              ? t.shortcutFailed
-              : shortcut === null
-                ? t.shortcutLoading
-                : shortcut || t.unassigned}
-          </p>
-          <details>
-            <summary>{t.changeShortcut}</summary>
+        <section
+          id="companion-settings"
+          hidden={!settingsOpen}
+          aria-labelledby="settings-heading"
+        >
+          <h2 id="settings-heading" ref={settingsHeading} tabIndex={-1}>
+            {ui.settings}
+          </h2>
+          <button type="button" onClick={closeSettings}>
+            {ui.back}
+          </button>
+          <label htmlFor="interface-language">{t.uiLanguage}</label>
+          <select
+            id="interface-language"
+            value={language}
+            onChange={(event) =>
+              setLanguage(event.target.value === 'vi' ? 'vi' : 'en')
+            }
+          >
+            <option value="en" lang="en">
+              English
+            </option>
+            <option value="vi" lang="vi">
+              Tiếng Việt
+            </option>
+          </select>
+          <div ref={setSettingsTarget} />
+          {session.allowed && (
+            <button type="button" onClick={() => cancelVoice.current()}>
+              {ui.stop}
+            </button>
+          )}
+          <section aria-labelledby="shortcut-heading">
+            <h3 id="shortcut-heading">{t.shortcut}</h3>
+            <p>
+              {shortcutFailed
+                ? t.shortcutFailed
+                : shortcut === null
+                  ? t.shortcutLoading
+                  : shortcut || t.unassigned}
+            </p>
             <p>{t.shortcutHelp}</p>
             <button
               type="button"
@@ -272,48 +386,70 @@ export function App() {
             >
               {t.changeShortcut}
             </button>
-            <p className="field-help">{t.shortcutLocation}</p>
-          </details>
+            <details>
+              <summary>{t.shortcutHelpLabel}</summary>
+              <p className="field-help">{t.shortcutLocation}</p>
+            </details>
+          </section>
+          <section aria-labelledby="microphone-heading">
+            <h3 id="microphone-heading">{t.microphone}</h3>
+            <p>{setupTab ? t.tabHelp : t.microphoneHelp}</p>
+            {!setupTab && (
+              <button
+                type="button"
+                onClick={() => {
+                  void chrome.tabs.create({
+                    url: chrome.runtime.getURL('index.html?microphone-setup=1'),
+                  });
+                }}
+              >
+                {t.openSetup}
+              </button>
+            )}
+          </section>
         </section>
-        {configuration ? (
-          <AuthPanel
-            session={session}
-            language={language}
-            signInRef={signInButton}
-          />
-        ) : (
-          <p role="alert">{t.setup}</p>
-        )}
-        <p role="status" aria-atomic="true">
-          {status}
-        </p>
-        {session.allowed && session.status?.account ? (
-          <SignedInVoice
-            key={`${session.status.account.id}:${session.status.epoch}`}
-            userId={session.status.account.id}
-            epoch={session.status.epoch}
-            language={language}
-            onReady={onReady}
-            onExpired={expireSession}
-            onActivity={claimVoiceSurface}
-          />
-        ) : null}
-        <section aria-labelledby="microphone-heading">
-          <h2 id="microphone-heading">{t.microphone}</h2>
-          <p>{setupTab ? t.tabHelp : t.microphoneHelp}</p>
-          {!setupTab ? (
-            <button
-              type="button"
-              onClick={() => {
-                void chrome.tabs.create({
-                  url: chrome.runtime.getURL('index.html?microphone-setup=1'),
-                });
-              }}
-            >
-              {t.openSetup}
-            </button>
+        <div hidden={settingsOpen} id="companion-content">
+          {configuration ? (
+            <AuthPanel
+              session={session}
+              language={language}
+              signInRef={signInButton}
+              compact={session.allowed}
+            />
+          ) : (
+            <p role="alert">{t.setup}</p>
+          )}
+          {!session.loading && !session.allowed && (
+            <section aria-labelledby="welcome-heading">
+              <h2 id="welcome-heading">{ui.welcome}</h2>
+              <p>{ui.guidance}</p>
+              {configuration && (
+                <a
+                  href={`${configuration.backend}/orders`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {ui.demo}
+                </a>
+              )}
+            </section>
+          )}
+          <p role="status" aria-atomic="true">
+            {status}
+          </p>
+          {session.allowed && session.status?.account ? (
+            <SignedInVoice
+              key={`${session.status.account.id}:${session.status.epoch}`}
+              userId={session.status.account.id}
+              epoch={session.status.epoch}
+              language={language}
+              onReady={onReady}
+              onExpired={expireSession}
+              onActivity={claimVoiceSurface}
+              settingsTarget={settingsTarget}
+            />
           ) : null}
-        </section>
+        </div>
       </main>
     </div>
   );
