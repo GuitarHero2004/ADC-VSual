@@ -8,13 +8,21 @@ import {
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
+  type ReactNode,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { browserDependencies } from './browser.ts';
 import { VoiceController, type VoiceTransport } from './controller.ts';
-import { errorText, labels, noticeText } from './strings.ts';
+import {
+  errorText,
+  labels,
+  noticeText,
+  questionNoticeText,
+} from './strings.ts';
 
 export interface VoiceTestProps {
   transport: VoiceTransport;
@@ -26,6 +34,9 @@ export interface VoiceTestProps {
   preferencesKey?: string;
   mode?: 'test' | 'question';
   onController?: (controller: VoiceController) => void | (() => void);
+  /** Keep the voice controller mounted while preferences appear in Settings. */
+  preferencesTarget?: HTMLElement | null;
+  questionActions?: ReactNode;
 }
 
 function readPreferences(controller: VoiceController, key: string): UiLanguage {
@@ -106,6 +117,8 @@ function VoiceSurface({
   preferencesKey,
   mode = 'test',
   onController,
+  preferencesTarget,
+  questionActions,
 }: VoiceTestProps & {
   controller: VoiceController;
   initialLanguage: UiLanguage;
@@ -124,9 +137,7 @@ function VoiceSurface({
   const transcriptRef = useRef<HTMLTextAreaElement>(null);
   const startRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const finishRef = useRef<HTMLButtonElement>(null);
-  const playRef = useRef<HTMLButtonElement>(null);
-  const previousPhase = useRef(snapshot.phase);
+  const focusedAction = useRef<HTMLElement | null>(null);
   const count = unicodeLength(snapshot.text);
   const busy = [
     'requesting_permission',
@@ -193,30 +204,102 @@ function VoiceSurface({
     language,
   ]);
 
-  useEffect(() => {
-    const previous = previousPhase.current;
-    previousPhase.current = snapshot.phase;
-    if (snapshot.phase === 'recording' && previous !== 'recording')
-      finishRef.current?.focus();
-    if (previous === 'transcribing' && snapshot.phase === 'ready')
-      transcriptRef.current?.focus();
-    if (previous === 'recording' && snapshot.phase === 'transcribing')
-      cancelRef.current?.focus();
-    if (snapshot.phase === 'error' && previous !== 'error')
-      startRef.current?.focus();
-    if (snapshot.phase === 'cancelled' && previous !== 'cancelled')
-      startRef.current?.focus();
+  useLayoutEffect(() => {
+    // Results only announce status. Recover focus solely when its control was removed.
+    const previous = focusedAction.current;
     if (
-      snapshot.phase === 'ready' &&
-      (previous === 'speaking' || previous === 'generating')
-    )
-      playRef.current?.focus();
-  }, [snapshot.phase]);
+      previous &&
+      !previous.isConnected &&
+      document.activeElement === document.body &&
+      !surfaceRef.current?.closest('[hidden]')
+    ) {
+      focusedAction.current = null;
+      (busy ? cancelRef : startRef).current?.focus();
+    }
+  }, [busy, snapshot.phase]);
 
   function cancel() {
     controller.cancel();
     startRef.current?.focus();
   }
+
+  const preferences = (
+    <fieldset disabled={disabled} className="voice-preferences">
+      <legend>{t.recognitionLanguage}</legend>
+      <label className="voice-sr-only" htmlFor={`${id}-recognition`}>
+        {t.recognitionLanguage}
+      </label>
+      <select
+        id={`${id}-recognition`}
+        value={snapshot.language}
+        aria-describedby={`${id}-language-help`}
+        onChange={(event) =>
+          controller.setLanguage(
+            event.target.value === 'vi'
+              ? 'vi'
+              : event.target.value === 'en'
+                ? 'en'
+                : 'auto',
+          )
+        }
+      >
+        <option value="auto">{t.auto}</option>
+        <option value="en" lang="en">
+          English
+        </option>
+        <option value="vi" lang="vi">
+          Tiếng Việt
+        </option>
+      </select>
+      <p id={`${id}-language-help`} className="voice-help">
+        {t.languageHelp}
+      </p>
+      {mode === 'question' && (
+        <label className="voice-checkbox">
+          <input
+            type="checkbox"
+            checked={snapshot.audioFeedback}
+            onChange={(event) =>
+              controller.setAudioFeedback(event.target.checked)
+            }
+          />
+          {t.cues}
+        </label>
+      )}
+    </fieldset>
+  );
+
+  const transcript = (
+    <div className="voice-composer">
+      {mode === 'question' ? (
+        <h2 id={`${id}-heading`}>
+          <label htmlFor={`${id}-transcript`}>{t.questionHeading}</label>
+        </h2>
+      ) : (
+        <label htmlFor={`${id}-transcript`}>{t.transcript}</label>
+      )}
+      <textarea
+        ref={transcriptRef}
+        id={`${id}-transcript`}
+        rows={4}
+        value={snapshot.text}
+        disabled={disabled}
+        aria-invalid={count > SPEECH_TEXT_MAX_LENGTH || undefined}
+        aria-describedby={`${id}-text-help ${id}-count`}
+        onChange={(event) => controller.editText(event.target.value)}
+      />
+      <p id={`${id}-text-help`} className="voice-help">
+        {mode === 'question' ? t.questionHelp : t.transcriptHelp}
+      </p>
+      <p id={`${id}-count`} className="voice-help">
+        {count} / {SPEECH_TEXT_MAX_LENGTH}{' '}
+        {mode === 'question' ? t.questionCharacters : t.characters}
+        {count > SPEECH_TEXT_MAX_LENGTH
+          ? `. ${mode === 'question' ? t.questionTooLong : t.tooLong}`
+          : ''}
+      </p>
+    </div>
+  );
 
   return (
     <section
@@ -225,20 +308,9 @@ function VoiceSurface({
       lang={language}
       aria-labelledby={`${id}-heading`}
     >
-      <h2 id={`${id}-heading`}>
-        {mode === 'question'
-          ? language === 'vi'
-            ? 'Câu hỏi của bạn'
-            : 'Your question'
-          : t.heading}
-      </h2>
-      <p>
-        {mode === 'question'
-          ? language === 'vi'
-            ? 'Nhập hoặc ghi âm, xem lại rồi chọn Hỏi VSual. Kết thúc ghi âm không tự gửi câu hỏi.'
-            : 'Type or record, review the text, then choose Ask VSual. Finishing a recording does not submit your question.'
-          : t.explanation}
-      </p>
+      {mode === 'test' && <h2 id={`${id}-heading`}>{t.heading}</h2>}
+      {mode === 'test' && <p>{t.explanation}</p>}
+      {mode === 'question' && transcript}
       {(uiLanguage === undefined || onUiLanguageChange) && (
         <>
           <label htmlFor={`${id}-interface`}>{t.uiLanguage}</label>
@@ -263,69 +335,73 @@ function VoiceSurface({
 
       <div className="voice-status" role="status" aria-atomic="true">
         {disabled
-          ? t.unavailable
+          ? mode === 'question'
+            ? t.questionUnavailable
+            : t.unavailable
           : snapshot.errorCode
             ? errorText(language, snapshot.errorCode)
-            : noticeText(language, snapshot.notice)}
+            : mode === 'question'
+              ? questionNoticeText(language, snapshot.notice)
+              : noticeText(language, snapshot.notice)}
       </div>
 
-      <fieldset disabled={disabled}>
-        <legend>{t.recognitionLanguage}</legend>
-        <label className="voice-sr-only" htmlFor={`${id}-recognition`}>
-          {t.recognitionLanguage}
-        </label>
-        <select
-          id={`${id}-recognition`}
-          value={snapshot.language}
-          aria-describedby={`${id}-language-help`}
-          onChange={(event) =>
-            controller.setLanguage(
-              event.target.value === 'vi'
-                ? 'vi'
-                : event.target.value === 'en'
-                  ? 'en'
-                  : 'auto',
-            )
-          }
-        >
-          <option value="auto">{t.auto}</option>
-          <option value="en" lang="en">
-            English
-          </option>
-          <option value="vi" lang="vi">
-            Tiếng Việt
-          </option>
-        </select>
-        <p id={`${id}-language-help`} className="voice-help">
-          {t.languageHelp}
-        </p>
+      {preferencesTarget === undefined
+        ? preferences
+        : preferencesTarget && createPortal(preferences, preferencesTarget)}
+      <div className="voice-recording">
         <p id={`${id}-microphone`} className="voice-help">
-          {t.microphone}
+          {mode === 'question' ? t.questionMicrophone : t.microphone}
         </p>
         <div className="voice-controls">
+          {mode === 'question' && questionActions}
           <button
             ref={startRef}
             type="button"
-            className="voice-primary"
-            disabled={busy}
+            className={mode === 'test' ? 'voice-primary' : undefined}
+            disabled={
+              disabled ||
+              (busy && !(mode === 'question' && snapshot.phase === 'recording'))
+            }
             aria-describedby={`${id}-microphone`}
             onClick={() => {
-              void controller.start();
+              if (mode === 'question' && snapshot.phase === 'recording')
+                controller.finish();
+              else void controller.start();
             }}
           >
-            {t.start}
+            {mode === 'question'
+              ? snapshot.phase === 'recording'
+                ? t.questionStop
+                : t.questionRecord
+              : t.start}
           </button>
-          {snapshot.phase === 'recording' && (
+          {mode === 'test' && snapshot.phase === 'recording' && (
             <button
-              ref={finishRef}
               type="button"
+              onFocus={(event) => {
+                focusedAction.current = event.currentTarget;
+              }}
+              onBlur={() => {
+                focusedAction.current = null;
+              }}
               onClick={() => controller.finish()}
             >
               {t.finish}
             </button>
           )}
           {busy && (
-            <button ref={cancelRef} type="button" onClick={cancel}>
+            <button
+              ref={cancelRef}
+              type="button"
+              disabled={disabled}
+              onFocus={(event) => {
+                focusedAction.current = event.currentTarget;
+              }}
+              onBlur={() => {
+                focusedAction.current = null;
+              }}
+              onClick={cancel}
+            >
               {snapshot.phase === 'recording' ||
               snapshot.phase === 'requesting_permission'
                 ? t.cancelRecording
@@ -333,35 +409,8 @@ function VoiceSurface({
             </button>
           )}
         </div>
-      </fieldset>
-
-      <label htmlFor={`${id}-transcript`}>
-        {mode === 'question'
-          ? language === 'vi'
-            ? 'Câu hỏi có thể chỉnh sửa'
-            : 'Editable question'
-          : t.transcript}
-      </label>
-      <textarea
-        ref={transcriptRef}
-        id={`${id}-transcript`}
-        rows={5}
-        value={snapshot.text}
-        disabled={disabled}
-        aria-describedby={`${id}-text-help ${id}-count`}
-        onChange={(event) => controller.editText(event.target.value)}
-      />
-      <p id={`${id}-text-help`} className="voice-help">
-        {mode === 'question'
-          ? language === 'vi'
-            ? 'So sánh số đơn hoàn thành giữa hai tháng trên bảng được hỗ trợ.'
-            : 'Compare completed-order counts between two months on the supported table.'
-          : t.transcriptHelp}
-      </p>
-      <p id={`${id}-count`} className="voice-help">
-        {count} / {SPEECH_TEXT_MAX_LENGTH} {t.characters}
-        {count > SPEECH_TEXT_MAX_LENGTH ? `. ${t.tooLong}` : ''}
-      </p>
+      </div>
+      {mode === 'test' && transcript}
       {mode === 'test' && (
         <fieldset disabled={disabled}>
           <legend>{t.read}</legend>
@@ -396,7 +445,6 @@ function VoiceSurface({
               {t.read}
             </button>
             <button
-              ref={playRef}
               type="button"
               disabled={busy || !snapshot.speechEnabled || !snapshot.hasAudio}
               onClick={() => {
@@ -427,7 +475,6 @@ function VoiceSurface({
               </option>
             ))}
           </select>
-          <p className="voice-help">{t.replayHelp}</p>
           <label className="voice-checkbox">
             <input
               type="checkbox"
@@ -448,15 +495,16 @@ function VoiceSurface({
           transcriptRef.current?.focus();
         }}
       >
-        {t.clear}
+        {mode === 'question' ? t.questionClear : t.clear}
       </button>
-      <p className="voice-help">{t.cancellation}</p>
       <p className="voice-privacy">
-        {mode === 'question'
-          ? language === 'vi'
-            ? 'Kết thúc ghi âm sẽ gửi bản ghi đến ElevenLabs để chuyển thành câu hỏi có thể chỉnh sửa. Chưa tự gửi câu hỏi đến AI. Bản ghi không được lưu vào Supabase; ElevenLabs áp dụng chính sách lưu giữ riêng.'
-            : 'Finishing sends your recording to ElevenLabs to fill the editable question. It does not submit the question to AI. Recordings are not saved to Supabase; ElevenLabs applies its own retention policy.'
-          : t.privacy}{' '}
+        {mode === 'question' ? t.questionProcessing : t.processing}
+      </p>
+      <details className="voice-privacy">
+        <summary>{t.privacyDetails}</summary>
+        <p>{mode === 'question' ? t.questionPrivacy : t.privacy}</p>
+        {mode === 'test' && <p>{t.replayHelp}</p>}
+        <p>{t.cancellation}</p>
         <a
           href="https://elevenlabs.io/privacy-policy"
           target="_blank"
@@ -464,7 +512,7 @@ function VoiceSurface({
         >
           {t.privacyLink}
         </a>
-      </p>
+      </details>
     </section>
   );
 }
