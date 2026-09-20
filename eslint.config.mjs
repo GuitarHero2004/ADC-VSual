@@ -21,6 +21,19 @@ export default tseslint.config(
     files: ['**/*.tsx'],
   },
   {
+    files: [
+      'apps/extension/src/GroundedPanel.tsx',
+      'apps/web/app/orders/page.tsx',
+    ],
+    rules: {
+      // Named overflow regions need keyboard focus for scrolling their tables.
+      'jsx-a11y/no-noninteractive-tabindex': [
+        'error',
+        { roles: ['tabpanel', 'region'] },
+      ],
+    },
+  },
+  {
     files: ['**/*.ts', '**/*.tsx'],
     rules: {
       '@typescript-eslint/consistent-type-imports': 'error',
