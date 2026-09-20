@@ -272,6 +272,18 @@ test('companion sends the validated answer to speech, reuses audio and preserves
     assert.ok(result, `Missing button: ${text}`);
     return result;
   }
+  function disclosure(text: string) {
+    const summary = [...dom.window.document.querySelectorAll('summary')].find(
+      (element) => element.textContent === text,
+    );
+    assert.ok(summary, `Missing disclosure: ${text}`);
+    return summary;
+  }
+  function openDisclosure(text: string) {
+    const summary = disclosure(text);
+    summary.focus();
+    if (!(summary.parentElement as HTMLDetailsElement).open) summary.click();
+  }
   function assertSingleStop() {
     assert.equal(
       [...dom.window.document.querySelectorAll('button')].filter(
@@ -324,10 +336,61 @@ test('companion sends the validated answer to speech, reuses audio and preserves
     assert.equal(captures, 0);
     assert.equal(submissions.length, 0);
     assert.equal(spoken.length, 0);
-    await settle(() => button('Allow page processing').click());
+    await settle(() => {
+      button('Allow page processing').focus();
+      button('Allow page processing').click();
+    });
+    assert.equal(
+      dom.window.document.activeElement?.tagName,
+      'TEXTAREA',
+      'The removed consent action hands focus to the question',
+    );
+    const permissionSummary = disclosure('Page processing permission');
+    await settle(() => {
+      permissionSummary.focus();
+      tab.url = 'http://127.0.0.1:3000/voice';
+      updatedListeners.forEach((listener) =>
+        listener(tab.id, { url: tab.url }),
+      );
+    });
+    assert.equal(disclosure('Page processing permission'), permissionSummary);
+    assert.equal(
+      dom.window.document.activeElement,
+      permissionSummary,
+      'A page change keeps focus on the stable permission disclosure',
+    );
+    assert.equal(
+      (permissionSummary.parentElement as HTMLDetailsElement).open,
+      true,
+      'Losing page access exposes the explanation and next action',
+    );
+    assert.equal(button('Allow page processing').disabled, true);
+    await settle(() => {
+      tab.url = 'http://127.0.0.1:3000/orders';
+      updatedListeners.forEach((listener) =>
+        listener(tab.id, { url: tab.url }),
+      );
+    });
+    await settle(() => {
+      button('Allow page processing').focus();
+      button('Allow page processing').click();
+    });
+    assert.equal(dom.window.document.activeElement?.tagName, 'TEXTAREA');
+    assert.equal(
+      (permissionSummary.parentElement as HTMLDetailsElement).open,
+      false,
+    );
+    assert.equal(captures, 0);
+    assert.equal(submissions.length, 0);
     await settle(() => button('Use example question').click());
     assert.equal(dom.window.document.activeElement?.tagName, 'TEXTAREA');
+    const inputBeforeAnswer = dom.window.document.activeElement;
     await settle(() => button('Ask VSual').click());
+    assert.equal(
+      dom.window.document.activeElement,
+      inputBeforeAnswer,
+      'Async answer arrival preserves focus',
+    );
     const answer =
       'Completed orders in the South decreased by 300, or 25%, from July to August 2026.';
     assert.equal(submissions.length, 1);
@@ -344,24 +407,39 @@ test('companion sends the validated answer to speech, reuses audio and preserves
       0,
       'App speech remains off until explicitly enabled',
     );
-    await settle(() => button('View evidence').click());
-    assert.equal(dom.window.document.activeElement?.id, 'evidence-heading');
+    await settle(() => openDisclosure('View evidence'));
+    assert.equal(
+      dom.window.document.activeElement,
+      disclosure('View evidence'),
+    );
+    assert.equal(
+      (disclosure('View evidence').parentElement as HTMLDetailsElement).open,
+      true,
+    );
     assert.ok(
       dom.window.document
         .querySelector('table')
         ?.textContent?.includes('1,200'),
     );
-    await settle(() => button('Back to answer').click());
-    assert.equal(dom.window.document.activeElement?.id, 'answer-heading');
+    await settle(() => button('Close evidence').click());
+    assert.equal(
+      dom.window.document.activeElement,
+      disclosure('View evidence'),
+    );
+    assert.equal(
+      (disclosure('View evidence').parentElement as HTMLDetailsElement).open,
+      false,
+    );
     const enableSpeech = dom.window.document.querySelector<HTMLInputElement>(
-      'input[type="checkbox"]',
+      '#answer-speech-enabled',
     );
     assert.ok(enableSpeech);
     await settle(() => enableSpeech.click());
     await settle(() => button('Read answer').click());
     assert.deepEqual(spoken, [{ text: answer, language: 'en' }]);
+    await settle(() => button('Stop speech').click());
     const plays = playback.plays;
-    await settle(() => button('Play / Repeat').click());
+    await settle(() => button('Read again').click());
     assert.equal(playback.plays, plays + 1);
     const speed = dom.window.document.getElementById(
       'answer-speed',
@@ -376,8 +454,15 @@ test('companion sends the validated answer to speech, reuses audio and preserves
       1,
       'Repeat and speed changes reuse generated audio',
     );
-    await settle(() => button('View evidence').click());
-    assert.equal(dom.window.document.activeElement?.id, 'evidence-heading');
+    await settle(() => openDisclosure('View evidence'));
+    assert.equal(
+      dom.window.document.activeElement,
+      disclosure('View evidence'),
+    );
+    assert.equal(
+      (disclosure('View evidence').parentElement as HTMLDetailsElement).open,
+      true,
+    );
     assertSingleStop();
     assert.equal(button('Stop speech').disabled, false);
     const evidencePauses = playback.pauses;
@@ -391,15 +476,18 @@ test('companion sends the validated answer to speech, reuses audio and preserves
       );
     });
     const evidencePlays = playback.plays;
-    await settle(() => button('Play / Repeat').click());
+    await settle(() => button('Read again').click());
     assert.equal(playback.plays, evidencePlays + 1);
     assert.equal(
       spoken.length,
       1,
       'Repeat in evidence reuses the existing audio',
     );
-    await settle(() => button('View captured table').click());
-    assert.equal(dom.window.document.activeElement?.id, 'source-table-heading');
+    await settle(() => openDisclosure('Inspect the source table without AI'));
+    assert.equal(
+      dom.window.document.activeElement,
+      disclosure('Inspect the source table without AI'),
+    );
     assertSingleStop();
     const tablePauses = playback.pauses;
     await settle(() => {
@@ -409,15 +497,22 @@ test('companion sends the validated answer to speech, reuses audio and preserves
         'Stop pauses immediately while viewing the captured table',
       );
     });
-    await settle(() => button('Play / Repeat').click());
+    await settle(() => button('Read again').click());
     assert.equal(
       spoken.length,
       1,
       'Switching views and repeating cannot generate another clip',
     );
     await settle(() => button('Stop speech').click());
-    await settle(() => button('Back to answer').click());
-    assert.equal(dom.window.document.activeElement?.id, 'answer-heading');
+    await settle(() => button('Close evidence').click());
+    assert.equal(
+      dom.window.document.activeElement,
+      disclosure('View evidence'),
+    );
+    assert.equal(
+      (disclosure('View evidence').parentElement as HTMLDetailsElement).open,
+      false,
+    );
     assert.ok(dom.window.document.body.textContent?.includes(answer));
     assert.equal((requestSignal as AbortSignal | null)?.aborted, false);
     assert.equal(captures, 1);
@@ -438,7 +533,7 @@ test('companion sends the validated answer to speech, reuses audio and preserves
         createElement(GroundedPanel, { ...baseProps, language: 'en' }),
       ),
     );
-    await settle(() => button('Play / Repeat').click());
+    await settle(() => button('Read again').click());
     const beforeEscape = playback.pauses;
     const textarea = dom.window.document.querySelector('textarea')!;
     await settle(() =>
@@ -480,7 +575,7 @@ test('companion sends the validated answer to speech, reuses audio and preserves
       playback.releases > 0,
       'Changing the answer releases its previous audio',
     );
-    await settle(() => button('View evidence').click());
+    await settle(() => openDisclosure('View evidence'));
     assert.ok(
       dom.window.document.body.textContent?.includes(
         'The voice service allowance has been used.',
@@ -492,15 +587,22 @@ test('companion sends the validated answer to speech, reuses audio and preserves
         .querySelector('table')
         ?.textContent?.includes('1,050'),
     );
-    await settle(() => button('Back to answer').click());
+    await settle(() => button('Close evidence').click());
 
     // Stop also remains available when synthesis is pending in either source view.
     speechFails = false;
     holdSpeech = true;
     await settle(() => button('Read answer').click());
     assert.equal(spoken.length, 3);
-    await settle(() => button('View evidence').click());
-    assert.equal(dom.window.document.activeElement?.id, 'evidence-heading');
+    await settle(() => openDisclosure('View evidence'));
+    assert.equal(
+      dom.window.document.activeElement,
+      disclosure('View evidence'),
+    );
+    assert.equal(
+      (disclosure('View evidence').parentElement as HTMLDetailsElement).open,
+      true,
+    );
     assertSingleStop();
     assert.equal(button('Stop speech').disabled, false);
     assert.ok(
@@ -508,8 +610,11 @@ test('companion sends the validated answer to speech, reuses audio and preserves
         'Speech is being prepared.',
       ),
     );
-    await settle(() => button('View captured table').click());
-    assert.equal(dom.window.document.activeElement?.id, 'source-table-heading');
+    await settle(() => openDisclosure('Inspect the source table without AI'));
+    assert.equal(
+      dom.window.document.activeElement,
+      disclosure('Inspect the source table without AI'),
+    );
     assertSingleStop();
     assert.ok(
       dom.window.document.body.textContent?.includes(
@@ -542,8 +647,15 @@ test('companion sends the validated answer to speech, reuses audio and preserves
       3,
       'View changes and Stop do not submit more speech requests',
     );
-    await settle(() => button('Back to answer').click());
-    assert.equal(dom.window.document.activeElement?.id, 'answer-heading');
+    await settle(() => button('Close evidence').click());
+    assert.equal(
+      dom.window.document.activeElement,
+      disclosure('View evidence'),
+    );
+    assert.equal(
+      (disclosure('View evidence').parentElement as HTMLDetailsElement).open,
+      false,
+    );
     assert.ok(dom.window.document.body.textContent?.includes(spoken[1]!.text));
 
     holdRequest = true;
@@ -570,10 +682,33 @@ test('companion sends the validated answer to speech, reuses audio and preserves
     assert.equal(
       dom.window.document
         .querySelector('#answer-heading + p')
-        ?.textContent?.includes('12.5%'),
+        ?.textContent?.includes('12.5%') ?? false,
       false,
     );
     assert.ok(textarea.value.length > 0, 'Cancellation preserves the question');
+    holdRequest = false;
+    await settle(() => button('Ask VSual').click());
+    await settle(() => button('Go to answer').click());
+    assert.equal(dom.window.document.activeElement?.id, 'answer-heading');
+    await settle(() => button('Ask another question').click());
+    assert.equal(dom.window.document.activeElement, textarea);
+    const beforeNavigation = submissions.length;
+    await settle(() => {
+      tab.url = 'http://127.0.0.1:3000/voice';
+      updatedListeners.forEach((listener) =>
+        listener(tab.id, { url: tab.url }),
+      );
+    });
+    assert.equal(
+      submissions.length,
+      beforeNavigation,
+      'Navigation cannot submit automatically',
+    );
+    assert.equal(
+      dom.window.document.querySelector('#answer-heading'),
+      null,
+      'Old answer clears on unsupported navigation',
+    );
   } finally {
     await act(async () => root.unmount());
     dom.window.close();

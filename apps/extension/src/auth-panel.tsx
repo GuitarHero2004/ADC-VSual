@@ -193,22 +193,30 @@ export function AuthPanel({
   session,
   language,
   signInRef,
+  compact = false,
 }: {
   session: ReturnType<typeof useExtensionSession>;
   language: UiLanguage;
   signInRef: React.RefObject<HTMLButtonElement | null>;
+  compact?: boolean;
 }) {
   const { status, loading, busy, failure, run } = session;
   const a = authCopy[language];
   const t = copy[language];
   const heading = useRef<HTMLHeadingElement>(null);
+  const accountSummary = useRef<HTMLElement>(null);
   const previous = useRef<string | null>(null);
   const restoreSignIn = useRef(false);
   const identity = status?.account?.id ?? null;
   const hasSession = Boolean(identity || status?.phase === 'unverified');
   const pending = status?.phase === 'signing_in';
   useEffect(() => {
-    if (identity && identity !== previous.current) heading.current?.focus();
+    if (
+      identity &&
+      identity !== previous.current &&
+      !heading.current?.closest('[hidden]')
+    )
+      (compact ? accountSummary : heading).current?.focus();
     if ((!identity && previous.current) || pending)
       restoreSignIn.current = true;
     if (!hasSession && !pending && !busy && !loading && restoreSignIn.current) {
@@ -216,7 +224,7 @@ export function AuthPanel({
       restoreSignIn.current = false;
     }
     previous.current = identity;
-  }, [identity, signInRef, hasSession, pending, busy, loading]);
+  }, [identity, signInRef, hasSession, pending, busy, loading, compact]);
   const error = failure ?? status?.error;
   const announcement = error
     ? authFailureText(error, language)
@@ -235,19 +243,16 @@ export function AuthPanel({
                 : identity
                   ? `${a.signedIn}: ${status?.account?.email}. ${status?.workspace === 'allowed' ? t.ready : status?.workspace === 'denied' ? a.denied : a.unavailable}`
                   : '';
-  return (
-    <section aria-labelledby="session-heading">
-      <h2 id="session-heading" tabIndex={-1} ref={heading}>
-        {a.account}
-      </h2>
+  const controls = (
+    <>
       {status?.account ? (
         <p>
           {a.signedIn}: {status.account.email}
         </p>
       ) : null}
-      <p>{t.session}</p>
       {hasSession ? (
         <>
+          <p>{t.session}</p>
           <p>{t.scope}</p>
           <div className="controls">
             {(status?.phase === 'unverified' ||
@@ -320,7 +325,36 @@ export function AuthPanel({
           {a.retry}
         </button>
       )}
-      <p role="status" aria-atomic="true" className="status">
+    </>
+  );
+  return (
+    <section
+      aria-labelledby="session-heading"
+      className={compact ? 'account-summary' : 'account-setup'}
+    >
+      <h2
+        id="session-heading"
+        tabIndex={-1}
+        ref={heading}
+        className={compact ? 'sr-only' : undefined}
+      >
+        {a.account}
+      </h2>
+      {compact ? (
+        <details>
+          <summary ref={accountSummary}>
+            {a.signedIn}: {status?.account?.email}
+          </summary>
+          {controls}
+        </details>
+      ) : (
+        controls
+      )}
+      <p
+        role="status"
+        aria-atomic="true"
+        className={compact ? 'sr-only' : 'status'}
+      >
         {announcement}
       </p>
     </section>
