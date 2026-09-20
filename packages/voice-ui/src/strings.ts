@@ -120,6 +120,10 @@ const notices: Record<UiLanguage, Record<VoiceNotice, string>> = {
 };
 
 const errors: Record<string, [string, string]> = {
+  auth_unavailable: [
+    'Your session cannot be checked right now. Check your connection and retry. You have not been signed out.',
+    'Chưa thể kiểm tra phiên. Kiểm tra kết nối rồi thử lại. Bạn chưa bị đăng xuất.',
+  ],
   microphone_denied: [
     'Microphone access was denied. Allow it in this surface’s browser permissions, then try again. You can still type.',
     'Quyền micrô bị từ chối. Cho phép trong quyền của trình duyệt cho giao diện này rồi thử lại. Bạn vẫn có thể nhập.',

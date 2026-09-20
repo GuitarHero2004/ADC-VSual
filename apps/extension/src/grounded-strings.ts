@@ -136,6 +136,10 @@ export const groundedText = {
 } as const;
 
 const errors: Record<string, [string, string]> = {
+  AUTH_UNAVAILABLE: [
+    'Your session cannot be checked right now. Check your connection and retry. You have not been signed out.',
+    'Chưa thể kiểm tra phiên. Kiểm tra kết nối rồi thử lại. Bạn chưa bị đăng xuất.',
+  ],
   CONSENT_REQUIRED: [
     'Allow page processing before capturing this page.',
     'Cho phép xử lý trang trước khi đọc.',
