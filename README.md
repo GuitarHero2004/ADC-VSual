@@ -4,26 +4,45 @@ Hackathon project by **In Motion or Element**, for blind and low-vision users.
 The assistant complements existing screen readers.
 
 VSual answers bounded questions about the rendered **synthetic `/orders` dashboard**.
-Allow page processing, type a question (or review an ElevenLabs transcript), then
-select **Ask VSual**. The configured model through Avis interprets the comparison; application code calculates
+Allow page processing, then type and select **Ask VSual**, or record a question
+and pause for five seconds to submit automatically. The configured model through Avis interprets the comparison; application code calculates
 the answer from captured rows and exposes the evidence. English and Vietnamese are
 supported. Browser actions, other websites and wake words are outside this feature.
 
 The separate **`/voice` setup** remains a labelled speech test: its read-back repeats
 supplied text. In the companion, **Read answer** speaks the validated answer instead.
-App speech and recording cues are off by default; text and evidence work without TTS.
+Companion answer speech defaults ON for new preferences; recording cues and the
+standalone voice test remain optional. Text and evidence work with Speech OFF.
 
 ## Companion interface
 
 The extension is the working interface: **Current page → Your question → Ask VSual
 → Answer → View evidence**. The page status distinguishes unsupported pages,
 missing page access and processing consent; account and workspace access remain
-separate. Recording fills an editable question and never submits it. The example
-question also only fills the input. Enter inserts a newline; use **Ask VSual** to
-submit. **Go to answer** moves focus deliberately; an arriving answer does not.
+separate. Starting **Record question** enables automatic submission after five
+seconds of silence following detected sound. Continued speech resets that timer
+and stays in the same recording, with one transcription request. **Stop and review**
+manually finishes for transcript review instead; **Cancel recording** discards it.
+Typed/example questions still require **Ask VSual**. Enter inserts a newline.
+**Go to answer** moves focus deliberately; an arriving answer does not.
+
+The countdown is visible but is not spoken every second into the microphone.
+The optional recording cue plays after microphone tracks stop. Nothing is submitted
+automatically before sound is detected. The existing 30-second cap finishes for
+review, and the 3 MiB limit still discards oversized recordings. Silence detection
+uses local audio levels, not speaker identification: quiet voices, background
+noise and screen-reader audio need device testing. If local audio analysis is
+unavailable, use **Stop and review** and **Ask VSual**. Empty/failed transcriptions,
+cancellation, account/page changes and missing page permission never auto-submit.
+Permission granted later does not submit a previously held transcript. Only
+nonempty silence-finished transcripts may automatically ask once; all existing
+authentication, workspace and page checks still apply. This confirmed voice flow
+supersedes the earlier requirement to review every recorded question. `/voice`
+remains a manual test and never asks the assistant.
 
 **Settings** contains the actual assigned shortcut, optional microphone setup,
-interface/recording language, answer speech and playback speed. Both interfaces
+interface/recording language and one **Speech on** control. Companion speech uses
+a fixed **0.9×** playback rate with no speed selector. Both interfaces
 use a light theme with large default text (22.5px body, 25px answers), without
 appearance controls. Browser zoom and operating-system forced colours remain
 available. **Back to companion** restores focus to Settings without clearing the
@@ -32,7 +51,11 @@ leaving the current page or restarting sign-in.
 
 Language and speech preferences are local and separate for the website and
 extension. English/Vietnamese interface changes do not translate source evidence.
-New users have app speech off; existing explicit speech choices are preserved.
+New companion users have speech ON. Saved ON/OFF choices are preserved, including
+legacy OFF values: older defaults were saved without recording whether the user
+chose them, so they cannot safely be changed to ON. Enable Speech manually if
+desired. Preferences load before the companion can ask or speak; if storage is
+unavailable, speech stays OFF until explicitly enabled for that visit.
 Secondary help is expandable; labels, status messages and evidence remain
 available to keyboard and screen-reader users.
 
@@ -40,6 +63,77 @@ The homepage introduces the supported scope; **Get started** opens `/voice` with
 practical extension setup and an optional website voice test. There is no published
 store-install link or claimed automatic website/extension connection. `/orders`
 keeps its synthetic English source table and capture identifiers unchanged.
+
+### Automatic answer speech
+
+After **Ask VSual** or a silence-finished voice question, the validated answer or clarification appears
+before audio preparation. It is read once when Speech is ON. The final edited
+question determines English/Vietnamese output, with a direct language request
+taking precedence and English as the ambiguous-language fallback. The existing
+Avis interpretation request resolves `answer_language`; deterministic templates
+produce that language without a translation request. UI and recording language
+settings do not select the answer language. Source evidence stays unchanged.
+
+**Stop speech** cancels audio preparation/playback immediately and retains the
+answer. **Read again** reuses cached audio; **Play answer** does the same when the
+browser blocks automatic playback. **Read answer** or **Retry speech** explicitly
+generates audio when none is cached. Turning Speech OFF stops audio; turning it
+back ON affects future answers and does not read an existing answer automatically.
+The setting controls VSual only, not NVDA.
+
+The grounded controller reserves each fresh response once before asynchronous
+speech work. Old/restored answers, rerenders and UI-language changes cannot claim
+it again. Cancellation, new questions/recordings, logout, context invalidation and
+panel disposal prevent late playback. Only the latest answer audio is kept in
+session memory. New answers/context/session changes release it; nothing is stored
+in a database or browser preference storage.
+
+`COMPANION_PLAYBACK_RATE` is applied only by the browser player, including Repeat;
+pitch is preserved. ElevenLabs receives normal per-request speed `1`, without
+changing the shared voice settings. The configured `eleven_flash_v2_5` model reports
+English/Vietnamese support. The configured voice is accessible but its verified
+language samples do not include Vietnamese: pronunciation still needs a listening
+check. Unsupported-language/provider failures preserve text and offer recovery.
+No environment variables or paid-plan changes are required.
+
+Deploy the backend and rebuild/reload the extension together: grounded requests
+now omit UI `language`, and validated responses include `answer_language` (`en` or
+`vi`). Automatic speech defaults here supersede the older reference-document
+default; Speech OFF retains the screen-reader journey. `/voice` remains manual.
+
+Local automatic-voice verification: `npm run check` passed **366 tests**, strict
+type checking, lint, formatting and both production builds on Node 24.17.0 / npm
+11.13.0. Two explicit synthetic Avis requests (English/Vietnamese) passed the new
+language contract and deterministic evidence checks. Read-only ElevenLabs model
+and configured-voice metadata requests succeeded; no live TTS was generated.
+The built browser bundles contained none of the three configured server secrets
+checked (values were not printed).
+
+Silence submission is covered by deterministic recorder/clock tests and the actual
+React companion harness: resumed sound resets the deadline, final chunks are kept,
+only one automatic question is claimed, manual Stop/30-second expiry stay review-
+only, and cancellation, page changes or account switches reject late transcripts.
+Audio-analysis setup timeout and suspension fall back to manual controls. No live
+provider calls were made to test this addition.
+The built extension also passed a Chrome check with native Web Audio and
+MediaRecorder fed synthetic sound: a three-second pause followed by more sound
+reset the countdown; subsequent silence produced one recording upload, one
+question and one reply playback. Microphone tracks and audio analysis were
+released. Authentication, transcription, answer and playback responses were
+controlled test substitutes; this does not verify a real microphone or spoken
+recognition. Real quiet/noisy-room and NVDA checks remain pending.
+
+Chrome 153 loaded the actual unpacked extension, service worker and orders content
+script in a disposable profile. Controlled authentication/answer/Audio mocks
+verified automatic playback, Stop, cached Repeat/autoplay recovery, mute, language
+metadata, visible evidence while TTS is pending and no replay after document
+reload. Keyboard Settings/language navigation and 320px EN/VI reflow passed;
+the real signed-out `/voice` page made no billable request on load. These are not
+live authentication or audible-speech checks. NVDA, microphone, docked-panel close/
+shortcut behaviour, live authenticated end-to-end use and pronunciation remain
+manual; use the sequence below. Mixed/unaccented/explicit-language model decisions
+are covered by controlled contract tests and instructions, not a live language
+evaluation suite.
 
 ## Install and run
 
@@ -202,11 +296,59 @@ The backend rejects owner/bypass roles, missing forced RLS, mismatched identitie
 and inactive memberships before any provider call. Grounded answers reuse this
 existing access model and usage table; this branch adds no migration.
 
-Limits are **6 attempts per rolling minute and 30 per rolling 24 hours per user**,
-across workspaces, shared by Avis and voice calls using this same database.
-Duplicate request IDs are rejected.
-Failed/cancelled provider attempts count, and old metadata is pruned on the next
-attempt. This is a durable limit across Vercel instances, not an in-memory counter.
+Limits are per account, across workspaces and website/extension sessions, shared
+by transcription, grounded answers and speech using the same database:
+
+| Server mode                           | Rolling 60 seconds | Rolling 24 hours |
+| ------------------------------------- | -----------------: | ---------------: |
+| Local development (`npm run dev:web`) |        30 requests |   1,000 requests |
+| Production or automated test defaults |         6 requests |      30 requests |
+
+Optional **server-only** `VOICE_REQUESTS_PER_MINUTE` (1–600) and
+`VOICE_REQUESTS_PER_DAY` (1–10,000) override these values. Put explicit local
+overrides in `apps/web/.env.local` and restart the web server. Invalid values fail
+closed; zero, fractional and unlimited values are not supported. Builds do not
+need these variables. For heavier testing on the stable Vercel Preview, set
+`VOICE_REQUESTS_PER_MINUTE=30` and `VOICE_REQUESTS_PER_DAY=1000` in the intended
+Preview environment and redeploy. This task does not change Vercel settings.
+`npm run start` serves production mode, so use explicit overrides if testing that
+mode locally. No browser/extension setting can override the backend limits.
+
+A full recorded question and spoken answer normally reserves **three requests**:
+one transcription, one answer and one speech generation. Typed questions skip
+transcription; Speech OFF skips automatic speech generation; cached Repeat costs
+no additional request. These are application attempts, not a provider credit or
+currency counter. Raising them does not add ElevenLabs/Avis credits or change
+provider throttling, and more successful calls can consume more provider credits.
+
+Duplicate request IDs are rejected. Failed or cancelled calls after a usage slot
+has been reserved still count; rejected authentication/input/configuration and
+already-limited requests do not reserve another slot. The counter does not reset
+at midnight, sign-out, browser reload or server restart. Each entry ages out of its
+rolling window. Old metadata is pruned on the next successful reservation. This
+is a durable limit across Vercel instances, not an in-memory counter.
+
+An application 429 now uses `APP_RATE_LIMITED` and returns validated counts,
+configured thresholds, the limiting window(s), an estimated earliest retry time,
+and `Retry-After`. The retry calculation covers both windows and enough expiring
+entries to recover even if a limit was lowered below existing usage. The UI shows
+which step was blocked, the count snapshot, the retry date/time in the device's
+time zone and how counting works. It does not retry automatically; other activity
+on the same account can change availability. Detailed counts are readable outside
+the brief live status announcement.
+
+`PROVIDER_RATE_LIMITED` means the speech provider or answer provider throttled the
+request; no exact reset time or remaining provider allowance is invented.
+`QUOTA_EXHAUSTED` reports the provider's credit/spending limitation. Legacy
+`RATE_LIMITED` responses honestly say that the source was not identified. A text
+answer remains available when only its speech step fails. Server rate-limit logs
+contain bounded operational metadata, never transcripts, audio or credentials.
+Backend and extension must be updated together for these precise error details.
+The limit notices were checked in the actual unpacked Chrome 153 extension with
+mocked authentication/API responses and real orders-page capture: correct counts
+and retry time, preserved answer/evidence after a speech limit, EN/VI details
+outside live regions, and no horizontal overflow at 320 px with 200% text.
+Those checks made no provider requests; live limits and NVDA remain manual checks.
 The application stores no recordings, questions, snapshots, answers or generated
 audio in Supabase. Only the existing access and bounded usage metadata is retained.
 
@@ -241,7 +383,8 @@ request → cancel; speaking → stop. The toolbar opens without recording. A
 readiness/acknowledgement handshake handles cold workers and new panels. Escape
 cancels within the companion or web voice surface; in extension Settings it returns
 to the companion. A narrowly matched content script
-reads the orders table only after permission and an explicit capture/Ask action.
+reads the orders table only after permission and a capture/Ask action or a
+deliberately started question recording that finishes after silence.
 There is no offscreen document or background microphone.
 Reload the extension and reopen the panel after any build/configuration change.
 
@@ -383,15 +526,17 @@ the interactive journey.
    session and origin; withdraw it to cancel work and clear captured data.
 3. Enter **“Compare completed orders in the South for August and July.”** or
    **“So sánh số đơn hoàn thành ở miền Nam tháng 8 với tháng 7 năm 2026.”**
-   Recording only fills editable question text; review it before **Ask VSual**.
+   For hands-free submission after activation, choose **Record question**, speak,
+   then pause for five seconds. To review instead, select **Stop and review** before
+   the countdown ends and then **Ask VSual** when ready.
 4. Expect a decrease of **300 orders (25%)**, from July 1,200 to August 900 in 2026.
    **View evidence** shows both original values, row identifiers and the calculation.
 5. Expand **Inspect the source table without AI**. **Capture source table** also
    works when Avis is unavailable. **Return to page** attempts to restore the
    original usable focus target, otherwise the supported page heading.
-6. Optionally enable app speech in **Settings**. **Read answer** becomes
-   **Stop speech** while preparing/playing, then **Read again** when audio is
-   available. Read again and speed changes reuse session audio. Evidence expands
+6. With **Speech on** in **Settings**, each new answer reads automatically.
+   Use **Stop speech** while preparing/playing, then **Read again** when audio is
+   available. Read again uses the same audio at 0.9×. Evidence expands
    below the answer without hiding playback controls; **Close evidence** returns
    focus to its disclosure. **Ask another question** returns to the editable input.
 
@@ -471,7 +616,8 @@ They do not substitute for real PostgreSQL RLS/concurrency or browser tests.
 
 ### Companion UI: keyboard and NVDA check
 
-Use Chrome or Edge on Windows with NVDA running. Keep app speech off initially.
+Use Chrome or Edge on Windows with NVDA running. Check the actual Speech state;
+new preferences default ON and a saved OFF remains OFF.
 These steps exercise the installed extension; a web preview does not verify its
 permissions, activation or messaging. Configure an existing account and the local
 or deployed backend as above.
@@ -489,14 +635,21 @@ or deployed backend as above.
 4. Hear the brief result status without losing focus. Use **Go to answer**, then
    **View evidence**. Read both source rows, the calculation and capture time.
    **Close evidence** returns focus to its disclosure.
-5. Enable app speech deliberately in **Settings**, return, choose **Read answer**
-   and **Stop speech**. **Read again** and playback-speed changes must reuse the
-   generated audio; check that the browser sends no additional synthesis request.
+5. With Speech ON, submit an English and a Vietnamese question, independently of
+   UI language. The answer should display immediately and play once at 0.9×.
+   Stop during preparation and playback; the answer/evidence must remain.
+   **Read again** must send no new synthesis request. If autoplay is blocked,
+   **Play answer** must reuse the generated audio directly from that interaction.
 6. Select **Ask another question**. Confirm focus returns to the editable question
-   and another explicit Ask is needed. Do not expect conversation memory.
-7. Choose **Record question**, speak, then **Stop recording**. Review and edit the
-   transcript before asking; stopping recording must never submit automatically.
-   Repeat using **Cancel recording** and confirm no transcription upload occurs.
+   and another Ask or deliberate recording is needed. Do not expect conversation memory.
+7. Choose **Record question**, speak part of a question, pause for less than five
+   seconds, then continue. Confirm the countdown resets, all speech stays in one
+   recording, and five seconds of silence sends one complete transcript and asks
+   once. During a second recording select **Stop and review**: this must leave the
+   transcript for manual review and Ask. **Cancel recording** discards without
+   upload. Test initial silence, the 30-second cap, soft speech and background
+   noise. Cancel during transcription, sign out or change source tabs; late
+   transcripts must never ask. Missing permission must hold the text for review.
 8. Deny microphone permission or disconnect the network. Retain the typed question,
    hear a useful error and retry deliberately. Cancel pending work and sign out
    during a request; late text, answers or audio must not return.
@@ -509,9 +662,16 @@ or deployed backend as above.
     marked as previous context, playback must stop, and no page content should be
     transmitted automatically. Return to the supported page and ask deliberately.
 
+Also turn Speech OFF and complete the full typed/NVDA journey. The answer remains
+normal readable text; our polite status regions must not announce its full text
+again. OFF then ON must not speak an old answer. Close/reopen the panel and confirm
+no old audio resumes. Check an edited transcript that changes languages, unaccented
+Vietnamese, mixed language, an English question containing a Vietnamese name, and
+explicit requests such as “Answer in English” / “Trả lời bằng tiếng Việt”.
+
 Focused automated coverage includes settings focus/persistence, retained drafts,
-unchanged captured source evidence across language changes, explicit
-transcript submission and existing cancellation/authentication boundaries. Local
+unchanged captured source evidence across language changes, manual and silence-
+finished transcript submission and existing cancellation/authentication boundaries. Local
 rendered checks in Chrome 153 covered the fixed light palette (including a dark
 system preference), large default text, 320/1280-CSS-pixel layouts, Vietnamese,
 200% text with spacing overrides, and emulated forced colours.
@@ -614,8 +774,8 @@ Run the journey in the companion panel, then check:
       setup error, question preserved, source inspection still available.
 - [ ] Keyboard-only and NVDA: labels, brief announcements, no unexpected focus move
       on answer arrival, semantic evidence, 200–400% zoom and narrow-panel reflow.
-- [ ] Reviewed STT populates a question without submitting. Read answer speaks the
-      answer, Stop speech is immediate, Read again/speed add no TTS calls, and TTS
+- [ ] Reviewed STT populates a question without submitting. New answers speak once
+      when Speech is ON; Stop is immediate, Read again adds no TTS calls, and TTS
       failure leaves evidence usable. Expand evidence and the source table while
       speaking or generating speech; Stop speech must remain available. Repeat
       with app speech disabled.
@@ -633,9 +793,10 @@ The automated tests, type checking, lint, formatting and both production builds
 passed. No deployment was performed for this branch.
 
 Earlier voice verification recorded one successful synthetic English STT provider
-check and a restricted TLS/RLS database read check. The last recorded live TTS check
-failed with **HTTP 402 `payment_required`** for the configured Voice Library voice.
-Account voice/plan access, authenticated end-to-end reservations, audible playback,
+check and a restricted TLS/RLS database read check. That earlier live TTS check
+failed with **HTTP 402 `payment_required`** for the then-configured Voice Library
+voice. Current read-only metadata checks confirm the configured premade voice is
+accessible, but do not establish successful synthesis. Authenticated reservations, audible playback,
 microphone permissions, Vietnamese/mixed-language pronunciation and deployed voice
 acceptance remain unverified here. The current implementation uses one configured
 voice; per-language selection and cloning are deferred.
@@ -670,8 +831,8 @@ Ask. Its answer controller sends only the validated answer text through the exis
 `/api/voice/speak` transport. This is the bounded integration point for later
 reasoning work. Model/page content never grants action authority.
 
-Review this work on `feat/companion-ui`, based on `dev` at accessible-auth merge
-`721a5e1`. Merge a reviewed feature before starting a separate follow-up branch
+Review this work on `feat/automatic-voice-replies`, based on `dev` at companion-UI
+merge `a29b48c`. Merge a reviewed feature before starting a separate follow-up branch
 for broader scope or pending acceptance. When committing a completed feature,
 split changes into focused commits with concise messages that explain their purpose
 to technical and non-technical readers. Keep related tests with their implementation.
