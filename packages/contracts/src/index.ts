@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+export * from './grounded.ts';
+
 // API-07 bounds request_text. Task submission is not implemented yet.
 export const REQUEST_TEXT_MAX_LENGTH = 4000;
 
