@@ -17,7 +17,6 @@ try {
       language === 'vi'
         ? 'So sánh số đơn hoàn thành ở miền Nam tháng 8 với tháng 7 năm 2026.'
         : 'Compare completed orders in the South for August and July.',
-    language,
     consent: true,
     snapshot: {
       snapshot_id: crypto.randomUUID(),
@@ -63,6 +62,7 @@ try {
   );
   const result = calculateComparison(input, interpretation);
   assert.equal(result.status, 'answer');
+  assert.equal(result.answer_language, language);
   if (result.status !== 'answer') throw new Error('Expected a comparison');
   assert.equal(result.evidence.calculation.difference, -300);
   assert.equal(result.evidence.calculation.percentage_change, '-25');

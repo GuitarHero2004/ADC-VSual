@@ -6,6 +6,11 @@ import { Pool, type PoolClient } from 'pg';
 import { requireSupabaseConfig } from '../supabase/env.ts';
 import { voiceDatabaseConfig } from './database-config.ts';
 import { VoiceError } from './errors.ts';
+import {
+  limitedUsage,
+  voiceRequestLimits,
+  type UsageWindow,
+} from './limits.ts';
 
 export interface VoiceIdentity {
   subject: string;
@@ -254,26 +259,38 @@ export async function reserveVoiceRequest(
       400,
     );
   }
+  const limits = voiceRequestLimits();
   await withIdentity(identity, async (client) => {
     // Serialize this user's attempts across workspaces and every Vercel instance.
     await client.query(
       'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
       [identity.userId],
     );
-    await client.query(
-      "DELETE FROM va.voice_request_usage WHERE user_id = $1 AND created_at <= clock_timestamp() - interval '24 hours'",
-      [identity.userId],
+    const clock = await client.query<{ checked_at: Date }>(
+      'SELECT clock_timestamp() AS checked_at',
     );
-    const usage = await client.query<{
-      duplicate: boolean;
-      minute_count: number;
-      day_count: number;
-    }>(
-      `SELECT coalesce(bool_or(request_id = $2), false) AS duplicate,
-        (count(*) FILTER (WHERE created_at > clock_timestamp() - interval '1 minute'))::int AS minute_count,
-        count(*)::int AS day_count
-       FROM va.voice_request_usage WHERE user_id = $1`,
-      [identity.userId, requestId],
+    const checkedAt = clock.rows[0]?.checked_at;
+    if (!(checkedAt instanceof Date) || !Number.isFinite(checkedAt.getTime()))
+      throw setupError();
+    await client.query(
+      "DELETE FROM va.voice_request_usage WHERE user_id = $1 AND created_at <= $2::timestamptz - interval '24 hours'",
+      [identity.userId, checkedAt],
+    );
+    const usage = await client.query<UsageWindow & { duplicate: boolean }>(
+      `WITH retained AS MATERIALIZED (
+         SELECT request_id, created_at FROM va.voice_request_usage WHERE user_id = $1
+       ), counts AS (
+         SELECT coalesce(bool_or(request_id = $2), false) AS duplicate,
+           (count(*) FILTER (WHERE created_at > $3::timestamptz - interval '1 minute'))::int AS minute_count,
+           count(*)::int AS day_count FROM retained
+       ) SELECT counts.*,
+         (SELECT created_at + interval '1 minute' FROM retained
+           WHERE created_at > $3::timestamptz - interval '1 minute'
+           ORDER BY created_at DESC OFFSET ($4::int - 1) LIMIT 1) AS minute_retry_at,
+         (SELECT created_at + interval '24 hours' FROM retained
+           ORDER BY created_at DESC OFFSET ($5::int - 1) LIMIT 1) AS day_retry_at
+       FROM counts`,
+      [identity.userId, requestId, checkedAt, limits.minute, limits.day],
     );
     const row = usage.rows[0];
     if (!row) throw setupError();
@@ -284,14 +301,18 @@ export async function reserveVoiceRequest(
         409,
       );
     }
-    if (row.minute_count >= 6 || row.day_count >= 30) {
+    const limited = limitedUsage(row, limits, checkedAt);
+    if (limited) {
       throw new VoiceError(
-        'RATE_LIMITED',
-        'Voice test limit reached. Try again later; your text is still available.',
+        'APP_RATE_LIMITED',
+        'The VSual application request limit was reached. Wait until the reported retry time; your text is preserved.',
         429,
         true,
+        limited,
       );
     }
+    // The schema uses clock_timestamp() at insertion, after the advisory lock.
+    // The restricted runtime role deliberately cannot set created_at itself.
     await client.query(
       'INSERT INTO va.voice_request_usage (user_id, workspace_id, request_id) VALUES ($1, $2, $3)',
       [identity.userId, identity.workspaceId, requestId],

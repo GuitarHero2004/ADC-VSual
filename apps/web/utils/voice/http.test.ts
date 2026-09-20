@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { AUDIO_MAX_BYTES } from '@adc/contracts';
+import {
+  AUDIO_MAX_BYTES,
+  voiceErrorResponseSchema,
+  type UsageLimit,
+} from '@adc/contracts';
 import { createVoiceHandler, voicePreflight } from './http.ts';
 import { VoiceError } from './errors.ts';
 
@@ -64,6 +68,84 @@ test('unauthenticated input never reserves quota or reaches the provider', async
   assert.equal(response.status, 401);
   assert.equal(calls.reserve, 0);
   assert.equal(calls.provider, 0);
+});
+
+test('application usage errors expose exact counts, retry metadata and only safe operational logs before any provider call', async (context) => {
+  const logs: unknown[] = [];
+  context.mock.method(console, 'info', (value: string) => {
+    logs.push(JSON.parse(value));
+  });
+  const usage: UsageLimit = {
+    minute_count: 30,
+    minute_limit: 30,
+    day_count: 84,
+    day_limit: 1000,
+    limited_by: 'minute',
+    retry_after_seconds: 43,
+    retry_at: '2026-09-21T12:00:43.000Z',
+  };
+  for (const feature of ['speak', 'transcribe'] as const) {
+    const { calls, dependencies } = setup();
+    dependencies.reserveVoiceRequest = async () => {
+      throw new VoiceError(
+        'APP_RATE_LIMITED',
+        'VSual limit reached.',
+        429,
+        true,
+        usage,
+      );
+    };
+    const response = await createVoiceHandler(
+      feature,
+      dependencies,
+    )(
+      feature === 'speak' ? json({ text: 'private transcript text' }) : audio(),
+    );
+    assert.equal(response.status, 429);
+    assert.equal(response.headers.get('Retry-After'), '43');
+    assert.ok(
+      response.headers
+        .get('Access-Control-Expose-Headers')
+        ?.includes('Retry-After'),
+    );
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+    const body = voiceErrorResponseSchema.parse(await response.json());
+    assert.equal(body.error.code, 'APP_RATE_LIMITED');
+    assert.deepEqual(body.error.usage, usage);
+    assert.equal(calls.provider, 0);
+    assert.deepEqual(logs.at(-1), {
+      event: 'app_request_limit',
+      request_id: body.request_id,
+      route: `/api/voice/${feature}`,
+      code: 'APP_RATE_LIMITED',
+      ...usage,
+    });
+  }
+  assert.equal(logs.length, 2);
+  assert.ok(!JSON.stringify(logs).includes('private transcript text'));
+});
+
+test('provider and legacy throttling never inherit application counts or an invented retry time', async (context) => {
+  const logs = context.mock.method(console, 'info', () => {});
+  for (const code of [
+    'PROVIDER_RATE_LIMITED',
+    'RATE_LIMITED',
+    'QUOTA_EXHAUSTED',
+  ] as const) {
+    const { dependencies } = setup();
+    dependencies.synthesiseSpeech = async () => {
+      throw new VoiceError(code, 'Provider unavailable.', 429, true);
+    };
+    const response = await createVoiceHandler(
+      'speak',
+      dependencies,
+    )(json({ text: 'Read back' }));
+    const result = voiceErrorResponseSchema.parse(await response.json());
+    assert.equal(result.error.code, code);
+    assert.equal(result.error.usage, undefined);
+    assert.equal(response.headers.get('Retry-After'), null);
+  }
+  assert.equal(logs.mock.callCount(), 0);
 });
 test('malformed, empty, excessive Unicode and unrestricted options fail before provider or reservation', async () => {
   for (const input of [

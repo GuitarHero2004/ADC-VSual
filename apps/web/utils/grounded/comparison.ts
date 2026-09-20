@@ -87,11 +87,13 @@ export function calculateComparison(
   const interpretation = comparisonInterpretationSchema.parse(
     uncheckedInterpretation,
   );
-  const { snapshot, language } = request;
+  const { snapshot } = request;
+  const language = interpretation.answer_language;
   const linkage = {
     request_id: request.request_id,
     snapshot_id: snapshot.snapshot_id,
     fingerprint: snapshot.fingerprint,
+    answer_language: language,
   };
   const explanation = (
     reason: GroundedReason,

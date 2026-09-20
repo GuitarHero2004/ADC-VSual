@@ -6,6 +6,8 @@ import {
   groundedResponseSchema,
   type GroundedRequest,
   type ComparisonInterpretation,
+  voiceErrorResponseSchema,
+  type UsageLimit,
 } from '@adc/contracts';
 import { VoiceError } from '../voice/errors.ts';
 import { voicePreflight } from '../voice/http.ts';
@@ -23,6 +25,7 @@ const originals = Object.fromEntries(
 );
 const intent: ComparisonInterpretation = {
   decision: 'comparison',
+  answer_language: 'en',
   operation: 'compare',
   metric: 'completed_orders',
   region: 'South',
@@ -46,7 +49,6 @@ async function payload(): Promise<GroundedRequest> {
   const input: GroundedRequest = {
     request_id: requestId,
     question: 'Compare completed orders in South for August and July.',
-    language: 'en',
     consent: true,
     snapshot: {
       snapshot_id: '22222222-2222-4222-8222-222222222222',
@@ -159,6 +161,7 @@ test('valid fresh evidence reserves once and returns deterministic linked uncach
   assert.equal(result.snapshot_id, input.snapshot.snapshot_id);
   assert.equal(result.fingerprint, input.snapshot.fingerprint);
   assert.equal(result.status, 'answer');
+  assert.equal(result.answer_language, 'en');
   if (result.status !== 'answer') throw new Error('Expected comparison');
   assert.deepEqual(result.evidence.rows, input.snapshot.rows);
   assert.equal(result.evidence.calculation.difference, -300);
@@ -173,6 +176,8 @@ test('malformed, out-of-scope, no-consent and oversized question inputs never re
     {},
     { ...valid, consent: false },
     { ...valid, userId: 'forged' },
+    { ...valid, language: 'vi' },
+    { ...valid, answer_language: 'vi' },
     { ...valid, question: '' },
     { ...valid, question: '😀'.repeat(1001) },
     { ...valid, model: 'override' },
@@ -344,22 +349,90 @@ test('missing AI configuration fails before any reserved usage', async () => {
   assert.equal(calls.provider, 0);
 });
 
-test('shared durable limit and duplicate rejection prevent another model request', async () => {
-  for (const code of ['RATE_LIMITED', 'DUPLICATE_REQUEST'] as const) {
+test('shared durable limit and duplicate rejection prevent another model request', async (context) => {
+  context.mock.method(console, 'info', () => {});
+  for (const code of ['APP_RATE_LIMITED', 'DUPLICATE_REQUEST'] as const) {
     const { calls, dependencies } = setup();
     dependencies.reserveVoiceRequest = async () => {
       throw new VoiceError(
         code,
         'No new request.',
-        code === 'RATE_LIMITED' ? 429 : 409,
+        code === 'APP_RATE_LIMITED' ? 429 : 409,
+        code === 'APP_RATE_LIMITED',
+        code === 'APP_RATE_LIMITED'
+          ? {
+              minute_count: 6,
+              minute_limit: 6,
+              day_count: 6,
+              day_limit: 30,
+              limited_by: 'minute',
+              retry_after_seconds: 1,
+              retry_at: '2026-09-21T12:00:01.000Z',
+            }
+          : undefined,
       );
     };
     const response = await createGroundedHandler(dependencies)(
       json(await payload()),
     );
-    assert.equal(response.status, code === 'RATE_LIMITED' ? 429 : 409);
+    assert.equal(response.status, code === 'APP_RATE_LIMITED' ? 429 : 409);
     assert.equal(calls.provider, 0);
   }
+});
+
+test('grounded answers carry the same application quota evidence without invoking the model', async (context) => {
+  const logged = context.mock.method(console, 'info', () => {});
+  const { calls, dependencies } = setup();
+  const usage: UsageLimit = {
+    minute_count: 6,
+    minute_limit: 6,
+    day_count: 30,
+    day_limit: 30,
+    limited_by: 'both',
+    retry_after_seconds: 3600,
+    retry_at: '2026-09-21T13:00:00.000Z',
+  };
+  dependencies.reserveVoiceRequest = async () => {
+    throw new VoiceError(
+      'APP_RATE_LIMITED',
+      'VSual limit reached.',
+      429,
+      true,
+      usage,
+    );
+  };
+  const response = await createGroundedHandler(dependencies)(
+    json(await payload()),
+  );
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get('Retry-After'), '3600');
+  const body = voiceErrorResponseSchema.parse(await response.json());
+  assert.equal(body.error.code, 'APP_RATE_LIMITED');
+  assert.deepEqual(body.error.usage, usage);
+  assert.equal(calls.provider, 0);
+  assert.equal(logged.mock.callCount(), 1);
+});
+
+test('upstream model throttling remains distinct from the application budget without fabricated usage', async (context) => {
+  const logged = context.mock.method(console, 'info', () => {});
+  const { dependencies } = setup();
+  dependencies.interpretComparison = async () => {
+    throw new VoiceError(
+      'PROVIDER_RATE_LIMITED',
+      'AI requests are temporarily limited.',
+      429,
+      true,
+    );
+  };
+  const response = await createGroundedHandler(dependencies)(
+    json(await payload()),
+  );
+  const body = voiceErrorResponseSchema.parse(await response.json());
+  assert.equal(body.error.code, 'PROVIDER_RATE_LIMITED');
+  assert.equal(body.error.message, 'AI requests are temporarily limited.');
+  assert.equal(body.error.usage, undefined);
+  assert.equal(response.headers.get('Retry-After'), null);
+  assert.equal(logged.mock.callCount(), 0);
 });
 
 test('cancellation after auth or reservation never starts AI and a late result is discarded', async () => {
