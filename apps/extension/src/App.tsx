@@ -1,33 +1,15 @@
-import {
-  createVoiceTransport,
-  signInErrorMessage,
-  VoiceTest,
-} from '@adc/voice-ui';
+import { createVoiceTransport, VoiceTest } from '@adc/voice-ui';
 import '@adc/voice-ui/styles.css';
 import type { UiLanguage } from '@adc/contracts';
-import type { Session, SupabaseClient } from '@supabase/supabase-js';
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type FormEvent,
-} from 'react';
-import {
-  beginExtensionSignIn,
-  blockExtensionSession,
-  clearExtensionSession,
-  createExtensionAuth,
-  isExtensionSignedOut,
-} from './auth.ts';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { getAuthHeaders } from './auth-client.ts';
+import { AuthPanel, useExtensionSession } from './auth-panel.tsx';
 import { getExtensionConfig } from './config.ts';
 import { usePanelActivation } from './use-activation.ts';
 import { text } from './i18n.ts';
 import { GroundedPanel } from './GroundedPanel.tsx';
 
 const configuration = getExtensionConfig();
-const auth = configuration ? createExtensionAuth(configuration) : null;
 const setupTab = new URLSearchParams(location.search).has('microphone-setup');
 
 function initialLanguage(): UiLanguage {
@@ -41,15 +23,15 @@ function initialLanguage(): UiLanguage {
 }
 
 function SignedInVoice({
-  client,
-  session,
+  userId,
+  epoch,
   language,
   onReady,
   onExpired,
   onActivity,
 }: {
-  client: SupabaseClient;
-  session: Session;
+  userId: string;
+  epoch: string;
   language: UiLanguage;
   onReady: (activate: () => void, cancel: () => void) => () => void;
   onExpired: () => void;
@@ -66,26 +48,18 @@ function SignedInVoice({
     () => ({
       baseUrl: configuration!.backend,
       async getHeaders() {
-        const { data, error } = await client.auth.getSession();
-        if (
-          error ||
-          !data.session ||
-          isExtensionSignedOut() ||
-          data.session.user.id !== session.user.id ||
-          !alive.current
-        ) {
-          if (alive.current) onExpired();
-          throw Object.assign(new Error('Sign in again to continue.'), {
-            code: 'UNAUTHENTICATED',
-          });
-        }
-        return { Authorization: `Bearer ${data.session.access_token}` };
+        if (!alive.current)
+          throw new DOMException('Session changed', 'AbortError');
+        const headers = await getAuthHeaders(userId, epoch);
+        if (!alive.current)
+          throw new DOMException('Session changed', 'AbortError');
+        return headers;
       },
       onUnauthenticated() {
         if (alive.current) onExpired();
       },
     }),
-    [client, session.user.id, onExpired],
+    [userId, epoch, onExpired],
   );
   const transport = useMemo(
     () => createVoiceTransport(requestOptions),
@@ -95,7 +69,7 @@ function SignedInVoice({
     <div onClickCapture={onActivity}>
       {setupTab ? (
         <VoiceTest
-          sessionKey={session.user.id}
+          sessionKey={`${userId}:${epoch}`}
           transport={transport}
           uiLanguage={language}
           onReady={onReady}
@@ -103,7 +77,7 @@ function SignedInVoice({
         />
       ) : (
         <GroundedPanel
-          sessionKey={session.user.id}
+          sessionKey={`${userId}:${epoch}`}
           language={language}
           voiceTransport={transport}
           backend={configuration!.backend}
@@ -119,25 +93,27 @@ function SignedInVoice({
 export function App() {
   const [language, setLanguage] = useState<UiLanguage>(initialLanguage);
   const t = text[language];
-  const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(!!auth);
-  const [busy, setBusy] = useState(false);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [status, setStatus] = useState('');
   const [shortcut, setShortcut] = useState<string | null>(null);
   const [shortcutFailed, setShortcutFailed] = useState(false);
   const [voiceReady, setVoiceReady] = useState(false);
-  const restoreSignInFocus = useRef(false);
   const activityChannel = useRef<BroadcastChannel | null>(null);
   const cancelVoice = useRef<() => void>(() => {});
-  const emailInput = useRef<HTMLInputElement>(null);
+  const signInButton = useRef<HTMLButtonElement>(null);
+  const clearWork = useCallback(() => {
+    cancelVoice.current();
+    activityChannel.current?.postMessage('claim');
+  }, []);
+  const session = useExtensionSession(!!configuration, clearWork);
+  useEffect(() => {
+    if (session.status?.account) setStatus('');
+  }, [session.status?.account?.id]);
   const guestActivation = useRef(() => {});
   guestActivation.current = () => {
     setStatus(
       configuration ? text[language].signinFirst : text[language].setup,
     );
-    emailInput.current?.focus();
+    signInButton.current?.focus();
   };
   const activate = useRef<() => void>(() => guestActivation.current());
   const claimVoiceSurface = useCallback(() => {
@@ -164,7 +140,26 @@ export function App() {
       setVoiceReady(false);
     };
   }, []);
-  usePanelActivation(activate, !loading && (!session || voiceReady), !setupTab);
+  usePanelActivation(
+    activate,
+    !session.loading && (!session.allowed || voiceReady),
+    !setupTab,
+  );
+  useEffect(() => {
+    if (session.status?.phase !== 'signing_in') return;
+    const cancel = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented) {
+        event.preventDefault();
+        if (session.status)
+          void session.run({
+            type: 'auth:cancel',
+            epoch: session.status.epoch,
+          });
+      }
+    };
+    document.addEventListener('keydown', cancel);
+    return () => document.removeEventListener('keydown', cancel);
+  }, [session.status?.phase, session.status?.epoch, session.run]);
 
   useEffect(() => {
     const channel = new BroadcastChannel('adc:voice:surface');
@@ -216,103 +211,11 @@ export function App() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!session && restoreSignInFocus.current) {
-      emailInput.current?.focus();
-      restoreSignInFocus.current = false;
-    }
-  }, [session]);
-  useEffect(() => {
-    if (!auth) return;
-    let active = true;
-    let authEvent = false;
-    const { data: subscription } = auth.auth.onAuthStateChange(
-      (event, nextSession) => {
-        if (active) {
-          authEvent = true;
-          if (event === 'SIGNED_OUT') blockExtensionSession();
-          setSession(isExtensionSignedOut() ? null : nextSession);
-          setLoading(false);
-        }
-      },
-    );
-    const storageChanged = (
-      changes: Record<string, chrome.storage.StorageChange>,
-      area: string,
-    ) => {
-      if (
-        active &&
-        area === 'session' &&
-        changes['adc:auth:session'] &&
-        changes['adc:auth:session'].newValue === undefined
-      ) {
-        authEvent = true;
-        blockExtensionSession();
-        void auth.auth.stopAutoRefresh().catch(() => undefined);
-        cancelVoice.current();
-        setSession(null);
-      }
-    };
-    chrome.storage.onChanged.addListener(storageChanged);
-    void auth.auth
-      .getSession()
-      .then(({ data, error }) => {
-        if (active && !authEvent) {
-          setSession(error || isExtensionSignedOut() ? null : data.session);
-          setLoading(false);
-        }
-      })
-      .catch(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-      chrome.storage.onChanged.removeListener(storageChanged);
-      subscription.subscription.unsubscribe();
-    };
-  }, []);
-
   const expireSession = useCallback(() => {
-    restoreSignInFocus.current = true;
-    cancelVoice.current();
-    setSession(null);
-    setStatus(text[language].expired);
-    if (auth) void clearExtensionSession(auth).catch(() => undefined);
-  }, [language]);
-
-  async function signIn(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!auth || busy) return;
-    setBusy(true);
-    setStatus('');
-    try {
-      await beginExtensionSignIn();
-      const { data, error } = await auth.auth.signInWithPassword({
-        email: email.trim(),
-        password,
-      });
-      if (error || !data.session || isExtensionSignedOut())
-        setStatus(signInErrorMessage(error, language));
-      else {
-        await auth.auth.startAutoRefresh();
-        setSession(data.session);
-        setPassword('');
-      }
-    } catch (error: unknown) {
-      setStatus(signInErrorMessage(error, language));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function signOut() {
-    restoreSignInFocus.current = true;
-    cancelVoice.current();
-    setSession(null);
-    setStatus(t.signedout);
-    setPassword('');
-    if (auth) void clearExtensionSession(auth).catch(() => undefined);
-  }
+    clearWork();
+    // Re-verify centrally. A transient network error must not erase credentials.
+    void session.run({ type: 'auth:status' });
+  }, [clearWork, session.run]);
 
   return (
     <div className="panel">
@@ -372,63 +275,23 @@ export function App() {
             <p className="field-help">{t.shortcutLocation}</p>
           </details>
         </section>
-        <section aria-labelledby="session-heading">
-          <h2 id="session-heading">{t.session}</h2>
-          {!configuration ? (
-            <p role="alert">{t.setup}</p>
-          ) : loading ? (
-            <p role="status">{t.loading}</p>
-          ) : session ? (
-            <>
-              <p>
-                {t.signedin} {session.user.email}
-              </p>
-              <button type="button" onClick={signOut}>
-                {t.signout}
-              </button>
-            </>
-          ) : (
-            <form
-              onSubmit={(event) => {
-                void signIn(event);
-              }}
-            >
-              <p>{t.signinHelp}</p>
-              <label htmlFor="email">{t.email}</label>
-              <input
-                ref={emailInput}
-                id="email"
-                type="email"
-                autoComplete="username"
-                required
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                disabled={busy}
-              />
-              <label htmlFor="password">{t.password}</label>
-              <input
-                id="password"
-                type="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                disabled={busy}
-              />
-              <button type="submit" disabled={busy}>
-                {busy ? t.signingIn : t.signin}
-              </button>
-            </form>
-          )}
-          <p role="status" aria-atomic="true" className="status">
-            {status}
-          </p>
-        </section>
-        {session && auth ? (
-          <SignedInVoice
-            key={session.user.id}
-            client={auth}
+        {configuration ? (
+          <AuthPanel
             session={session}
+            language={language}
+            signInRef={signInButton}
+          />
+        ) : (
+          <p role="alert">{t.setup}</p>
+        )}
+        <p role="status" aria-atomic="true">
+          {status}
+        </p>
+        {session.allowed && session.status?.account ? (
+          <SignedInVoice
+            key={`${session.status.account.id}:${session.status.epoch}`}
+            userId={session.status.account.id}
+            epoch={session.status.epoch}
             language={language}
             onReady={onReady}
             onExpired={expireSession}

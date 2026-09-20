@@ -1,4 +1,5 @@
 import { ActivationBroker } from './activation.ts';
+import { installAuthWorker } from './auth-worker.ts';
 
 const storageKey = (windowId: number) => `voice-activation:${windowId}`;
 const broker = new ActivationBroker({
@@ -23,6 +24,7 @@ const broker = new ActivationBroker({
 });
 
 void chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+installAuthWorker();
 
 function openPanel(tab: chrome.tabs.Tab, activate: boolean) {
   if (!Number.isInteger(tab.windowId) || tab.windowId < 0) return;

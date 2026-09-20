@@ -35,7 +35,10 @@ test('manifest limits permissions to configured hosts without secret settings', 
     'https://backend.example.test/*',
     'https://project.supabase.co/*',
   ]);
-  assert.deepEqual(manifest.permissions, ['sidePanel', 'storage']);
+  assert.deepEqual(manifest.permissions, ['sidePanel', 'storage', 'identity']);
+  assert.deepEqual(manifest.externally_connectable, {
+    matches: ['https://backend.example.test/auth/sign-in*'],
+  });
   assert.deepEqual(manifest.content_scripts[0]?.matches, [
     'https://backend.example.test/orders*',
   ]);
