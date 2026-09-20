@@ -5,10 +5,12 @@ import {
   type UiLanguage,
 } from '@adc/contracts';
 import {
+  COMPANION_PLAYBACK_RATE,
   VoiceController,
   VoiceTest,
   browserDependencies,
   voiceErrorText,
+  UsageLimitNotice,
   type VoiceTransport,
 } from '@adc/voice-ui';
 import {
@@ -25,6 +27,10 @@ import { ordersOrigins } from './config-values.ts';
 import { GroundedController } from './grounded-controller.ts';
 import { createGroundedTransport } from './grounded-transport.ts';
 import { groundedError, groundedText } from './grounded-strings.ts';
+import {
+  ANSWER_PREFERENCES_KEY,
+  loadAnswerSpeech,
+} from './answer-preferences.ts';
 
 const supportedOrigins = ordersOrigins(import.meta.env);
 
@@ -56,24 +62,12 @@ export function GroundedPanel(props: Props) {
           latest.current.voiceTransport.transcribe(...args),
       },
       browserDependencies,
+      { fixedPlaybackRate: COMPANION_PLAYBACK_RATE },
     );
     try {
-      const saved: unknown = JSON.parse(
-        localStorage.getItem('vsual:answer-preferences') ??
-          localStorage.getItem('voice:extension-preferences') ??
-          '{}',
-      );
-      if (saved && typeof saved === 'object') {
-        if (
-          'speechEnabled' in saved &&
-          typeof saved.speechEnabled === 'boolean'
-        )
-          speech.setSpeechEnabled(saved.speechEnabled);
-        if ('playbackRate' in saved && typeof saved.playbackRate === 'number')
-          speech.setPlaybackRate(saved.playbackRate);
-      }
+      speech.setSpeechEnabled(loadAnswerSpeech(localStorage));
     } catch {
-      /* Preference storage is optional. */
+      // Accessing localStorage itself may fail; remain OFF until chosen explicitly.
     }
     const controller = new GroundedController(
       new OrdersPageContext(supportedOrigins),
@@ -83,7 +77,7 @@ export function GroundedPanel(props: Props) {
         onUnauthenticated: () => latest.current.onExpired(),
       }),
       () => {
-        speech.cancel();
+        speech.clear();
         const voice = questionVoice.current;
         if (
           voice &&
@@ -146,6 +140,9 @@ function Companion({
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [voiceReady, setVoiceReady] = useState(false);
   const [returnStatus, setReturnStatus] = useState('');
+  const [heldVoiceQuestion, setHeldVoiceQuestion] = useState<
+    'permission' | 'page' | 'length' | 'busy' | null
+  >(null);
   const answerHeading = useRef<HTMLHeadingElement>(null);
   const evidenceDetails = useRef<HTMLDetailsElement>(null);
   const pageHeading = useRef<HTMLHeadingElement>(null);
@@ -153,8 +150,8 @@ function Companion({
   const permissionFocus = useRef(false);
   const permissionDetails = useRef<HTMLDetailsElement>(null);
   const surface = useRef<HTMLDivElement>(null);
-  const resultText = state.result?.status === 'answer' ? state.result.text : '';
-  const resultLanguage = state.resultLanguage ?? props.language;
+  const resultText = state.result?.text ?? '';
+  const resultLanguage = state.resultLanguage ?? 'en';
   const allowed =
     state.context?.supported && state.context.origin === state.consentOrigin;
   const busy = state.phase === 'reading' || state.phase === 'understanding';
@@ -204,14 +201,51 @@ function Companion({
       setVoiceReady(true);
       const update = () => {
         const next = voice.getSnapshot();
+        // Reserve before any other state update: only one completed recording
+        // may submit, even when React/subscriptions run again.
+        const automaticQuestion = voice.claimAutomaticQuestion();
+        if (
+          next.text !== controller.getSnapshot().question ||
+          next.phase === 'cancelled'
+        )
+          setHeldVoiceQuestion(null);
         const capturing = [
           'requesting_permission',
           'recording',
           'transcribing',
         ].includes(next.phase);
-        if (capturing) speech.cancel();
+        if (capturing) {
+          setHeldVoiceQuestion(null);
+          controller.discardAutomaticSpeech();
+          speech.stopPlayback();
+        }
         setVoiceBusy(capturing);
         controller.setQuestion(next.text);
+        if (automaticQuestion !== null) {
+          const current = controller.getSnapshot();
+          if (
+            !controller.busy &&
+            current.context?.supported &&
+            current.context.origin === current.consentOrigin &&
+            unicodeLength(automaticQuestion) <= GROUNDED_QUESTION_MAX_LENGTH
+          ) {
+            setReturnStatus('');
+            setHeldVoiceQuestion(null);
+            // ask() still rechecks page consent, source context and backend
+            // authentication. Recording never grants any of those permissions.
+            void controller.ask();
+          } else
+            setHeldVoiceQuestion(
+              !current.context?.supported
+                ? 'page'
+                : current.context.origin !== current.consentOrigin
+                  ? 'permission'
+                  : unicodeLength(automaticQuestion) >
+                      GROUNDED_QUESTION_MAX_LENGTH
+                    ? 'length'
+                    : 'busy',
+            );
+        }
       };
       const unsubscribe = voice.subscribe(update);
       update();
@@ -244,22 +278,26 @@ function Companion({
   }, [controller, speech, questionVoice, props.onReady, voiceReady]);
 
   useEffect(() => {
-    speech.setLanguage(resultLanguage);
-    speech.editText(resultText);
-  }, [speech, resultText, resultLanguage]);
+    // Runs after the accepted text is rendered. The controller reserves the
+    // fresh request once, even with multiple subscriptions or Strict Mode effects.
+    const fresh = controller.claimAutomaticSpeech();
+    if (!fresh) return;
+    speech.setLanguage(fresh.answer_language);
+    speech.editText(fresh.text);
+    if (speech.getSnapshot().speechEnabled) void speech.readBack();
+  }, [controller, speech, state.result]);
   useEffect(() => {
     try {
       localStorage.setItem(
-        'vsual:answer-preferences',
+        ANSWER_PREFERENCES_KEY,
         JSON.stringify({
           speechEnabled: audio.speechEnabled,
-          playbackRate: audio.playbackRate,
         }),
       );
     } catch {
       /* Optional non-sensitive preferences only. */
     }
-  }, [audio.speechEnabled, audio.playbackRate]);
+  }, [audio.speechEnabled]);
   const status = state.error
     ? groundedError(props.language, state.error)
     : state.phase === 'stale'
@@ -284,29 +322,21 @@ function Companion({
           id="answer-speech-enabled"
           type="checkbox"
           checked={audio.speechEnabled}
-          onChange={(event) => speech.setSpeechEnabled(event.target.checked)}
+          onChange={(event) => {
+            controller.discardAutomaticSpeech();
+            speech.setSpeechEnabled(event.target.checked);
+          }}
         />
         {t.speech}
       </label>
       <p>{t.speechHelp}</p>
-      <label htmlFor="answer-speed">{t.speed}</label>
-      <select
-        id="answer-speed"
-        value={audio.playbackRate}
-        onChange={(event) => speech.setPlaybackRate(Number(event.target.value))}
-      >
-        {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => (
-          <option key={rate} value={rate}>
-            {rate}×
-          </option>
-        ))}
-      </select>
-      {props.settingsTarget && playbackActive && (
+      {props.settingsTarget && (
         <button
           type="button"
+          disabled={!playbackActive}
           onClick={() => {
-            speech.cancel();
-            document.getElementById('answer-speech-enabled')?.focus();
+            controller.discardAutomaticSpeech();
+            speech.stopPlayback();
           }}
         >
           {t.stop}
@@ -441,7 +471,8 @@ function Companion({
                 }
                 onClick={() => {
                   setReturnStatus('');
-                  void controller.ask(props.language);
+                  setHeldVoiceQuestion(null);
+                  void controller.ask();
                 }}
               >
                 {t.ask}
@@ -481,6 +512,29 @@ function Companion({
       <p role="status" aria-atomic="true" className="status">
         {status}
       </p>
+      {heldVoiceQuestion && (
+        <div>
+          <p role="status" aria-atomic="true">
+            {t.voiceHeld}
+          </p>
+          <p>
+            {heldVoiceQuestion === 'permission'
+              ? t.voiceHeldPermission
+              : heldVoiceQuestion === 'page'
+                ? t.voiceHeldPage
+                : heldVoiceQuestion === 'length'
+                  ? t.voiceHeldLength
+                  : t.voiceHeldBusy}
+          </p>
+        </div>
+      )}
+      {state.errorUsage && (
+        <UsageLimitNotice
+          usage={state.errorUsage}
+          language={props.language}
+          operation="answer"
+        />
+      )}
       {state.snapshot && state.stale && <p className="notice">{t.previous}</p>}
       {state.result && (
         <>
@@ -498,57 +552,73 @@ function Companion({
             <p className="answer-text" lang={resultLanguage}>
               {state.result.text}
             </p>
+            <div className="controls">
+              <button
+                type="button"
+                disabled={
+                  !playbackActive &&
+                  (!audio.speechEnabled || busy || voiceBusy || state.stale)
+                }
+                onClick={() => {
+                  controller.discardAutomaticSpeech();
+                  if (playbackActive) speech.stopPlayback();
+                  else if (audio.hasAudio) void speech.play();
+                  else {
+                    speech.setLanguage(resultLanguage);
+                    speech.editText(resultText);
+                    void speech.readBack();
+                  }
+                }}
+              >
+                {playbackActive
+                  ? t.stop
+                  : audio.notice === 'autoplay_blocked'
+                    ? t.playAnswer
+                    : audio.hasAudio
+                      ? t.readAgain
+                      : audio.errorCode
+                        ? t.retrySpeech
+                        : t.read}
+              </button>
+              <button
+                type="button"
+                disabled={busy || voiceBusy}
+                onClick={() => {
+                  controller.discardAutomaticSpeech();
+                  speech.stopPlayback();
+                  focusQuestion();
+                }}
+              >
+                {t.askAnother}
+              </button>
+            </div>
+            {!audio.speechEnabled && (
+              <p className="field-help">{t.speechOff}</p>
+            )}
+            <p role="status" aria-atomic="true">
+              {audio.errorCode
+                ? `${t.answerSpeechFailed} ${voiceErrorText(props.language, audio.errorCode)}`
+                : audio.notice === 'autoplay_blocked'
+                  ? t.playbackBlocked
+                  : audio.phase === 'generating'
+                    ? t.speechPending
+                    : audio.phase === 'speaking'
+                      ? t.speechPlaying
+                      : audio.notice === 'stopped' ||
+                          audio.notice === 'cancelled'
+                        ? t.speechStopped
+                        : ''}
+            </p>
+            {audio.errorUsage && (
+              <UsageLimitNotice
+                usage={audio.errorUsage}
+                language={props.language}
+                operation="speak"
+              />
+            )}
             {state.result.status === 'answer' && (
               <>
                 <p className="field-help">{t.capturedOnly}</p>
-                <div className="controls">
-                  <button
-                    type="button"
-                    disabled={
-                      !playbackActive &&
-                      (!audio.speechEnabled || busy || voiceBusy || state.stale)
-                    }
-                    onClick={() => {
-                      if (playbackActive) speech.cancel();
-                      else if (audio.hasAudio) void speech.play();
-                      else {
-                        speech.editText(resultText);
-                        void speech.readBack();
-                      }
-                    }}
-                  >
-                    {playbackActive
-                      ? t.stop
-                      : audio.hasAudio
-                        ? t.readAgain
-                        : t.read}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy || voiceBusy}
-                    onClick={() => {
-                      speech.cancel();
-                      focusQuestion();
-                    }}
-                  >
-                    {t.askAnother}
-                  </button>
-                </div>
-                {!audio.speechEnabled && (
-                  <p className="field-help">{t.speechOff}</p>
-                )}
-                <p role="status" aria-atomic="true">
-                  {audio.errorCode
-                    ? voiceErrorText(props.language, audio.errorCode)
-                    : audio.phase === 'generating'
-                      ? t.speechPending
-                      : audio.phase === 'speaking'
-                        ? t.speechPlaying
-                        : audio.notice === 'stopped' ||
-                            audio.notice === 'cancelled'
-                          ? t.speechStopped
-                          : ''}
-                </p>
                 <details ref={evidenceDetails} className="evidence-disclosure">
                   <summary>{t.viewEvidence}</summary>
                   <h3 id="evidence-heading">{t.evidence}</h3>
@@ -597,11 +667,6 @@ function Companion({
                   </button>
                 </details>
               </>
-            )}
-            {state.result.status !== 'answer' && (
-              <button type="button" onClick={focusQuestion}>
-                {t.askAnother}
-              </button>
             )}
           </section>
         </>
