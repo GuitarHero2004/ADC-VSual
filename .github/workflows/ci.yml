@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   push:
-    branches: [main]
+    branches: [main, dev]
 
 permissions:
   contents: read
@@ -48,7 +48,7 @@ jobs:
       - name: Check formatting
         run: npm run format:check
 
-      - name: Test voice, authentication and request boundaries without credentials
+      - name: Test voice, grounded answers and authentication without credentials
         run: npm test
 
       # Shared packages export TypeScript source; both apps bundle it directly.
