@@ -6,8 +6,11 @@ import { voiceDatabaseConfig } from './database-config.ts';
 import { VoiceError } from './errors.ts';
 import { SUPABASE_CA_CERTIFICATE } from './supabase-ca.ts';
 
-const baseUrl =
-  'postgresql://voice_test.project:synthetic%40password@pooler.example.test:6543/postgres';
+// Synthetic parser fixtures only; no test opens a database connection.
+// Keep dummy fields separate instead of embedding credential-shaped URL literals.
+const testUser = 'voice_test';
+const testPassword = 'synthetic-secret';
+const baseUrl = `postgresql://${testUser}.project:${encodeURIComponent('synthetic@password')}@pooler.example.test:6543/postgres`;
 
 function isSetupError(error: unknown): boolean {
   assert.ok(error instanceof VoiceError);
@@ -43,7 +46,7 @@ test('actual pg parsing retains the CA and full TLS verification with either sup
 test('postgres protocol and a percent-encoded password preserve their values', () => {
   const client = new Client(
     voiceDatabaseConfig(
-      'postgres://voice_test:synthetic%23%3F%2F%25@db.example.test/postgres?sslmode=verify-full',
+      `postgres://${testUser}:${encodeURIComponent('synthetic#?/%')}@db.example.test/postgres?sslmode=verify-full`,
     ),
   );
   assert.equal(client.password, 'synthetic#?/%');
@@ -93,18 +96,18 @@ test('insecure, conflicting and arbitrary pg query overrides are rejected before
 test('missing fields, malformed URLs and invalid encoding return only a sanitized setup error', () => {
   const urls = [
     '',
-    'synthetic-secret',
-    'https://voice_test:synthetic-secret@db.example.test/postgres',
+    testPassword,
+    `https://${testUser}:${testPassword}@db.example.test/postgres`,
     'postgresql://db.example.test/postgres',
-    'postgresql://voice_test@db.example.test/postgres',
-    'postgresql://:synthetic-secret@db.example.test/postgres',
-    'postgresql://voice_test:synthetic-secret@/postgres',
-    'postgresql://voice_test:synthetic-secret@db.example.test/',
-    'postgresql://voice_test:synthetic-secret@db.example.test:0/postgres',
-    'postgresql://voice_test:synthetic-secret@db.example.test:65536/postgres',
-    'postgresql://voice_test:synthetic%zz@db.example.test/postgres',
-    'postgresql://voice_test:synthetic%00secret@db.example.test/postgres',
-    `${baseUrl}#synthetic-secret`,
+    `postgresql://${testUser}@db.example.test/postgres`,
+    `postgresql://:${testPassword}@db.example.test/postgres`,
+    `postgresql://${testUser}:${testPassword}@/postgres`,
+    `postgresql://${testUser}:${testPassword}@db.example.test/`,
+    `postgresql://${testUser}:${testPassword}@db.example.test:0/postgres`,
+    `postgresql://${testUser}:${testPassword}@db.example.test:65536/postgres`,
+    `postgresql://${testUser}:${testPassword}%zz@db.example.test/postgres`,
+    `postgresql://${testUser}:${testPassword}%00@db.example.test/postgres`,
+    `${baseUrl}#${testPassword}`,
     `${baseUrl}\n`,
   ];
   for (const url of urls) {
