@@ -8,16 +8,19 @@ export default function HomePage() {
         to complement your screen reader.
       </p>
       <section aria-labelledby="status-heading">
-        <h2 id="status-heading">Foundation only</h2>
+        <h2 id="status-heading">Voice foundation</h2>
         <p>
           This demo site is running. The synthetic orders dashboard and grounded
           answers are not implemented yet.
         </p>
         <p>
-          The extension currently provides a side-panel shell. It cannot read
-          this page, answer questions, record audio or perform browser actions.
+          Test recorded speech, edit its transcript and read it back using
+          ElevenLabs. Page analysis and browser actions will be connected later.
         </p>
       </section>
+      <p>
+        <a href="/voice">Open voice setup</a>
+      </p>
       <p>
         <a href="/v1/health">View backend liveness (JSON)</a>
       </p>

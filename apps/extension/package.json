@@ -6,10 +6,13 @@
   "scripts": {
     "dev": "vite build --watch",
     "build": "vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test src/activation.test.ts src/config-values.test.ts src/auth.test.ts"
   },
   "dependencies": {
     "@adc/contracts": "*",
+    "@adc/voice-ui": "*",
+    "@supabase/supabase-js": "2.116.0",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
