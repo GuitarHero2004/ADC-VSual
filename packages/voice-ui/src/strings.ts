@@ -5,23 +5,28 @@ const en = {
   heading: 'Voice test',
   questionHeading: 'Your question',
   questionHelp:
-    'Compare two months of completed orders. Review, then choose Ask VSual.',
+    'Compare two months of completed orders. Type and choose Ask VSual, or record a question.',
   questionCharacters: 'characters',
   questionTooLong: 'Shorten your question to 1,000 characters before asking.',
   questionRecord: 'Record question',
-  questionStop: 'Stop recording',
+  questionStop: 'Stop and review',
   questionClear: 'Clear question',
   questionUnavailable:
     'Wait for this request to finish or cancel it before recording.',
   questionMicrophone:
-    'Optional recording, up to 30 seconds. Stop transcribes; Cancel discards.',
+    'Pause 5 seconds to send; speaking again resets the countdown. Choose Stop and review to check your transcript, or Cancel to discard. Maximum 30 seconds.',
+  questionCountdown:
+    'Sending after {seconds} seconds of silence. Keep speaking to continue, or Cancel to discard.',
   questionProcessing: 'Finished recordings go to ElevenLabs for transcription.',
   questionPrivacy:
-    'Review the transcript before asking. Recordings are not saved to Supabase. ElevenLabs may retain them under its own policy.',
+    'Starting a question recording enables automatic submission after silence. Choose Stop and review to check your transcript before Ask VSual instead. Recordings are not saved to Supabase. ElevenLabs may retain them under its own policy.',
   explanation:
     'Record or type, then hear your text read back. This test does not answer questions or read pages.',
   uiLanguage: 'Interface language',
   recognitionLanguage: 'Recognition and speech language',
+  recordingLanguage: 'Recording language',
+  answerLanguageHelp:
+    'Answers follow the language of your final question. You can also ask for English or Vietnamese.',
   languageHelp:
     'Auto detects the spoken language. Your text is not translated.',
   auto: 'Auto detect',
@@ -44,6 +49,7 @@ const en = {
   speechHelp:
     'Leave off to use your own screen reader. Generated speech is AI-generated.',
   cues: 'Play a short local recording-start cue',
+  questionCues: 'Play a short cue when recording finishes',
   speed: 'Playback speed',
   replayHelp:
     'Repeat and speed changes reuse the audio. Editing text or changing language clears it.',
@@ -64,23 +70,28 @@ const vi: Labels = {
   heading: 'Thử giọng nói',
   questionHeading: 'Câu hỏi của bạn',
   questionHelp:
-    'So sánh số đơn hoàn thành giữa hai tháng. Kiểm tra rồi chọn Hỏi VSual.',
+    'So sánh số đơn hoàn thành giữa hai tháng. Nhập rồi chọn Hỏi VSual, hoặc ghi âm câu hỏi.',
   questionCharacters: 'ký tự',
   questionTooLong: 'Rút ngắn câu hỏi còn tối đa 1.000 ký tự trước khi hỏi.',
   questionRecord: 'Ghi âm câu hỏi',
-  questionStop: 'Dừng ghi âm',
+  questionStop: 'Dừng và xem lại',
   questionClear: 'Xóa câu hỏi',
   questionUnavailable: 'Chờ yêu cầu hoàn tất hoặc hủy trước khi ghi âm.',
   questionMicrophone:
-    'Ghi âm tùy chọn, tối đa 30 giây. Dừng để chép lời; Hủy để bỏ bản ghi.',
+    'Im lặng 5 giây để gửi; nói tiếp sẽ đặt lại đếm ngược. Chọn Dừng và xem lại để kiểm tra văn bản, hoặc Hủy để bỏ bản ghi. Tối đa 30 giây.',
+  questionCountdown:
+    'Tự gửi sau {seconds} giây im lặng. Nói tiếp để tiếp tục, hoặc Hủy để bỏ bản ghi.',
   questionProcessing:
     'Bản ghi khi kết thúc được gửi đến ElevenLabs để chép lời.',
   questionPrivacy:
-    'Kiểm tra văn bản trước khi hỏi. Bản ghi không lưu vào Supabase. ElevenLabs có thể lưu theo chính sách riêng.',
+    'Bắt đầu ghi âm câu hỏi sẽ bật tự gửi sau khoảng im lặng. Chọn Dừng và xem lại để kiểm tra văn bản trước khi Hỏi VSual. Bản ghi không lưu vào Supabase. ElevenLabs có thể lưu theo chính sách riêng.',
   explanation:
     'Ghi âm hoặc nhập, rồi nghe đọc lại văn bản. Phần thử này không trả lời câu hỏi hay đọc trang web.',
   uiLanguage: 'Ngôn ngữ giao diện',
   recognitionLanguage: 'Ngôn ngữ nhận dạng và đọc',
+  recordingLanguage: 'Ngôn ngữ ghi âm',
+  answerLanguageHelp:
+    'Câu trả lời theo ngôn ngữ câu hỏi đã chỉnh sửa. Bạn cũng có thể yêu cầu trả lời bằng tiếng Anh hoặc tiếng Việt.',
   languageHelp: 'Tự động nhận dạng ngôn ngữ nói. Văn bản không được dịch.',
   auto: 'Tự động nhận dạng',
   start: 'Bắt đầu ghi âm',
@@ -102,6 +113,7 @@ const vi: Labels = {
   speechHelp:
     'Tắt để dùng trình đọc màn hình của bạn. Giọng nói được tạo bằng AI.',
   cues: 'Phát âm báo ngắn khi bắt đầu ghi âm',
+  questionCues: 'Phát âm báo ngắn khi ghi âm kết thúc',
   speed: 'Tốc độ phát',
   replayHelp:
     'Lặp lại và đổi tốc độ dùng lại âm thanh. Sửa văn bản hoặc đổi ngôn ngữ sẽ xóa âm thanh đó.',
@@ -131,8 +143,14 @@ const notices: Record<UiLanguage, Record<VoiceNotice, string>> = {
     cancelled: 'Cancelled. Your text is preserved.',
     error: 'The operation could not finish.',
     duration_reached: '30-second limit reached. Transcribing your recording…',
+    silence_reached:
+      'Recording finished after silence. Transcribing your question to send…',
+    silence_unavailable:
+      'Automatic silence detection is unavailable. Select Stop and review to finish, then Ask VSual.',
     no_speech: en.retry,
     play_ready: 'Audio ready. Select Play / Repeat to listen.',
+    autoplay_blocked:
+      'Automatic playback was blocked. Select Play / Repeat to listen.',
     stopped: 'Playback stopped.',
     cleared: 'Text and audio cleared.',
   },
@@ -147,8 +165,14 @@ const notices: Record<UiLanguage, Record<VoiceNotice, string>> = {
     cancelled: 'Đã hủy. Văn bản được giữ lại.',
     error: 'Không thể hoàn tất thao tác.',
     duration_reached: 'Đã đủ 30 giây. Đang chuyển bản ghi thành văn bản…',
+    silence_reached:
+      'Đã kết thúc sau khoảng im lặng. Đang chép lời để gửi câu hỏi…',
+    silence_unavailable:
+      'Không thể tự nhận biết khoảng im lặng. Chọn Dừng và xem lại rồi Hỏi VSual.',
     no_speech: vi.retry,
     play_ready: 'Âm thanh sẵn sàng. Chọn Phát / Lặp lại để nghe.',
+    autoplay_blocked:
+      'Trình duyệt đã chặn phát tự động. Chọn Phát / Lặp lại để nghe.',
     stopped: 'Đã dừng phát.',
     cleared: 'Đã xóa văn bản và âm thanh.',
   },
@@ -223,13 +247,25 @@ const errors: Record<string, [string, string]> = {
     'ElevenLabs does not allow this voice request on the current plan. Ask the project maintainer to select an eligible voice or change the plan. Your text is preserved.',
     'ElevenLabs không cho phép yêu cầu giọng đọc này với gói hiện tại. Nhờ người quản lý dự án chọn giọng được hỗ trợ hoặc đổi gói. Văn bản được giữ lại.',
   ],
+  voice_language_unsupported: [
+    'Speech is unavailable for this answer language with the configured voice service. Your text remains available.',
+    'Dịch vụ giọng nói hiện tại chưa hỗ trợ ngôn ngữ của câu trả lời này. Bạn vẫn có thể đọc văn bản.',
+  ],
   rate_limited: [
-    'The usage limit was reached. Wait before retrying; your text is preserved.',
-    'Đã đạt giới hạn sử dụng. Chờ trước khi thử lại; văn bản được giữ lại.',
+    'A request limit was reached. Its source and retry time were not provided. Retry later; your text is preserved.',
+    'Đã đạt giới hạn yêu cầu. Chưa có thông tin về nơi áp dụng hoặc thời gian thử lại. Hãy thử sau; văn bản vẫn được giữ.',
+  ],
+  app_rate_limited: [
+    'VSual application request limit reached. Your text is preserved.',
+    'Đã đạt giới hạn yêu cầu của ứng dụng VSual. Văn bản vẫn được giữ.',
+  ],
+  provider_rate_limited: [
+    'ElevenLabs temporarily limited this voice request. No exact retry time was supplied. Retry later; your text is preserved.',
+    'ElevenLabs tạm giới hạn yêu cầu giọng nói này. Chưa có thời gian thử lại chính xác. Hãy thử sau; văn bản vẫn được giữ.',
   ],
   quota_exhausted: [
-    'The voice service allowance has been used. Your text is preserved; ask the maintainer about availability.',
-    'Đã dùng hết hạn mức dịch vụ giọng nói. Văn bản được giữ lại; hỏi người quản lý về khả năng sử dụng.',
+    'ElevenLabs reported insufficient credits or allowance for this request. Its balance and reset time were not provided. Your text is preserved.',
+    'ElevenLabs báo không đủ hạn mức cho yêu cầu này. Chưa có số dư hoặc thời điểm cấp lại hạn mức. Văn bản vẫn được giữ.',
   ],
   provider_failure: [
     'The voice service could not finish. Your text is preserved. Try again later.',
@@ -244,8 +280,8 @@ const errors: Record<string, [string, string]> = {
     'Đã hủy yêu cầu. Văn bản được giữ lại.',
   ],
   playback_failed: [
-    'Audio could not play. Try Play / Repeat, or generate it again after editing.',
-    'Không thể phát âm thanh. Thử Phát / Lặp lại hoặc sửa nội dung để tạo lại.',
+    'Audio could not play. Your text is preserved. Read it again to retry speech.',
+    'Không thể phát âm thanh. Văn bản được giữ lại. Chọn đọc lại để thử tạo giọng nói lần nữa.',
   ],
   deployment_protected: [
     'The deployment is protected by Vercel. Its access protection must allow this request; signing into this app alone cannot unlock it.',
@@ -272,9 +308,17 @@ export function questionNoticeText(
   notice: VoiceNotice,
 ): string {
   const messages: Partial<Record<VoiceNotice, [string, string]>> = {
+    duration_reached: [
+      '30-second limit reached. Transcribing for review; choose Ask VSual to send.',
+      'Đã đủ 30 giây. Đang chép lời để xem lại; chọn Hỏi VSual để gửi.',
+    ],
+    silence_unavailable: [
+      'Automatic silence detection is unavailable. Select Stop and review, then Ask VSual.',
+      'Chưa thể tự nhận biết khoảng im lặng. Chọn Dừng và xem lại, rồi Hỏi VSual.',
+    ],
     recording: [
-      'Recording started. Stop to transcribe, or Cancel to discard.',
-      'Đã bắt đầu ghi âm. Dừng để chuyển thành văn bản hoặc Hủy để bỏ bản ghi.',
+      'Listening. After you speak, 5 seconds of silence sends your question. Cancel to discard.',
+      'Đang nghe. Sau khi bạn nói, im lặng 5 giây sẽ gửi câu hỏi. Hủy để bỏ bản ghi.',
     ],
     transcribing: [
       'Transcribing your question.',
@@ -295,7 +339,21 @@ export function questionNoticeText(
     ? message[language === 'vi' ? 1 : 0]
     : noticeText(language, notice);
 }
-export function errorText(language: UiLanguage, code: string): string {
+export function errorText(
+  language: UiLanguage,
+  code: string,
+  operation?: 'transcribe' | 'speak' | null,
+): string {
   const entry = errors[code] ?? errors.request_failed!;
-  return entry[language === 'vi' ? 1 : 0];
+  const prefix =
+    operation === 'transcribe'
+      ? language === 'vi'
+        ? 'Chưa thể hoàn tất chép lời. '
+        : 'Transcription could not finish. '
+      : operation === 'speak'
+        ? language === 'vi'
+          ? 'Chưa thể tạo âm thanh đọc lại. '
+          : 'Read-back audio could not be generated. '
+        : '';
+  return prefix + entry[language === 'vi' ? 1 : 0];
 }

@@ -17,6 +17,7 @@ import {
 import { createPortal } from 'react-dom';
 import { browserDependencies } from './browser.ts';
 import { VoiceController, type VoiceTransport } from './controller.ts';
+import { UsageLimitNotice } from './UsageLimitNotice.tsx';
 import {
   errorText,
   labels,
@@ -78,6 +79,7 @@ export function VoiceTest(props: VoiceTestProps) {
         speak: (...args) => transportRef.current.speak(...args),
       },
       browserDependencies,
+      { silenceAutoFinish: props.mode === 'question' },
     );
     const language = readPreferences(controller, preferencesKey);
     setMounted({ controller, language });
@@ -94,7 +96,7 @@ export function VoiceTest(props: VoiceTestProps) {
       document.removeEventListener('visibilitychange', visibility);
       controller.dispose();
     };
-  }, [props.sessionKey, preferencesKey]);
+  }, [props.sessionKey, preferencesKey, props.mode]);
   if (!mounted)
     return <p role="status">{labels(props.uiLanguage ?? 'en').loading}</p>;
   return (
@@ -225,9 +227,11 @@ function VoiceSurface({
 
   const preferences = (
     <fieldset disabled={disabled} className="voice-preferences">
-      <legend>{t.recognitionLanguage}</legend>
+      <legend>
+        {mode === 'question' ? t.recordingLanguage : t.recognitionLanguage}
+      </legend>
       <label className="voice-sr-only" htmlFor={`${id}-recognition`}>
-        {t.recognitionLanguage}
+        {mode === 'question' ? t.recordingLanguage : t.recognitionLanguage}
       </label>
       <select
         id={`${id}-recognition`}
@@ -252,7 +256,7 @@ function VoiceSurface({
         </option>
       </select>
       <p id={`${id}-language-help`} className="voice-help">
-        {t.languageHelp}
+        {mode === 'question' ? t.answerLanguageHelp : t.languageHelp}
       </p>
       {mode === 'question' && (
         <label className="voice-checkbox">
@@ -263,7 +267,7 @@ function VoiceSurface({
               controller.setAudioFeedback(event.target.checked)
             }
           />
-          {t.cues}
+          {t.questionCues}
         </label>
       )}
     </fieldset>
@@ -339,11 +343,19 @@ function VoiceSurface({
             ? t.questionUnavailable
             : t.unavailable
           : snapshot.errorCode
-            ? errorText(language, snapshot.errorCode)
+            ? errorText(language, snapshot.errorCode, snapshot.errorOperation)
             : mode === 'question'
               ? questionNoticeText(language, snapshot.notice)
               : noticeText(language, snapshot.notice)}
       </div>
+
+      {snapshot.errorUsage && snapshot.errorOperation && (
+        <UsageLimitNotice
+          usage={snapshot.errorUsage}
+          language={language}
+          operation={snapshot.errorOperation}
+        />
+      )}
 
       {preferencesTarget === undefined
         ? preferences
@@ -352,6 +364,16 @@ function VoiceSurface({
         <p id={`${id}-microphone`} className="voice-help">
           {mode === 'question' ? t.questionMicrophone : t.microphone}
         </p>
+        {mode === 'question' && snapshot.silenceSecondsRemaining !== null && (
+          // Keep ticking numbers outside the status region. Screen readers can
+          // inspect them, without announcing every second into an open mic.
+          <p className="voice-help voice-silence-countdown" aria-live="off">
+            {t.questionCountdown.replace(
+              '{seconds}',
+              String(snapshot.silenceSecondsRemaining),
+            )}
+          </p>
+        )}
         <div className="voice-controls">
           {mode === 'question' && questionActions}
           <button

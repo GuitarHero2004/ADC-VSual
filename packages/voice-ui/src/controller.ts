@@ -3,8 +3,10 @@ import {
   RECORDING_MAX_MS,
   SPEECH_TEXT_MAX_LENGTH,
   unicodeLength,
+  usageLimitSchema,
   type RecognitionLanguage,
   type TranscriptResponse,
+  type UsageLimit,
 } from '@adc/contracts';
 
 export interface VoiceTransport {
@@ -35,10 +37,21 @@ export type VoicePhase =
 export type VoiceNotice =
   | VoicePhase
   | 'duration_reached'
+  | 'silence_reached'
+  | 'silence_unavailable'
   | 'no_speech'
   | 'play_ready'
+  | 'autoplay_blocked'
   | 'stopped'
   | 'cleared';
+
+/** Companion answers use native playback slowdown; provider speed stays normal. */
+export const COMPANION_PLAYBACK_RATE = 0.9;
+
+export interface VoiceControllerOptions {
+  fixedPlaybackRate?: number;
+  silenceAutoFinish?: boolean;
+}
 
 export interface VoiceSnapshot {
   phase: VoicePhase;
@@ -49,7 +62,10 @@ export interface VoiceSnapshot {
   playbackRate: number;
   speechEnabled: boolean;
   audioFeedback: boolean;
+  silenceSecondsRemaining: number | null;
   errorCode: string | null;
+  errorUsage: UsageLimit | null;
+  errorOperation: 'transcribe' | 'speak' | null;
 }
 
 export interface MicrophoneStream {
@@ -84,6 +100,13 @@ export interface VoiceDependencies {
   revokeObjectURL(url: string): void;
   schedule(callback: () => void, delay: number): unknown;
   unschedule(timer: unknown): void;
+  observeAudioActivity?(
+    stream: MicrophoneStream,
+    onActivity: () => void,
+    signal: AbortSignal,
+    onUnavailable: () => void,
+  ): Promise<() => void>;
+  now?(): number;
   cue(): void;
 }
 
@@ -96,7 +119,14 @@ interface Recording {
   finished: boolean;
   submitted: boolean;
   timer: unknown;
+  silenceTimer: unknown;
+  silenceDeadline: number | null;
+  activityRequest: AbortController;
+  stopActivity: (() => void) | undefined;
+  finishReason: 'manual' | 'duration' | 'silence';
 }
+
+const QUESTION_SILENCE_MS = 5_000;
 
 function stopTracks(stream: MicrophoneStream) {
   stream.getTracks().forEach((track) => track.stop());
@@ -125,6 +155,26 @@ export function audioFilename(mime: string): string {
   throw new Error('Unsupported recording format');
 }
 
+function requestFailure(
+  error: unknown,
+  operation: 'transcribe' | 'speak',
+): Pick<VoiceSnapshot, 'errorCode' | 'errorUsage' | 'errorOperation'> {
+  const code = errorCode(error);
+  const usage = usageLimitSchema.safeParse(
+    code === 'app_rate_limited' &&
+      error &&
+      typeof error === 'object' &&
+      'usage' in error
+      ? error.usage
+      : undefined,
+  );
+  return {
+    errorCode: code,
+    errorUsage: usage.success ? usage.data : null,
+    errorOperation: operation,
+  };
+}
+
 /** One session owns one microphone operation, request and generated audio buffer. */
 export class VoiceController {
   private snapshot: VoiceSnapshot = {
@@ -136,7 +186,10 @@ export class VoiceController {
     playbackRate: 1,
     speechEnabled: false,
     audioFeedback: false,
+    silenceSecondsRemaining: null,
     errorCode: null,
+    errorUsage: null,
+    errorOperation: null,
   };
   private readonly listeners = new Set<() => void>();
   private generation = 0;
@@ -144,13 +197,25 @@ export class VoiceController {
   private request: AbortController | undefined;
   private playback: Playback | undefined;
   private audioUrl: string | undefined;
+  private activePlay: { id: number; playback: Playback } | undefined;
   private disposed = false;
   private readonly transport: VoiceTransport;
   private readonly dependencies: VoiceDependencies;
+  private readonly fixedPlaybackRate: number | undefined;
+  private readonly silenceAutoFinish: boolean;
+  private automaticQuestion: string | null = null;
 
-  constructor(transport: VoiceTransport, dependencies: VoiceDependencies) {
+  constructor(
+    transport: VoiceTransport,
+    dependencies: VoiceDependencies,
+    options: VoiceControllerOptions = {},
+  ) {
     this.transport = transport;
     this.dependencies = dependencies;
+    this.fixedPlaybackRate = options.fixedPlaybackRate;
+    this.silenceAutoFinish = options.silenceAutoFinish ?? false;
+    if (this.fixedPlaybackRate !== undefined)
+      this.snapshot.playbackRate = this.fixedPlaybackRate;
   }
 
   getSnapshot = (): VoiceSnapshot => this.snapshot;
@@ -161,7 +226,13 @@ export class VoiceController {
 
   private update(patch: Partial<VoiceSnapshot>) {
     if (this.disposed) return;
-    this.snapshot = { ...this.snapshot, ...patch };
+    this.snapshot = {
+      ...this.snapshot,
+      ...(patch.errorCode !== undefined
+        ? { errorUsage: null, errorOperation: null }
+        : {}),
+      ...patch,
+    };
     this.listeners.forEach((listener) => listener());
   }
 
@@ -169,7 +240,84 @@ export class VoiceController {
     return !this.disposed && this.generation === id;
   }
 
+  /** A silence-finished transcript is claimable once by its companion owner. */
+  claimAutomaticQuestion = (): string | null => {
+    const question = this.automaticQuestion;
+    this.automaticQuestion = null;
+    return !this.disposed &&
+      this.snapshot.phase === 'ready' &&
+      question === this.snapshot.text
+      ? question
+      : null;
+  };
+
+  private stopActivity(recording: Recording) {
+    this.dependencies.unschedule(recording.silenceTimer);
+    recording.activityRequest.abort();
+    try {
+      recording.stopActivity?.();
+    } catch {
+      // Recorder and microphone cleanup must still run if analysis already ended.
+    }
+    recording.stopActivity = undefined;
+    recording.silenceDeadline = null;
+    if (this.recording === recording)
+      this.update({ silenceSecondsRemaining: null });
+  }
+
+  private async observeActivity(recording: Recording) {
+    if (!this.silenceAutoFinish) return;
+    const observe = this.dependencies.observeAudioActivity;
+    const isRecording = () =>
+      this.current(recording.id) &&
+      this.recording === recording &&
+      !recording.finished &&
+      !recording.activityRequest.signal.aborted;
+    if (!isRecording()) return;
+    const now = () => this.dependencies.now?.() ?? performance.now();
+    const unavailable = () => {
+      if (!isRecording()) return;
+      this.stopActivity(recording);
+      this.update({ notice: 'silence_unavailable' });
+    };
+    const tick = () => {
+      if (!isRecording() || recording.silenceDeadline === null) return;
+      const remaining = Math.max(0, recording.silenceDeadline - now());
+      if (remaining === 0) {
+        this.finish('silence');
+        return;
+      }
+      this.update({ silenceSecondsRemaining: Math.ceil(remaining / 1_000) });
+      recording.silenceTimer = this.dependencies.schedule(
+        tick,
+        Math.min(remaining, 1_000),
+      );
+    };
+    try {
+      if (!observe) throw new Error('Audio activity detection unavailable');
+      const stop = await observe(
+        recording.stream,
+        () => {
+          if (!isRecording()) return;
+          const firstActivity = recording.silenceDeadline === null;
+          recording.silenceDeadline = now() + QUESTION_SILENCE_MS;
+          if (this.snapshot.silenceSecondsRemaining !== 5)
+            this.update({ silenceSecondsRemaining: 5 });
+          if (firstActivity)
+            recording.silenceTimer = this.dependencies.schedule(tick, 1_000);
+        },
+        recording.activityRequest.signal,
+        unavailable,
+      );
+      if (!isRecording()) stop();
+      else recording.stopActivity = stop;
+    } catch {
+      unavailable();
+    }
+  }
+
   private releaseAudio() {
+    this.activePlay = undefined;
     if (this.playback) {
       this.playback.pause();
       this.playback.onended = null;
@@ -186,6 +334,7 @@ export class VoiceController {
     const recording = this.recording;
     this.recording = undefined;
     if (!recording) return;
+    this.stopActivity(recording);
     this.dependencies.unschedule(recording.timer);
     try {
       if (recording.recorder.state !== 'inactive') recording.recorder.stop();
@@ -198,13 +347,20 @@ export class VoiceController {
   }
 
   cancel = () => {
+    this.automaticQuestion = null;
     this.generation += 1;
     this.request?.abort();
     this.request = undefined;
     this.stopRecording();
+    this.activePlay = undefined;
     this.playback?.pause();
     if (this.playback) this.playback.currentTime = 0;
-    this.update({ phase: 'cancelled', notice: 'cancelled', errorCode: null });
+    this.update({
+      phase: 'cancelled',
+      notice: 'cancelled',
+      errorCode: null,
+      silenceSecondsRemaining: null,
+    });
   };
 
   clear = () => {
@@ -244,14 +400,19 @@ export class VoiceController {
   };
 
   setPlaybackRate = (rate: number) => {
+    if (this.fixedPlaybackRate !== undefined) return;
     if (![0.5, 0.75, 1, 1.25, 1.5, 2].includes(rate)) return;
     if (this.playback) this.playback.playbackRate = rate;
     this.update({ playbackRate: rate });
   };
 
   setSpeechEnabled = (enabled: boolean) => {
-    if (!enabled && ['generating', 'speaking'].includes(this.snapshot.phase))
-      this.cancel();
+    if (
+      !enabled &&
+      (this.activePlay ||
+        ['generating', 'speaking'].includes(this.snapshot.phase))
+    )
+      this.stopPlayback();
     this.update({ speechEnabled: enabled });
   };
 
@@ -309,6 +470,11 @@ export class VoiceController {
         finished: false,
         submitted: false,
         timer: undefined,
+        silenceTimer: undefined,
+        silenceDeadline: null,
+        activityRequest: new AbortController(),
+        stopActivity: undefined,
+        finishReason: 'manual',
       };
       this.recording = recording;
       recorder.ondata = (chunk) => {
@@ -337,6 +503,7 @@ export class VoiceController {
       };
       recorder.onstop = () => {
         stopTracks(recording.stream);
+        this.stopActivity(recording);
         this.dependencies.unschedule(recording.timer);
         if (!this.current(id) || recording.submitted) return;
         if (!recording.finished) {
@@ -360,7 +527,14 @@ export class VoiceController {
           });
           return;
         }
-        void this.transcribe(blob, audioFilename(recorder.mimeType), id);
+        if (this.silenceAutoFinish && this.snapshot.audioFeedback)
+          this.dependencies.cue();
+        void this.transcribe(
+          blob,
+          audioFilename(recorder.mimeType),
+          id,
+          recording.finishReason === 'silence',
+        );
       };
       recorder.start();
       recording.timer = this.dependencies.schedule(
@@ -368,7 +542,9 @@ export class VoiceController {
         RECORDING_MAX_MS,
       );
       this.update({ phase: 'recording', notice: 'recording' });
-      if (this.snapshot.audioFeedback) this.dependencies.cue();
+      void this.observeActivity(recording);
+      if (this.snapshot.audioFeedback && !this.silenceAutoFinish)
+        this.dependencies.cue();
     } catch (error) {
       if (stream) stopTracks(stream);
       if (!this.current(id)) return;
@@ -381,14 +557,22 @@ export class VoiceController {
     }
   };
 
-  finish = (automatic = false) => {
+  finish = (automatic: boolean | 'silence' = false) => {
     const recording = this.recording;
     if (!recording || recording.finished || !this.current(recording.id)) return;
     recording.finished = true;
+    recording.finishReason =
+      automatic === 'silence' ? 'silence' : automatic ? 'duration' : 'manual';
+    this.stopActivity(recording);
     this.dependencies.unschedule(recording.timer);
     this.update({
       phase: 'transcribing',
-      notice: automatic ? 'duration_reached' : 'transcribing',
+      notice:
+        automatic === 'silence'
+          ? 'silence_reached'
+          : automatic
+            ? 'duration_reached'
+            : 'transcribing',
     });
     try {
       recording.recorder.stop();
@@ -402,7 +586,12 @@ export class VoiceController {
     }
   };
 
-  private async transcribe(blob: Blob, filename: string, id: number) {
+  private async transcribe(
+    blob: Blob,
+    filename: string,
+    id: number,
+    autoSubmit = false,
+  ) {
     const request = new AbortController();
     this.request = request;
     try {
@@ -414,6 +603,9 @@ export class VoiceController {
       );
       if (!this.current(id)) return;
       this.releaseAudio();
+      if (!this.current(id)) return;
+      this.automaticQuestion =
+        autoSubmit && response.transcript.trim() ? response.transcript : null;
       // Preserve the provider transcript exactly, including whitespace and digits.
       this.update({
         text: response.transcript,
@@ -425,7 +617,7 @@ export class VoiceController {
         this.update({
           phase: 'error',
           notice: 'error',
-          errorCode: errorCode(error),
+          ...requestFailure(error, 'transcribe'),
         });
     } finally {
       if (this.request === request) this.request = undefined;
@@ -438,6 +630,7 @@ export class VoiceController {
       !this.snapshot.speechEnabled ||
       [
         'generating',
+        'speaking',
         'recording',
         'requesting_permission',
         'transcribing',
@@ -463,19 +656,22 @@ export class VoiceController {
     this.request = request;
     this.update({ phase: 'generating', notice: 'generating', errorCode: null });
     try {
+      if (!this.current(id) || !this.snapshot.speechEnabled) return;
       const blob = await this.transport.speak(
         text,
         this.snapshot.language,
         request.signal,
       );
-      if (!this.current(id)) return;
+      if (!this.current(id) || !this.snapshot.speechEnabled) return;
       if (!blob.size || !blob.type.startsWith('audio/'))
         throw new Error('Invalid audio response');
       this.releaseAudio();
+      if (!this.current(id) || !this.snapshot.speechEnabled) return;
       this.audioUrl = this.dependencies.createObjectURL(blob);
       this.playback = this.dependencies.createPlayback(this.audioUrl);
       this.playback.playbackRate = this.snapshot.playbackRate;
       this.update({ hasAudio: true, phase: 'ready', notice: 'play_ready' });
+      if (!this.current(id) || !this.snapshot.speechEnabled) return;
       await this.play();
     } catch (error) {
       if (this.current(id)) {
@@ -483,7 +679,7 @@ export class VoiceController {
         this.update({
           phase: 'error',
           notice: 'error',
-          errorCode: errorCode(error),
+          ...requestFailure(error, 'speak'),
         });
       }
     } finally {
@@ -493,36 +689,75 @@ export class VoiceController {
 
   play = async () => {
     const playback = this.playback;
-    if (!playback || !this.snapshot.speechEnabled || this.disposed) return;
+    if (
+      !playback ||
+      !this.snapshot.speechEnabled ||
+      this.disposed ||
+      this.activePlay ||
+      [
+        'generating',
+        'recording',
+        'requesting_permission',
+        'transcribing',
+      ].includes(this.snapshot.phase)
+    )
+      return;
     const id = this.generation;
+    const attempt = { id, playback };
+    this.activePlay = attempt;
+    const isActive = () =>
+      this.current(id) &&
+      this.snapshot.speechEnabled &&
+      this.activePlay === attempt;
     playback.pause();
     playback.currentTime = 0;
+    playback.playbackRate =
+      this.fixedPlaybackRate ?? this.snapshot.playbackRate;
     playback.onended = () => {
-      if (this.current(id))
+      if (isActive()) {
+        this.activePlay = undefined;
         this.update({ phase: 'ready', notice: 'play_ready' });
+      }
     };
     playback.onerror = () => {
-      if (this.current(id))
+      if (isActive()) {
+        this.releaseAudio();
         this.update({
           phase: 'error',
           notice: 'error',
           errorCode: 'playback_failed',
         });
+      }
     };
     this.update({ phase: 'speaking', notice: 'speaking', errorCode: null });
     try {
+      if (!isActive()) return;
       await playback.play();
-      if (!this.current(id)) playback.pause();
-    } catch {
-      if (this.current(id))
-        this.update({ phase: 'ready', notice: 'play_ready' });
+      if (!isActive() && this.activePlay?.playback !== playback)
+        playback.pause();
+    } catch (error) {
+      if (!isActive()) return;
+      this.activePlay = undefined;
+      if (error instanceof Error && error.name === 'NotAllowedError') {
+        this.update({ phase: 'ready', notice: 'autoplay_blocked' });
+      } else {
+        this.releaseAudio();
+        this.update({
+          phase: 'error',
+          notice: 'error',
+          errorCode: 'playback_failed',
+        });
+      }
     }
   };
 
   stopPlayback = () => {
     this.generation += 1;
+    this.request?.abort();
+    this.request = undefined;
+    this.activePlay = undefined;
     this.playback?.pause();
     if (this.playback) this.playback.currentTime = 0;
-    this.update({ phase: 'ready', notice: 'stopped' });
+    this.update({ phase: 'ready', notice: 'stopped', errorCode: null });
   };
 }

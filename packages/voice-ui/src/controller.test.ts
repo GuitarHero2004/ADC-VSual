@@ -1,13 +1,19 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { AUDIO_MAX_BYTES, RECORDING_MAX_MS } from '@adc/contracts';
 import {
+  AUDIO_MAX_BYTES,
+  RECORDING_MAX_MS,
+  type UsageLimit,
+} from '@adc/contracts';
+import {
+  COMPANION_PLAYBACK_RATE,
   VoiceController,
   audioFilename,
   type MicrophoneStream,
   type Playback,
   type Recorder,
   type VoiceDependencies,
+  type VoiceControllerOptions,
   type VoiceTransport,
 } from './controller.ts';
 import { errorText } from './strings.ts';
@@ -54,7 +60,8 @@ class FakePlayback implements Playback {
   fail = false;
   async play() {
     this.plays += 1;
-    if (this.fail) throw new Error('Autoplay blocked');
+    if (this.fail)
+      throw new DOMException('Autoplay blocked', 'NotAllowedError');
   }
   pause() {
     this.pauses += 1;
@@ -64,7 +71,10 @@ class FakePlayback implements Playback {
   }
 }
 
-function harness(overrides: Partial<VoiceTransport> = {}) {
+function harness(
+  overrides: Partial<VoiceTransport> = {},
+  options: VoiceControllerOptions = {},
+) {
   const recorders: FakeRecorder[] = [];
   const audio = new FakePlayback();
   let trackStops = 0;
@@ -120,7 +130,7 @@ function harness(overrides: Partial<VoiceTransport> = {}) {
       return new Blob(['mp3'], { type: 'audio/mpeg' });
     },
   };
-  const controller = new VoiceController(transport, dependencies);
+  const controller = new VoiceController(transport, dependencies, options);
   return {
     controller,
     dependencies,
@@ -146,6 +156,69 @@ async function settle() {
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function silenceHarness(overrides: Partial<VoiceTransport> = {}) {
+  const h = harness(overrides, { silenceAutoFinish: true });
+  let now = 0;
+  let nextTimer = 0;
+  const timers = new Map<number, { at: number; run(): void }>();
+  let activity = () => {};
+  let observerStops = 0;
+  let observerSignal: AbortSignal | undefined;
+  let unavailable = () => {};
+  h.dependencies.now = () => now;
+  h.dependencies.schedule = (run, delay) => {
+    const id = ++nextTimer;
+    timers.set(id, { at: now + delay, run });
+    return id;
+  };
+  h.dependencies.unschedule = (id) => {
+    timers.delete(id as number);
+  };
+  h.dependencies.observeAudioActivity = async (
+    _stream,
+    onActivity,
+    signal,
+    onUnavailable,
+  ) => {
+    activity = onActivity;
+    observerSignal = signal;
+    unavailable = onUnavailable;
+    return () => {
+      observerStops++;
+    };
+  };
+  return {
+    ...h,
+    get trackStops() {
+      return h.trackStops;
+    },
+    get observerStops() {
+      return observerStops;
+    },
+    get observerSignal() {
+      return observerSignal;
+    },
+    get timerCount() {
+      return timers.size;
+    },
+    activity: () => activity(),
+    unavailable: () => unavailable(),
+    advance(ms: number) {
+      const end = now + ms;
+      while (true) {
+        const next = [...timers.entries()]
+          .filter(([, timer]) => timer.at <= end)
+          .sort((a, b) => a[1].at - b[1].at)[0];
+        if (!next) break;
+        now = next[1].at;
+        timers.delete(next[0]);
+        next[1].run();
+      }
+      now = end;
+    },
+  };
 }
 
 test('finish retains the final audio chunk and transcribes once', async () => {
@@ -246,6 +319,7 @@ test('Repeat, Read back with unchanged text and playback speed reuse audio', asy
   h.controller.stopPlayback();
   await h.controller.play();
   h.controller.setPlaybackRate(1.5);
+  h.controller.stopPlayback();
   await h.controller.readBack();
   assert.equal(h.calls.speech.length, 1);
   assert.equal(h.calls.speech[0]!.text, text);
@@ -368,7 +442,7 @@ test('autoplay rejection keeps a playable result without another synthesis', asy
   h.controller.setSpeechEnabled(true);
   h.audio.fail = true;
   await h.controller.readBack();
-  assert.equal(h.controller.getSnapshot().notice, 'play_ready');
+  assert.equal(h.controller.getSnapshot().notice, 'autoplay_blocked');
   assert.equal(h.controller.getSnapshot().hasAudio, true);
   h.audio.fail = false;
   await h.controller.play();
@@ -473,4 +547,571 @@ test('repeated Read back clicks cannot submit concurrent synthesis requests', as
   assert.equal(h.calls.speech.length, 1);
   response.resolve(new Blob(['mp3'], { type: 'audio/mpeg' }));
   await first;
+});
+
+test('fixed companion speed applies to generated, replayed and replaced audio', async () => {
+  const h = harness({}, { fixedPlaybackRate: COMPANION_PLAYBACK_RATE });
+  h.controller.setSpeechEnabled(true);
+  h.controller.editText('Read the answer');
+  await h.controller.readBack();
+  assert.equal(h.audio.playbackRate, 0.9);
+  h.controller.setPlaybackRate(2);
+  assert.equal(h.controller.getSnapshot().playbackRate, 0.9);
+  h.controller.stopPlayback();
+  h.audio.playbackRate = 1;
+  await h.controller.play();
+  assert.equal(h.audio.playbackRate, 0.9);
+  assert.equal(h.calls.speech.length, 1);
+  h.controller.editText('A new answer');
+  await h.controller.readBack();
+  assert.equal(h.audio.playbackRate, 0.9);
+  assert.equal(h.calls.speech.length, 2);
+});
+
+test('Stop during synthesis aborts immediately and a late result stays silent', async () => {
+  const response = deferred<Blob>();
+  const h = harness({ speak: () => response.promise });
+  h.controller.setSpeechEnabled(true);
+  h.controller.editText('The completed answer stays visible.');
+  const pending = h.controller.readBack();
+  h.controller.stopPlayback();
+  assert.equal(h.calls.speech[0]!.signal.aborted, true);
+  assert.equal(h.controller.getSnapshot().notice, 'stopped');
+  response.resolve(new Blob(['late'], { type: 'audio/mpeg' }));
+  await pending;
+  assert.equal(h.audio.plays, 0);
+  assert.equal(h.urls, 0);
+  assert.equal(
+    h.controller.getSnapshot().text,
+    'The completed answer stays visible.',
+  );
+});
+
+test('rapid Read and Play clicks do not restart a pending or active player', async () => {
+  const h = harness();
+  const started = deferred<void>();
+  h.audio.play = () => {
+    h.audio.plays += 1;
+    return started.promise;
+  };
+  h.controller.editText('Read once');
+  h.controller.setSpeechEnabled(true);
+  const first = h.controller.readBack();
+  await settle();
+  await Promise.all([
+    h.controller.readBack(),
+    h.controller.play(),
+    h.controller.play(),
+  ]);
+  assert.equal(h.calls.speech.length, 1);
+  assert.equal(h.audio.plays, 1);
+  started.resolve();
+  await first;
+  await h.controller.readBack();
+  await h.controller.play();
+  assert.equal(h.audio.plays, 1);
+  h.audio.onended?.();
+  await h.controller.play();
+  assert.equal(h.audio.plays, 2);
+  assert.equal(h.calls.speech.length, 1);
+});
+
+test('Speech OFF invalidates a pending play promise and ON does not resume it', async () => {
+  const h = harness();
+  const started = deferred<void>();
+  h.audio.play = () => started.promise;
+  h.controller.setSpeechEnabled(true);
+  h.controller.editText('Use a screen reader instead');
+  const pending = h.controller.readBack();
+  await settle();
+  h.controller.setSpeechEnabled(false);
+  const pausesAtStop = h.audio.pauses;
+  await h.controller.readBack();
+  await h.controller.play();
+  h.controller.setSpeechEnabled(true);
+  started.resolve();
+  await pending;
+  assert.ok(h.audio.pauses > pausesAtStop);
+  assert.equal(h.controller.getSnapshot().phase, 'ready');
+  assert.equal(h.controller.getSnapshot().notice, 'stopped');
+  assert.equal(h.calls.speech.length, 1);
+});
+
+test('disposing during a pending play stops it and releases cached resources', async () => {
+  const h = harness();
+  const started = deferred<void>();
+  h.audio.play = () => started.promise;
+  h.controller.setSpeechEnabled(true);
+  h.controller.editText('Account A only');
+  const pending = h.controller.readBack();
+  await settle();
+  h.controller.dispose();
+  const pausesAtDisposal = h.audio.pauses;
+  started.resolve();
+  await pending;
+  assert.ok(h.audio.pauses > pausesAtDisposal);
+  assert.equal(h.audio.releases, 1);
+  assert.deepEqual(h.revoked, ['blob:1']);
+  assert.equal(h.controller.getSnapshot().hasAudio, false);
+  assert.equal(h.controller.getSnapshot().text, '');
+});
+
+test('a decoding failure discards broken audio but preserves text for explicit retry', async () => {
+  const h = harness();
+  h.controller.setSpeechEnabled(true);
+  h.controller.editText('The answer and evidence remain available.');
+  h.audio.play = async () => {
+    throw new DOMException('Unsupported audio', 'NotSupportedError');
+  };
+  await h.controller.readBack();
+  assert.equal(h.controller.getSnapshot().hasAudio, false);
+  assert.equal(h.controller.getSnapshot().errorCode, 'playback_failed');
+  assert.equal(
+    h.controller.getSnapshot().text,
+    'The answer and evidence remain available.',
+  );
+  assert.deepEqual(h.revoked, ['blob:1']);
+  await h.controller.play();
+  assert.equal(h.calls.speech.length, 1);
+  h.audio.play = async () => {
+    h.audio.plays += 1;
+  };
+  await h.controller.readBack();
+  assert.equal(h.calls.speech.length, 2);
+  assert.equal(h.controller.getSnapshot().phase, 'speaking');
+});
+
+test('a media error after playback started discards the invalid cache', async () => {
+  const h = harness();
+  h.controller.setSpeechEnabled(true);
+  h.controller.editText('Keep the answer');
+  await h.controller.readBack();
+  h.audio.onerror?.();
+  assert.equal(h.controller.getSnapshot().errorCode, 'playback_failed');
+  assert.equal(h.controller.getSnapshot().hasAudio, false);
+  assert.equal(h.controller.getSnapshot().text, 'Keep the answer');
+  assert.deepEqual(h.revoked, ['blob:1']);
+});
+
+test('cancellation from a state subscriber prevents work before synthesis and playback', async () => {
+  const h = harness();
+  h.controller.setSpeechEnabled(true);
+  h.controller.editText('Stop before starting');
+  const unsubscribe = h.controller.subscribe(() => {
+    if (h.controller.getSnapshot().phase === 'generating')
+      h.controller.stopPlayback();
+  });
+  await h.controller.readBack();
+  assert.equal(h.calls.speech.length, 0);
+  unsubscribe();
+  h.controller.subscribe(() => {
+    if (h.controller.getSnapshot().notice === 'play_ready')
+      h.controller.stopPlayback();
+  });
+  await h.controller.readBack();
+  assert.equal(h.calls.speech.length, 1);
+  assert.equal(h.audio.plays, 0);
+});
+
+test('a stopped play promise cannot stop a newer deliberate replay of the same audio', async () => {
+  const h = harness();
+  const oldPlay = deferred<void>();
+  h.audio.play = () => oldPlay.promise;
+  h.controller.setSpeechEnabled(true);
+  h.controller.editText('The same cached answer');
+  const pending = h.controller.readBack();
+  await settle();
+  h.controller.stopPlayback();
+  h.audio.play = async () => {
+    h.audio.plays += 1;
+  };
+  await h.controller.play();
+  const pausesBeforeOldResolution = h.audio.pauses;
+  oldPlay.resolve();
+  await pending;
+  assert.equal(h.audio.pauses, pausesBeforeOldResolution);
+  assert.equal(h.controller.getSnapshot().phase, 'speaking');
+  assert.equal(h.calls.speech.length, 1);
+});
+
+test('starting a recording aborts old synthesis and ignores the late audio', async () => {
+  const response = deferred<Blob>();
+  const h = harness({ speak: () => response.promise });
+  h.controller.setSpeechEnabled(true);
+  h.controller.editText('The previous response');
+  const synthesis = h.controller.readBack();
+  await h.controller.start();
+  assert.equal(h.calls.speech[0]!.signal.aborted, true);
+  assert.equal(h.controller.getSnapshot().phase, 'recording');
+  response.resolve(new Blob(['old'], { type: 'audio/mpeg' }));
+  await synthesis;
+  assert.equal(h.audio.plays, 0);
+  assert.equal(h.urls, 0);
+  assert.equal(h.controller.getSnapshot().phase, 'recording');
+  h.controller.cancel();
+});
+
+test('late media events from a stopped attempt cannot change a new playback state', async () => {
+  const h = harness();
+  h.controller.setSpeechEnabled(true);
+  h.controller.editText('Replay this response');
+  await h.controller.readBack();
+  const oldEnded = h.audio.onended;
+  const oldError = h.audio.onerror;
+  h.controller.stopPlayback();
+  await h.controller.play();
+  oldEnded?.();
+  oldError?.();
+  assert.equal(h.controller.getSnapshot().phase, 'speaking');
+  assert.equal(h.controller.getSnapshot().hasAudio, true);
+  assert.equal(h.controller.getSnapshot().errorCode, null);
+  assert.equal(h.calls.speech.length, 1);
+});
+
+test('five seconds of silence after activity finishes one recording with its final chunk', async () => {
+  const h = silenceHarness({
+    transcribe: async () => ({
+      transcript: 'Compare August with July',
+      request_id: 'silence',
+    }),
+  });
+  let cues = 0;
+  h.dependencies.cue = () => {
+    assert.ok(
+      h.trackStops > 0,
+      'Completion cue happens after microphone tracks stop',
+    );
+    cues++;
+  };
+  h.controller.setAudioFeedback(true);
+  await h.controller.start();
+  const recorder = h.recorders[0]!;
+  recorder.ondata(new Blob(['first phrase']));
+  assert.equal(cues, 0, 'No start cue can enter the silence detector');
+  h.advance(5_000);
+  assert.equal(h.controller.getSnapshot().phase, 'recording');
+  assert.equal(
+    h.controller.getSnapshot().silenceSecondsRemaining,
+    null,
+    'Initial quiet does not auto-submit',
+  );
+  h.activity();
+  assert.equal(h.controller.getSnapshot().silenceSecondsRemaining, 5);
+  h.advance(4_900);
+  assert.equal(h.controller.getSnapshot().silenceSecondsRemaining, 1);
+  h.activity();
+  recorder.ondata(new Blob([' and continuation']));
+  assert.equal(h.controller.getSnapshot().silenceSecondsRemaining, 5);
+  h.advance(4_999);
+  assert.equal(
+    recorder.stops,
+    0,
+    'Continued speech resets the same recording deadline',
+  );
+  h.advance(1);
+  assert.equal(recorder.stops, 1);
+  assert.equal(h.controller.getSnapshot().notice, 'silence_reached');
+  assert.equal(h.controller.getSnapshot().silenceSecondsRemaining, null);
+  assert.equal(
+    h.calls.transcripts.length,
+    0,
+    'Wait for the final recording chunk',
+  );
+  h.activity();
+  h.controller.finish();
+  recorder.end(' final word');
+  recorder.onstop();
+  await settle();
+  assert.equal(h.calls.transcripts.length, 1);
+  assert.equal(
+    await h.calls.transcripts[0]!.blob.text(),
+    'first phrase and continuation final word',
+  );
+  assert.equal(cues, 1);
+  assert.equal(
+    h.controller.claimAutomaticQuestion(),
+    'Compare August with July',
+  );
+  assert.equal(
+    h.controller.claimAutomaticQuestion(),
+    null,
+    'The completed transcript is claimable once',
+  );
+  assert.equal(h.observerStops, 1);
+  assert.equal(h.observerSignal?.aborted, true);
+  assert.equal(h.timerCount, 0);
+});
+
+test('manual Finish and the 30-second cap preserve review without automatic submission', async () => {
+  for (const finish of ['manual', 'limit'] as const) {
+    const h = silenceHarness();
+    await h.controller.start();
+    if (finish === 'limit') h.advance(29_000);
+    h.activity();
+    if (finish === 'manual') h.controller.finish();
+    else h.advance(1_000);
+    assert.equal(
+      h.controller.getSnapshot().notice,
+      finish === 'limit' ? 'duration_reached' : 'transcribing',
+    );
+    h.recorders[0]!.end();
+    await settle();
+    assert.equal(h.calls.transcripts.length, 1);
+    assert.equal(h.controller.claimAutomaticQuestion(), null);
+    assert.equal(h.observerStops, 1);
+    assert.equal(h.timerCount, 0);
+  }
+});
+
+test('Cancel discards a silent recording and ignores detector and recorder callbacks', async () => {
+  const h = silenceHarness();
+  await h.controller.start();
+  h.activity();
+  h.advance(4_900);
+  h.controller.cancel();
+  h.activity();
+  h.advance(10_000);
+  h.recorders[0]!.end();
+  await settle();
+  assert.equal(h.calls.transcripts.length, 0);
+  assert.equal(h.controller.claimAutomaticQuestion(), null);
+  assert.equal(h.controller.getSnapshot().silenceSecondsRemaining, null);
+  assert.equal(h.observerSignal?.aborted, true);
+  assert.equal(h.observerStops, 1);
+  assert.equal(h.timerCount, 0);
+});
+
+test('a detector that resolves after disposal is immediately released', async () => {
+  const h = silenceHarness();
+  const observer = deferred<() => void>();
+  let signal: AbortSignal | undefined;
+  let stops = 0;
+  h.dependencies.observeAudioActivity = (_stream, _activity, abortSignal) => {
+    signal = abortSignal;
+    return observer.promise;
+  };
+  await h.controller.start();
+  h.controller.dispose();
+  assert.equal(signal?.aborted, true);
+  observer.resolve(() => {
+    stops++;
+  });
+  await settle();
+  assert.equal(stops, 1);
+  assert.equal(h.trackStops, 1);
+  assert.equal(h.timerCount, 0);
+  assert.equal(h.controller.claimAutomaticQuestion(), null);
+});
+
+test('unavailable analysis keeps manual recording and the existing duration cap usable', async () => {
+  for (const missing of [true, false]) {
+    const h = silenceHarness();
+    if (missing) delete h.dependencies.observeAudioActivity;
+    else
+      h.dependencies.observeAudioActivity = async () => {
+        throw new Error('AudioContext cannot start');
+      };
+    await h.controller.start();
+    await settle();
+    assert.equal(h.controller.getSnapshot().phase, 'recording');
+    assert.equal(h.controller.getSnapshot().notice, 'silence_unavailable');
+    h.advance(30_000);
+    h.recorders[0]!.end();
+    await settle();
+    assert.equal(h.calls.transcripts.length, 1);
+    assert.equal(h.controller.claimAutomaticQuestion(), null);
+  }
+});
+
+test('empty silence transcription and a cancelled late transcription cannot auto-submit', async () => {
+  for (const result of ['empty', 'cancelled'] as const) {
+    const response = deferred<{ transcript: string; request_id: string }>();
+    const h = silenceHarness({ transcribe: () => response.promise });
+    await h.controller.start();
+    h.activity();
+    h.advance(5_000);
+    h.recorders[0]!.end();
+    if (result === 'cancelled') h.controller.cancel();
+    response.resolve({
+      transcript: result === 'empty' ? '' : 'An old request',
+      request_id: 'late',
+    });
+    await settle();
+    assert.equal(h.controller.claimAutomaticQuestion(), null);
+    assert.equal(h.controller.getSnapshot().text, '');
+  }
+});
+
+test('editing, cancellation, clearing, starting again and disposal invalidate an unclaimed transcript', async () => {
+  for (const action of [
+    'edit',
+    'cancel',
+    'clear',
+    'start',
+    'dispose',
+  ] as const) {
+    const h = silenceHarness();
+    await h.controller.start();
+    h.activity();
+    h.advance(5_000);
+    h.recorders[0]!.end();
+    await settle();
+    if (action === 'edit') h.controller.editText('My reviewed question');
+    else if (action === 'start') await h.controller.start();
+    else h.controller[action]();
+    assert.equal(h.controller.claimAutomaticQuestion(), null, action);
+    h.controller.dispose();
+  }
+});
+
+test('a late old recorder stop cannot clear the new recording countdown', async () => {
+  const h = silenceHarness();
+  await h.controller.start();
+  const old = h.recorders[0]!;
+  h.controller.cancel();
+  await h.controller.start();
+  h.activity();
+  old.end();
+  assert.equal(h.controller.getSnapshot().silenceSecondsRemaining, 5);
+  assert.equal(h.controller.getSnapshot().phase, 'recording');
+  h.controller.dispose();
+});
+
+test('analysis suspension cancels an armed silence deadline and falls back to manual Finish', async () => {
+  const h = silenceHarness();
+  await h.controller.start();
+  h.activity();
+  h.advance(4_000);
+  h.unavailable();
+  h.activity();
+  h.advance(5_000);
+  assert.equal(h.controller.getSnapshot().phase, 'recording');
+  assert.equal(h.controller.getSnapshot().notice, 'silence_unavailable');
+  assert.equal(h.controller.getSnapshot().silenceSecondsRemaining, null);
+  assert.equal(h.recorders[0]!.stops, 0);
+  assert.equal(h.observerSignal?.aborted, true);
+  assert.equal(h.observerStops, 1);
+  h.controller.finish();
+  h.recorders[0]!.end();
+  await settle();
+  assert.equal(h.calls.transcripts.length, 1);
+  assert.equal(h.controller.claimAutomaticQuestion(), null);
+});
+
+test('validated application limits identify the failing operation, preserve text and clear on explicit recovery', async () => {
+  const usage: UsageLimit = {
+    minute_count: 24,
+    minute_limit: 24,
+    day_count: 73,
+    day_limit: 240,
+    limited_by: 'minute',
+    retry_after_seconds: 42,
+    retry_at: '2026-09-21T00:01:00.000Z',
+  };
+  let fail = true;
+  const h = harness({
+    transcribe: async () => {
+      throw new VoiceTransportError('APP_RATE_LIMITED', 'Request limit', usage);
+    },
+    speak: async () => {
+      if (fail)
+        throw new VoiceTransportError(
+          'APP_RATE_LIMITED',
+          'Request limit',
+          usage,
+        );
+      return new Blob(['audio'], { type: 'audio/mpeg' });
+    },
+  });
+  h.controller.editText('Preserve the earlier question');
+  await h.controller.start();
+  h.controller.finish();
+  h.recorders[0]!.end();
+  await settle();
+  assert.deepEqual(h.controller.getSnapshot().errorUsage, usage);
+  assert.equal(h.controller.getSnapshot().errorOperation, 'transcribe');
+  assert.equal(
+    h.controller.getSnapshot().text,
+    'Preserve the earlier question',
+  );
+  assert.match(
+    errorText('en', 'app_rate_limited', 'transcribe'),
+    /^Transcription could not finish\./,
+  );
+  assert.match(
+    errorText('vi', 'app_rate_limited', 'transcribe'),
+    /^Chưa thể hoàn tất chép lời\./,
+  );
+  h.controller.editText('The completed answer');
+  assert.equal(h.controller.getSnapshot().errorUsage, null);
+  assert.equal(h.controller.getSnapshot().errorOperation, null);
+  h.controller.setSpeechEnabled(true);
+  await h.controller.readBack();
+  assert.equal(h.controller.getSnapshot().errorOperation, 'speak');
+  assert.deepEqual(h.controller.getSnapshot().errorUsage, usage);
+  assert.equal(h.controller.getSnapshot().text, 'The completed answer');
+  assert.match(
+    errorText('en', 'app_rate_limited', 'speak'),
+    /^Read-back audio could not be generated\./,
+  );
+  await settle();
+  assert.equal(
+    h.calls.speech.length,
+    1,
+    'The stored retry estimate never automatically resubmits',
+  );
+  fail = false;
+  await h.controller.readBack();
+  assert.equal(h.controller.getSnapshot().errorCode, null);
+  assert.equal(h.controller.getSnapshot().errorUsage, null);
+  assert.equal(h.controller.getSnapshot().errorOperation, null);
+  assert.equal(h.calls.speech.length, 2);
+  h.controller.dispose();
+});
+
+test('unvalidated or provider usage data cannot appear as application counters', async () => {
+  const valid: UsageLimit = {
+    minute_count: 12,
+    minute_limit: 12,
+    day_count: 30,
+    day_limit: 80,
+    limited_by: 'minute',
+    retry_after_seconds: 10,
+    retry_at: '2026-09-21T00:01:00.000Z',
+  };
+  for (const error of [
+    { code: 'APP_RATE_LIMITED', usage: { ...valid, day_count: -1 } },
+    { code: 'APP_RATE_LIMITED', usage: { ...valid, retry_at: 'not a date' } },
+    {
+      code: 'APP_RATE_LIMITED',
+      usage: { ...valid, retry_after_seconds: 100_000 },
+    },
+    { code: 'PROVIDER_RATE_LIMITED', usage: valid },
+    { code: 'RATE_LIMITED', usage: valid },
+  ]) {
+    const h = harness({
+      speak: async () => {
+        throw error;
+      },
+    });
+    h.controller.editText('Text remains');
+    h.controller.setSpeechEnabled(true);
+    await h.controller.readBack();
+    assert.equal(h.controller.getSnapshot().errorUsage, null);
+    assert.equal(h.controller.getSnapshot().text, 'Text remains');
+    h.controller.cancel();
+    assert.equal(h.controller.getSnapshot().errorOperation, null);
+  }
+  assert.match(
+    errorText('en', 'rate_limited'),
+    /source and retry time were not provided/,
+  );
+  assert.match(
+    errorText('en', 'provider_rate_limited'),
+    /ElevenLabs temporarily/,
+  );
+  assert.doesNotMatch(
+    errorText('en', 'rate_limited'),
+    /ElevenLabs|VSual application/,
+  );
 });
