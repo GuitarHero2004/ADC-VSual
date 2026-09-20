@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
     "typecheck": "next typegen && tsc --noEmit",
-    "test": "node --conditions=react-server --test utils/elevenlabs/*.test.ts utils/voice/*.test.ts utils/grounded/*.test.ts",
+    "test": "node --conditions=react-server --test utils/elevenlabs/*.test.ts utils/voice/*.test.ts utils/grounded/*.test.ts utils/auth/*.test.ts && node --test utils/auth/*.ui-test.ts",
     "check:elevenlabs": "node --conditions=react-server --env-file-if-exists=.env.local scripts/check-elevenlabs.ts",
     "check:avis": "node --conditions=react-server --env-file-if-exists=.env.local scripts/check-avis.ts"
   },

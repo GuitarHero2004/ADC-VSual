@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 export * from './grounded.ts';
+export * from './auth.ts';
 
 // API-07 bounds request_text. Task submission is not implemented yet.
 export const REQUEST_TEXT_MAX_LENGTH = 4000;
@@ -31,6 +32,7 @@ export const transcriptResponseSchema = z.strictObject({
 export type TranscriptResponse = z.infer<typeof transcriptResponseSchema>;
 export const voiceErrorCodeSchema = z.enum([
   'UNAUTHENTICATED',
+  'AUTH_UNAVAILABLE',
   'FORBIDDEN',
   'INVALID_INPUT',
   'INPUT_TOO_LARGE',

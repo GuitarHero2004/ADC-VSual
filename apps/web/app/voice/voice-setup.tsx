@@ -1,16 +1,10 @@
 'use client';
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type FormEvent,
-} from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   createVoiceTransport,
   signInErrorMessage,
+  SignInForm,
   VoiceTest,
 } from '@adc/voice-ui';
 import type { UiLanguage } from '@adc/contracts';
@@ -31,15 +25,16 @@ const words = {
     signout: 'Sign out',
     signed: 'Signed in',
     waiting: 'Please wait…',
+    other: 'Google sign-in and account options',
     account:
-      'Use your app account email and password. A project maintainer can find app accounts in Supabase → Authentication → Users. The extension has its own sign-in session.',
+      'Sign in with your existing VSual account. The extension has its own browser-session sign-in; start that connection from its Sign in button.',
     setup:
       'Sign-in is not configured. Ask the project maintainer to finish Supabase setup.',
     expired: 'Your session expired. Sign in again to continue.',
     extension: 'Set up the extension',
     build: 'From the repository root, run:',
     load: 'In Chrome or Edge, open Extensions, enable Developer mode and choose Load unpacked. Select apps/extension/dist.',
-    pin: 'Pin Browser Accessibility Agent, then open its toolbar button. Sign in there and grant microphone permission. Its panel shows the actual assigned browser shortcut.',
+    pin: 'Pin VSual, then open its toolbar button. Choose Sign in to connect through the website, then grant microphone permission in the extension. Its panel shows the actual assigned browser shortcut.',
     separate:
       'This website microphone test does not grant extension microphone permission. No extension connection has been checked here.',
     home: 'Back to home',
@@ -57,15 +52,16 @@ const words = {
     signout: 'Đăng xuất',
     signed: 'Đã đăng nhập',
     waiting: 'Vui lòng chờ…',
+    other: 'Đăng nhập Google và tùy chọn tài khoản',
     account:
-      'Dùng email và mật khẩu tài khoản ứng dụng. Người quản lý dự án có thể xem tài khoản tại Supabase → Authentication → Users. Tiện ích có phiên đăng nhập riêng.',
+      'Đăng nhập bằng tài khoản VSual đã có. Tiện ích có phiên đăng nhập riêng trong trình duyệt; bắt đầu kết nối từ nút Đăng nhập trong tiện ích.',
     setup:
       'Chưa cấu hình đăng nhập. Nhờ người quản lý dự án hoàn tất thiết lập Supabase.',
     expired: 'Phiên đã hết hạn. Đăng nhập lại để tiếp tục.',
     extension: 'Cài đặt tiện ích',
     build: 'Từ thư mục gốc dự án, chạy:',
     load: 'Trong Chrome hoặc Edge, mở Tiện ích, bật Chế độ nhà phát triển và chọn Tải tiện ích đã giải nén. Chọn apps/extension/dist.',
-    pin: 'Ghim Browser Accessibility Agent và mở bằng nút trên thanh công cụ. Đăng nhập tại đó và cấp quyền micrô. Bảng điều khiển hiển thị phím tắt đã gán.',
+    pin: 'Ghim VSual và mở bằng nút trên thanh công cụ. Chọn Đăng nhập để kết nối qua trang web, sau đó cấp quyền micrô trong tiện ích. Bảng điều khiển hiển thị phím tắt đã gán.',
     separate:
       'Thử micrô trên trang này không cấp quyền micrô cho tiện ích. Trang này chưa kiểm tra kết nối với tiện ích.',
     home: 'Về trang chủ',
@@ -80,8 +76,6 @@ export default function VoiceSetup() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<'setup' | 'expired' | null>(null);
   const [authFailure, setAuthFailure] = useState<string | null>(null);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const signedOut = useRef(false);
   const cancelVoice = useRef<() => void>(() => {});
   const onVoiceReady = useCallback(
@@ -156,8 +150,7 @@ export default function VoiceSetup() {
     [client],
   );
 
-  async function signIn(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function signIn(email: string, password: string) {
     if (!client || busy) return;
     setBusy(true);
     setMessage(null);
@@ -168,12 +161,10 @@ export default function VoiceSetup() {
         email: email.trim(),
         password,
       });
-      setPassword('');
       if (error || !data.session)
         setAuthFailure(signInErrorMessage(error, language));
       else setSession(data.session);
     } catch (error: unknown) {
-      setPassword('');
       setAuthFailure(signInErrorMessage(error, language));
     } finally {
       setBusy(false);
@@ -185,7 +176,6 @@ export default function VoiceSetup() {
     cancelVoice.current();
     setBusy(true);
     setSession(null);
-    setPassword('');
     setMessage(null);
     setAuthFailure(null);
     await client?.auth.signOut({ scope: 'local' }).catch(() => undefined);
@@ -194,7 +184,7 @@ export default function VoiceSetup() {
 
   return (
     <main lang={language}>
-      <p className="eyebrow">Browser Accessibility Agent</p>
+      <p className="eyebrow">VSual</p>
       <h1>{copy.title}</h1>
       <label htmlFor="ui-language">{copy.language}</label>
       <select
@@ -221,32 +211,19 @@ export default function VoiceSetup() {
             </button>
           </>
         ) : (
-          <form onSubmit={(event) => void signIn(event)}>
-            <label htmlFor="email">{copy.email}</label>
-            <input
-              id="email"
-              type="email"
-              autoComplete="username"
-              required
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
+          <>
+            <SignInForm
+              language={language}
+              onSubmit={signIn}
+              busy={busy}
+              disabled={!client}
+              error={authFailure}
             />
-            <label htmlFor="password">{copy.password}</label>
-            <input
-              id="password"
-              type="password"
-              autoComplete="current-password"
-              required
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-            <button type="submit" disabled={!client || busy}>
-              {busy ? copy.waiting : copy.signin}
-            </button>
-          </form>
+            <a href={`/auth/sign-in?lang=${language}`}>{copy.other}</a>
+          </>
         )}
         <p role="status" aria-atomic="true">
-          {authFailure ?? (message ? copy[message] : '')}
+          {message ? copy[message] : ''}
         </p>
       </section>
       {session && (

@@ -65,7 +65,7 @@ export function corsHeaders(request: Request) {
   headers.set('Access-Control-Allow-Origin', origin);
   if (origin === sameOrigin)
     headers.set('Access-Control-Allow-Credentials', 'true');
-  headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   headers.set(
     'Access-Control-Allow-Headers',
     'Authorization, Content-Type, X-Request-ID, X-Workspace-ID',

@@ -101,6 +101,12 @@ pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.auth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-block: 1rem;
+}
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

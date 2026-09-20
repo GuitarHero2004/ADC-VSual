@@ -4,3 +4,5 @@ export { createVoiceTransport } from './transport.ts';
 export { signInErrorMessage } from './signin-error.ts';
 export { browserDependencies } from './browser.ts';
 export { errorText as voiceErrorText } from './strings.ts';
+export { SignInForm, type SignInFormProps } from './SignInForm.tsx';
+export { authCopy, authFailureText } from './auth-strings.ts';
