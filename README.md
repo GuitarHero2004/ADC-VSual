@@ -1,13 +1,17 @@
-# RMIT ADC Browser Accessibility Agent
+# VSual — RMIT ADC browser companion
 
 Hackathon project by **In Motion or Element**, for blind and low-vision users.
 The assistant complements existing screen readers.
 
-This milestone is a **voice test**: record up to 30 seconds, transcribe with
-ElevenLabs Scribe v2, edit the text, and explicitly read it back with Flash v2.5.
-Read-back repeats the supplied text. Page analysis, intelligent answers, browser
-actions and wake-word activation are not implemented. No OpenAI configuration is
-needed. App-generated speech and local recording cues are off by default.
+VSual answers bounded questions about the rendered **synthetic `/orders` dashboard**.
+Allow page processing, type a question (or review an ElevenLabs transcript), then
+select **Ask VSual**. The configured model through Avis interprets the comparison; application code calculates
+the answer from captured rows and exposes the evidence. English and Vietnamese are
+supported. Browser actions, other websites and wake words are outside this feature.
+
+The separate **`/voice` setup** remains a labelled speech test: its read-back repeats
+supplied text. In the companion, **Read answer** speaks the validated answer instead.
+App speech and recording cues are off by default; text and evidence work without TTS.
 
 ## Install and run
 
@@ -19,7 +23,7 @@ npm ci --include=dev --include-workspace-root
 npm run dev:web
 ```
 
-Open <http://127.0.0.1:3000/voice>. On PowerShell, use `npm.cmd` if execution
+Open <http://127.0.0.1:3000/orders>; use `/voice` for speech setup. On PowerShell, use `npm.cmd` if execution
 policy blocks `npm.ps1`. Scripts do not require Unix shell utilities.
 
 ```sh
@@ -29,26 +33,38 @@ npm run dev:extension
 This watches and writes `apps/extension/dist`; it does not inject a development
 server into the extension. `npm run dev` starts both processes. Ctrl+C stops them.
 
-## Configure the voice test
+## Configure the backend and extension
 
 Create **`apps/web/.env.local`** using the names in `apps/web/.env.example`.
 Real environment files are ignored; never commit credentials.
 
-| Setting                                | Purpose                                                                                   |
-| -------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `NEXT_PUBLIC_SUPABASE_URL`             | Public HTTPS Supabase project origin                                                      |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Public `sb_publishable_` Auth key                                                         |
-| `ELEVENLABS_API_KEY`                   | Private backend key with transcription and speech access                                  |
-| `ELEVENLABS_STT_MODEL`                 | `scribe_v2`                                                                               |
-| `ELEVENLABS_TTS_MODEL`                 | `eleven_flash_v2_5`                                                                       |
-| `ELEVENLABS_VOICE_ID`                  | An actual voice available to your account and API plan; evaluate Vietnamese pronunciation |
-| `DATABASE_URL`                         | PostgreSQL connection for the restricted runtime role below                               |
-| `VA_VOICE_WORKSPACE_ID`                | Existing active application workspace UUID                                                |
-| `VOICE_ALLOWED_ORIGINS`                | Comma-separated exact extension origins, such as `chrome-extension://YOUR_EXTENSION_ID`   |
+| Setting                                | Purpose                                                                                       |
+| -------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`             | Public HTTPS Supabase project origin                                                          |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Public `sb_publishable_` Auth key                                                             |
+| `ELEVENLABS_API_KEY`                   | Private backend key with transcription and speech access                                      |
+| `ELEVENLABS_STT_MODEL`                 | `scribe_v2`                                                                                   |
+| `ELEVENLABS_TTS_MODEL`                 | `eleven_flash_v2_5`                                                                           |
+| `ELEVENLABS_VOICE_ID`                  | An actual voice available to your account and API plan; evaluate Vietnamese pronunciation     |
+| `DATABASE_URL`                         | PostgreSQL connection for the restricted runtime role below                                   |
+| `VA_VOICE_WORKSPACE_ID`                | Existing active application workspace UUID                                                    |
+| `VOICE_ALLOWED_ORIGINS`                | Comma-separated exact extension origins, such as `chrome-extension://YOUR_EXTENSION_ID`       |
+| `AVIS_API_KEY`                         | Private Avis key for question interpretation; not needed for table inspection or voice setup  |
+| `AVIS_API_BASE_URL`                    | Avis HTTPS compatibility base: `https://api.avis.xyz/api/openai/v1`                           |
+| `AVIS_AI_MODEL`                        | Exact model ID available through your Avis account; must support Responses Structured Outputs |
+| `GROUNDED_ALLOWED_ORIGINS`             | Exact dashboard origins, comma separated; required in production                              |
 
 Provider configuration is read when used, not during imports or builds. Missing
 settings produce a recoverable setup error. There is no default/sample voice,
-provider fallback, webhook or realtime connection. A voice appearing in your
+provider fallback, webhook or realtime connection. Local development allows
+`http://127.0.0.1:3000` and `http://localhost:3000` dashboard origins by default.
+Use the exact deployed origin for Vercel Preview/Production; wildcards are rejected.
+All three Avis settings are required; there is no default model. The existing OpenAI
+SDK connects to Avis using these settings. `OPENAI_API_KEY`, `OPENAI_MODEL` and
+`OPENAI_BASE_URL` are not used and cannot silently select another provider.
+HTTPS endpoints must have no credentials, query or fragment, and redirects are rejected.
+See [Avis OpenAI compatibility](https://docs.avis.xyz/api-reference/introduction/openai-compatibility).
+A voice appearing in your
 account does not prove your plan permits API synthesis with it.
 ElevenLabs blocks Voice Library voices through the API on its Free plan, even
 when a voice can be previewed on its website. Choose an account-available Default
@@ -60,7 +76,10 @@ preserved and requests are not retried automatically. See
 
 Set these public build settings in **`apps/extension/.env.local`**, following its
 example: `VITE_API_BASE_URL`, `VITE_SUPABASE_URL`, and
-`VITE_SUPABASE_PUBLISHABLE_KEY`. Use `http://127.0.0.1:3000` locally or your deployed
+`VITE_SUPABASE_PUBLISHABLE_KEY`. Optional `VITE_ORDERS_ORIGINS` is a comma-separated
+list of exact dashboard origins; it defaults to the API origin. Only `/orders` on
+those origins is supported, and the backend allowlist must agree.
+Use `http://127.0.0.1:3000` locally or your deployed
 HTTPS backend origin. Rebuild and reload after changes. The manifest derives
 host permissions from these configured hosts; Chromium host permissions cannot
 restrict ports, while application requests use the configured port. No provider
@@ -150,13 +169,16 @@ The driver uses unnamed queries, explicit transactions and transaction-scoped
 advisory locks, compatible with transaction pooling. See
 [Supabase connection guidance](https://supabase.com/docs/guides/database/connecting-to-postgres).
 The backend rejects owner/bypass roles, missing forced RLS, mismatched identities
-and inactive memberships before any ElevenLabs call.
+and inactive memberships before any provider call. Grounded answers reuse this
+existing access model and usage table; this branch adds no migration.
 
 Limits are **6 attempts per rolling minute and 30 per rolling 24 hours per user**,
-across workspaces, using this same database. Duplicate request IDs are rejected.
+across workspaces, shared by Avis and voice calls using this same database.
+Duplicate request IDs are rejected.
 Failed/cancelled provider attempts count, and old metadata is pruned on the next
 attempt. This is a durable limit across Vercel instances, not an in-memory counter.
-The application stores no recordings, transcripts or generated audio in Supabase.
+The application stores no recordings, questions, snapshots, answers or generated
+audio in Supabase. Only the existing access and bounded usage metadata is retained.
 
 ## Build and load the extension
 
@@ -171,7 +193,7 @@ npm run build --workspace=@adc/extension
    (adjust to your checkout).
 3. Copy its extension ID into the backend's `VOICE_ALLOWED_ORIGINS` as
    `chrome-extension://ID`, then restart the backend or redeploy.
-4. Pin **Browser Accessibility Agent - Voice test**. Its toolbar button opens
+4. Pin **VSual - Accessible browser companion**. Its toolbar button opens
    the side panel. Sign in using an existing account; web sign-in does not sign
    the extension in. Tokens stay in trusted extension session storage and are
    cleared on logout/browser-session end.
@@ -183,11 +205,67 @@ npm run build --workspace=@adc/extension
    same extension UI in a tab, grant permission there, then return to the panel.
    Website permission does not establish extension permission.
 
-Shortcut: idle → open/start; recording → finish/transcribe; pending request →
-cancel; speaking → stop. A readiness/acknowledgement handshake handles cold workers
-and new panels. Escape cancels within the extension or web voice surface. No
-content scripts, page access, offscreen document or background microphone exist.
+Shortcut: idle → open/start recording; recording → finish/transcribe; pending
+request → cancel; speaking → stop. The toolbar opens without recording. A
+readiness/acknowledgement handshake handles cold workers and new panels. Escape
+cancels within the extension or web voice surface. A narrowly matched content script
+reads the orders table only after permission and an explicit capture/Ask action.
+There is no offscreen document or background microphone.
 Reload the extension and reopen the panel after any build/configuration change.
+
+If **Allow page processing** is disabled, select the exact supported `/orders`
+address shown beside the permission controls, then choose **Check active page**.
+With the local example configuration this is `http://127.0.0.1:3000/orders`;
+`localhost`, `/voice` and the home page do not match that configured address.
+The panel follows active-tab navigation without reading page content. After
+reloading the extension, reload the orders page too so its content script is ready.
+
+## Ask about captured orders
+
+1. Sign into the extension and open the configured `/orders` page. Choose the
+   interface language independently from the recording language.
+2. Select **Allow page processing**. Permission lasts only for this signed-in panel
+   session and origin; withdraw it to cancel work and clear captured data.
+3. Enter **“Compare completed orders in the South for August and July.”** or
+   **“So sánh số đơn hoàn thành ở miền Nam tháng 8 với tháng 7 năm 2026.”**
+   Recording only fills editable question text; review it before **Ask VSual**.
+4. Expect a decrease of **300 orders (25%)**, from July 1,200 to August 900 in 2026.
+   **View evidence** shows both original values, row identifiers and the calculation.
+5. **View captured table** makes no extra AI call. **Capture source table** also
+   works when Avis is unavailable. **Return to page** attempts to restore the
+   original usable focus target, otherwise the supported page heading.
+6. Optionally enable app speech and choose **Read answer**, **Stop speech** or
+   **Play / Repeat**. These controls remain available in Answer, Evidence and
+   Captured table views. Repeat and speed changes reuse session audio.
+
+Supported questions compare completed-order counts for one region and two months.
+An explicit baseline is respected; neutral comparisons use the earlier month.
+Missing/ambiguous scope needs clarification; causes, revenue, forecasts and actions
+are unsupported. A zero baseline produces an absolute difference with percentage
+unavailable. Answers describe captured synthetic page data, not verified business
+records. The original question also passes conservative scope checks; these do not
+claim universal natural-language understanding.
+
+`POST /api/grounded-read` verifies the existing Supabase identity and workspace,
+validates at most **1,000 Unicode code points, 100 rows and 128 KiB**, checks the
+source origin/fingerprint and a capture age of at most 30 seconds, then reserves
+the shared durable usage limit. The model receives the question and bounded scope
+context, without row counts, tools or browser authority. One Responses Structured
+Outputs call uses `store: false`, a 35-second timeout and no automatic retries.
+Validated interpretation selects actual rows; deterministic integer/rational math
+and English/Vietnamese templates generate the answer. `store: false` is not a
+provider zero-retention guarantee. Questions and bounded context go through Avis
+to its configured upstream provider. Avis documents request payloads in its usage
+records; upstream field/retention behavior depends on the resolved provider.
+See [Avis usage records](https://docs.avis.xyz/api-reference/introduction/use)
+and [compatibility](https://docs.avis.xyz/api-reference/introduction/openai-compatibility).
+
+This focused endpoint and transient evidence implement this milestone without
+the broader reference documents' persisted `/v1` task/session workflow. Reference
+documents remain unchanged. Session, tab/document, request and snapshot checks
+prevent late responses replacing current work. Relevant page changes mark previous
+data stale and stop pending work; nothing automatically resubmits. Cancellation
+cannot guarantee that a provider stopped processing or reverse its charge.
 
 ## Vercel
 
@@ -201,8 +279,11 @@ npm ci --include=dev --include-workspace-root
 
 This preserves the existing Vercel TypeScript dependency fix. TypeScript checking
 remains enabled. Set web environment variables for the intended Preview/Production
-environment: mark `ELEVENLABS_API_KEY` and `DATABASE_URL` **Sensitive/Secret**;
-model names and voice ID are configuration. Changed variables require a new
+environment: mark `AVIS_API_KEY`, `ELEVENLABS_API_KEY` and `DATABASE_URL`
+**Sensitive/Secret**; `AVIS_API_BASE_URL`, `AVIS_AI_MODEL`, speech model names and
+voice ID are configuration. Set the exact
+`GROUNDED_ALLOWED_ORIGINS` and `VOICE_ALLOWED_ORIGINS` for each environment, plus
+the existing Supabase/workspace settings above. Changed variables require a new
 deployment; public settings are embedded at build time. The extension must point
 to that HTTPS deployment and its origin must be allowed by the backend.
 
@@ -227,10 +308,11 @@ source; Next/Vite bundle them directly, so there is no prerequisite package buil
 Tests use Node 24's runner and mocked provider/Auth/database/browser interfaces:
 no credits or live credentials are needed. They cover authorization, RLS context,
 rate reservations, Unicode/input limits, final chunks, delayed microphone
-permission, stale responses, cancellation, playback reuse and logout cleanup.
+permission, actual DOM mutation, deterministic calculations, model refusals,
+stale responses, cancellation, playback reuse and logout cleanup.
 They do not substitute for real PostgreSQL RLS/concurrency or browser tests.
 
-CI runs on PRs targeting `main` and pushes to `main`, using the committed lockfile
+CI runs on PRs targeting `main` or `dev` and pushes to either, using the committed lockfile
 and declared Node/npm versions. Branch-protection check: **Foundation checks**
 (workflow **CI**). Reference specifications are excluded from formatting.
 
@@ -244,6 +326,21 @@ npm run start --workspace=@adc/web
 request; `configuration/auth: verified` confirms reachability, not user sign-in
 or database access. It reports `database: not_checked` explicitly. A successful
 build or client initialisation is not a connection test.
+
+The following opt-in **developer provider checks** make one live Avis request each,
+using a synthetic English or Vietnamese comparison. They verify the actual
+Structured Outputs response and deterministic calculation, cost provider quota,
+and are never run by CI. They do not test sign-in, workspace reservations, page
+capture or the complete extension flow. No questions, output text or keys are logged.
+
+```sh
+npm run check:avis --workspace=@adc/web
+npm run check:avis --workspace=@adc/web -- --vi
+```
+
+Avis credit/spend-limit failures are distinguished from upstream access/rate-limit
+errors. The application preserves the question and makes no automatic retry;
+see [Avis errors](https://docs.avis.xyz/api-reference/introduction/errors).
 
 An optional developer-only synthesis smoke check uses the configured voice/model
 and writes an ignored synthetic MP3 to `apps/web/out/elevenlabs-smoke.mp3`:
@@ -288,64 +385,64 @@ recordings and text are sent to ElevenLabs under its
 7. Sign out while recording, requesting permission, generating and speaking.
    Pending work/audio must clear, including other open extension setup documents.
 
-### Review checkpoint and unfinished work
+### Grounded-read acceptance (all real-browser steps currently not run)
 
-This is an implementation checkpoint, with live voice acceptance still pending.
-The latest full `npm run check` passed type checking, linting, formatting, all
-**110 mocked tests**, and web/extension production builds. Browser bundle checks
-found no server credentials or bundled database CA. These checks do not establish
-that a user can complete the live voice flow.
+Run the journey in **Ask about captured orders**, then check:
 
-Local live verification completed:
+- [ ] Windows Chrome/Edge: cold shortcut, toolbar without microphone activation,
+      initial focus, sign-in, allow/withdraw permission and unsupported-page refusal.
+- [ ] English and Vietnamese questions: both cited rows, period direction, capture
+      time, evidence heading focus, Back to answer and Return to page focus.
+- [ ] In browser DevTools, change the displayed August cell from `900` to `1,050`.
+      Old evidence must become stale; a fresh Ask must show a decrease of **150
+      (12.5%)**. Changing the rendered DOM this way is also covered by automated tests.
+- [ ] During a request, Cancel, change tab, navigate, edit the relevant table or
+      sign out. Late responses must not appear; no automatic provider retry occurs.
+- [ ] Deny page permission: no capture/upload. Missing Avis configuration: honest
+      setup error, question preserved, source inspection still available.
+- [ ] Keyboard-only and NVDA: labels, brief announcements, no unexpected focus move
+      on answer arrival, semantic evidence, 200–400% zoom and narrow-panel reflow.
+- [ ] Reviewed STT populates a question without submitting. Read answer speaks the
+      answer, Stop is immediate, Repeat/speed add no TTS calls, and TTS failure leaves
+      evidence usable. Switch to Evidence and Captured table while speaking or
+      generating speech; Stop must remain available. Repeat with app speech disabled.
+- [ ] Repeat against the configured Vercel Preview/Production origin, separately
+      checking deployment protection, Supabase sign-in and workspace access.
 
-- One Scribe v2 transcription of a previous synthetic English audio sample
-  returned the expected sentence. This was a provider check, not a microphone test.
-- A read-only database connection verified TLS, the restricted runtime role,
-  required grants and forced RLS. Unscoped reads returned no rows. The project
-  owner reported applying the migration and account/workspace provisioning
-  separately; authenticated membership and usage reservations still need testing.
+Automated tests mock providers and browser interfaces; they are not live acceptance.
+No browser automation surface or NVDA was available during this implementation.
+On 20 September 2026, the configured Avis model passed one live English and one live
+Vietnamese synthetic provider check: both returned valid structured interpretations,
+then application code calculated the expected decrease of 300 orders (25%). These
+checks did not exercise application sign-in, database reservations or browser capture.
+The automated tests, type checking, lint, formatting and both production builds
+passed. No deployment was performed for this branch.
 
-Resume these unfinished steps on a follow-up branch:
+Earlier voice verification recorded one successful synthetic English STT provider
+check and a restricted TLS/RLS database read check. The last recorded live TTS check
+failed with **HTTP 402 `payment_required`** for the configured Voice Library voice.
+Account voice/plan access, authenticated end-to-end reservations, audible playback,
+microphone permissions, Vietnamese/mixed-language pronunciation and deployed voice
+acceptance remain unverified here. The current implementation uses one configured
+voice; per-language selection and cloning are deferred.
 
-- [ ] Resolve TTS voice/plan access and verify audible read-back. The last live
-      Flash request failed with **HTTP 402 `payment_required`** for the configured
-      Voice Library voice; no audio was returned. No alternative voice was selected
-      or verified by that check. Keep text usable while this remains blocked.
-- [ ] Complete an authenticated `/voice` session and extension session, confirming
-      workspace membership and database usage reservations through the real routes.
-- [ ] Run the manual acceptance sequence above in Chrome or Edge on Windows:
-      microphone allowed/denied, cold shortcut activation, Finish, Cancel, Stop,
-      Repeat, speed changes, session expiry and logout. These browser checks are
-      unrun; mocked tests cover the underlying state and request handling.
-- [ ] Check keyboard-only use, NVDA announcements, zoom and narrow-panel layout.
-- [ ] Evaluate Vietnamese, English, mixed-language speech and pronunciation of
-      dates, currency and decimals with the chosen voice.
-- [ ] Configure the deployed backend and extension origin, then repeat acceptance
-      against Vercel. All implementation-time live checks were local; production
-      has not been verified.
+## Code boundaries
 
-The implementation currently uses **one server-configured voice**. Per-language
-voice selection is deferred, not required to validate the existing flow. Voice
-cloning, wake-word activation, OpenAI, page analysis and website actions remain
-outside this milestone.
-
-## Code boundaries and next integration
-
-- `apps/web`: the single Next.js backend and web setup UI. `/api/voice/transcribe`
-  and `/api/voice/speak` validate and authenticate requests, reserve usage, and call
-  small server-only `transcribeAudio` / `synthesiseSpeech` functions.
-- `apps/extension`: React side panel owns capture/editing/playback; service worker
-  owns browser command coordination. Auth uses the existing Supabase account.
+- `apps/web`: `/orders`, `/voice`, the single backend, existing Auth/database access,
+  and `/api/grounded-read`. `utils/grounded` separates model interpretation, scope
+  checks, deterministic math and HTTP validation. Existing `/api/voice/*` routes
+  provide recorded transcription and optional speech.
+- `apps/extension`: the side panel owns question/capture/playback state; the orders
+  content script reads only the supported page through trusted extension messages.
+  The service worker retains browser command coordination. Tokens never enter the
+  target page or content script.
 - `packages/contracts`: browser-safe runtime schemas and inferred types.
 - `packages/voice-ui`: one recording/playback controller and bilingual UI shared
   by both apps, with an authenticated fetch transport.
 - `supabase/migrations`: the minimal identity/RLS and usage-metadata migration.
 - `docs` and `core-context`: unchanged reference specifications/prototype material.
 
-This milestone follows the current prompt's `/api/voice/*` endpoints, recorded
-toggle interaction and ElevenLabs provider choice. Broader `/v1` task/session,
-hold-to-talk and reasoning requirements in older references remain future work.
-Uploads are capped at 3 MiB plus 64 KiB multipart overhead (below Vercel's request
+Voice uploads remain capped at 3 MiB plus 64 KiB multipart overhead (below Vercel's request
 limit); header/signature screening does **not** verify audio duration. The UI enforces
 30 seconds. TTS counts at most 1,000 Unicode code points, preserves supplied text,
 uses MP3, a 30-second provider timeout and no automatic retries. See the official
@@ -354,16 +451,11 @@ uses MP3, a 30-second provider timeout and no automatic retries. See the officia
 [authentication](https://elevenlabs.io/docs/api-reference/authentication) and
 [model](https://elevenlabs.io/docs/overview/models) documentation.
 
-The later reasoning feature should explicitly submit the **reviewed editable text**
-(`VoiceController.getSnapshot().text`) alongside permitted extension evidence to its
-own authenticated backend route. After validating the reasoning result, pass its
-answer text to `synthesiseSpeech` (or the existing `/api/voice/speak` transport).
-There is deliberately no automatic transcript-to-reasoning callback today.
-Numerical answers must use validated evidence and deterministic calculations;
-model/page content must never grant action authority.
+`GroundedPanel` submits reviewed `VoiceController` text only through an explicit
+Ask. Its answer controller sends only the validated answer text through the existing
+`/api/voice/speak` transport. This is the bounded integration point for later
+reasoning work. Model/page content never grants action authority.
 
-Commit this checkpoint on `feat/voice-foundation` for review. After it is merged
-into the team's integration branch, create `feat/voice-playback-completion` from
-that updated branch to finish the acceptance steps above. Keep the later
-`feat/grounded-read` feature separate.
+Review this work on `feat/grounded-read`, based on `dev`. Merge a reviewed feature
+before starting a separate follow-up branch for broader scope or pending acceptance.
 No automatic commit, push, merge or deployment is part of these scripts.
