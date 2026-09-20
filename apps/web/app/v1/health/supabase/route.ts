@@ -8,7 +8,7 @@ export async function GET() {
     request_id: randomUUID(),
     configuration: 'failed',
     auth: 'not_checked',
-    database: 'not_yet_implemented',
+    database: 'not_checked',
   };
   const headers = { 'Cache-Control': 'private, no-store' };
 

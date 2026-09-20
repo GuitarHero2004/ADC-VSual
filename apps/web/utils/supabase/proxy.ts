@@ -5,6 +5,16 @@ import { type NextRequest, NextResponse } from 'next/server';
 import { getSupabaseConfig } from './env';
 
 export async function updateSession(request: NextRequest) {
+  // Extension requests own an independent session in the service worker. Never
+  // refresh an unrelated website cookie session while authenticating them.
+  if (
+    request.headers.has('authorization') ||
+    (request.nextUrl.pathname === '/auth/sign-in' &&
+      request.nextUrl.searchParams.has('extension')) ||
+    request.nextUrl.pathname === '/api/auth/config'
+  ) {
+    return NextResponse.next({ request });
+  }
   const config = getSupabaseConfig();
 
   // The public foundation remains usable without an Auth configuration.
@@ -14,6 +24,13 @@ export async function updateSession(request: NextRequest) {
   const responseHeaders = new Headers({ 'Cache-Control': 'private, no-store' });
 
   const supabase = createServerClient(config.url, config.publishableKey, {
+    global: {
+      fetch: (input, init) =>
+        fetch(input, {
+          ...init,
+          signal: AbortSignal.any([request.signal, AbortSignal.timeout(8_000)]),
+        }),
+    },
     cookies: {
       getAll() {
         return request.cookies.getAll();
@@ -33,7 +50,14 @@ export async function updateSession(request: NextRequest) {
 
   // This verifies/refreshes the token. It does not authorize product API access.
   // Public pages remain accessible when there is no valid session.
-  await supabase.auth.getClaims();
+  try {
+    await supabase.auth.getClaims();
+  } catch {
+    // Public pages remain readable during an Auth outage. Protected handlers
+    // perform their own verification and return a recoverable Auth error.
+    // Return unchanged cookies rather than storing partial refresh results.
+    return NextResponse.next({ request, headers: responseHeaders });
+  }
 
   const response = NextResponse.next({ request, headers: responseHeaders });
   cookiesToWrite.forEach(({ name, value, options }) =>

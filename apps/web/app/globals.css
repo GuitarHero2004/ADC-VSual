@@ -55,3 +55,93 @@ a {
   outline: 3px solid #6b21a8;
   outline-offset: 4px;
 }
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+button,
+input,
+select {
+  min-height: 44px;
+  max-width: 100%;
+}
+button {
+  cursor: pointer;
+  padding: 0.5rem 1rem;
+  background: #064f9c;
+  color: white;
+  border: 2px solid #064f9c;
+  border-radius: 0.25rem;
+}
+button:disabled {
+  cursor: default;
+  background: #e0e6eb;
+  color: #384b5b;
+  border-color: #647788;
+}
+label {
+  display: block;
+  font-weight: 700;
+  margin-top: 0.75rem;
+}
+input {
+  display: block;
+  width: 100%;
+  padding: 0.5rem;
+  border: 2px solid #526a7b;
+  margin-bottom: 1rem;
+}
+select {
+  padding: 0.5rem;
+}
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.auth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-block: 1rem;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+  }
+}
+
+.orders-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 2rem;
+}
+.orders-context dt {
+  font-weight: 700;
+}
+.orders-context dd {
+  margin: 0;
+}
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+caption {
+  text-align: left;
+  font-weight: 700;
+  padding-block: 1rem;
+}
+th,
+td {
+  padding: 0.75rem;
+  text-align: left;
+  border: 1px solid #526a7b;
+}

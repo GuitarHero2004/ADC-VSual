@@ -7,13 +7,20 @@
     "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
-    "typecheck": "next typegen && tsc --noEmit"
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "node --conditions=react-server --test utils/elevenlabs/*.test.ts utils/voice/*.test.ts utils/grounded/*.test.ts utils/auth/*.test.ts && node --test utils/auth/*.ui-test.ts",
+    "check:elevenlabs": "node --conditions=react-server --env-file-if-exists=.env.local scripts/check-elevenlabs.ts",
+    "check:avis": "node --conditions=react-server --env-file-if-exists=.env.local scripts/check-avis.ts"
   },
   "dependencies": {
     "@adc/contracts": "*",
+    "@adc/voice-ui": "0.0.0",
+    "@elevenlabs/elevenlabs-js": "2.68.0",
     "@supabase/ssr": "0.12.7",
     "@supabase/supabase-js": "2.116.0",
     "next": "16.3.5",
+    "openai": "7.20.0",
+    "pg": "8.23.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "server-only": "0.0.1"
