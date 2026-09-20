@@ -38,21 +38,23 @@ server into the extension. `npm run dev` starts both processes. Ctrl+C stops the
 Create **`apps/web/.env.local`** using the names in `apps/web/.env.example`.
 Real environment files are ignored; never commit credentials.
 
-| Setting                                | Purpose                                                                                       |
-| -------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `NEXT_PUBLIC_SUPABASE_URL`             | Public HTTPS Supabase project origin                                                          |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Public `sb_publishable_` Auth key                                                             |
-| `ELEVENLABS_API_KEY`                   | Private backend key with transcription and speech access                                      |
-| `ELEVENLABS_STT_MODEL`                 | `scribe_v2`                                                                                   |
-| `ELEVENLABS_TTS_MODEL`                 | `eleven_flash_v2_5`                                                                           |
-| `ELEVENLABS_VOICE_ID`                  | An actual voice available to your account and API plan; evaluate Vietnamese pronunciation     |
-| `DATABASE_URL`                         | PostgreSQL connection for the restricted runtime role below                                   |
-| `VA_VOICE_WORKSPACE_ID`                | Existing active application workspace UUID                                                    |
-| `VOICE_ALLOWED_ORIGINS`                | Comma-separated exact extension origins, such as `chrome-extension://YOUR_EXTENSION_ID`       |
-| `AVIS_API_KEY`                         | Private Avis key for question interpretation; not needed for table inspection or voice setup  |
-| `AVIS_API_BASE_URL`                    | Avis HTTPS compatibility base: `https://api.avis.xyz/api/openai/v1`                           |
-| `AVIS_AI_MODEL`                        | Exact model ID available through your Avis account; must support Responses Structured Outputs |
-| `GROUNDED_ALLOWED_ORIGINS`             | Exact dashboard origins, comma separated; required in production                              |
+| Setting                                | Purpose                                                                                                                                             |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`             | Public HTTPS Supabase project origin                                                                                                                |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Public `sb_publishable_` Auth key                                                                                                                   |
+| `ELEVENLABS_API_KEY`                   | Private backend key with transcription and speech access                                                                                            |
+| `ELEVENLABS_STT_MODEL`                 | `scribe_v2`                                                                                                                                         |
+| `ELEVENLABS_TTS_MODEL`                 | `eleven_flash_v2_5`                                                                                                                                 |
+| `ELEVENLABS_VOICE_ID`                  | An actual voice available to your account and API plan; evaluate Vietnamese pronunciation                                                           |
+| `DATABASE_URL`                         | PostgreSQL connection for the restricted runtime role below                                                                                         |
+| `VA_VOICE_WORKSPACE_ID`                | Existing active application workspace UUID                                                                                                          |
+| `VOICE_ALLOWED_ORIGINS`                | Comma-separated exact extension origins, such as `chrome-extension://YOUR_EXTENSION_ID`                                                             |
+| `AVIS_API_KEY`                         | Private Avis key for question interpretation; not needed for table inspection or voice setup                                                        |
+| `AVIS_API_BASE_URL`                    | Avis HTTPS compatibility base: `https://api.avis.xyz/api/openai/v1`                                                                                 |
+| `AVIS_AI_MODEL`                        | Exact model ID available through your Avis account; must support Responses Structured Outputs                                                       |
+| `GROUNDED_ALLOWED_ORIGINS`             | Exact dashboard origins, comma separated; required in production                                                                                    |
+| `AUTH_SITE_URL`                        | Exact website origin for website Google callbacks, with no trailing slash; local default `http://127.0.0.1:3000`, required in production for Google |
+| `GOOGLE_AUTH_ENABLED`                  | Server capability flag; set `true` only after Google/Supabase configuration. Otherwise email/password remains available                             |
 
 Provider configuration is read when used, not during imports or builds. Missing
 settings produce a recoverable setup error. There is no default/sample voice,
@@ -194,9 +196,9 @@ npm run build --workspace=@adc/extension
 3. Copy its extension ID into the backend's `VOICE_ALLOWED_ORIGINS` as
    `chrome-extension://ID`, then restart the backend or redeploy.
 4. Pin **VSual - Accessible browser companion**. Its toolbar button opens
-   the side panel. Sign in using an existing account; web sign-in does not sign
-   the extension in. Tokens stay in trusted extension session storage and are
-   cleared on logout/browser-session end.
+   the side panel. Choose **Sign in on the VSual website**, complete sign-in in the
+   opened tab, and choose **Return to VSual**. Account identity and workspace
+   access are reported separately. No token copying or automatic recording occurs.
 5. The panel displays the actual shortcut. **Alt+Shift+A** is suggested; change
    it at `chrome://extensions/shortcuts` or `edge://extensions/shortcuts`.
    It is browser-scoped toggle activation, not global hold-to-talk.
@@ -219,6 +221,128 @@ With the local example configuration this is `http://127.0.0.1:3000/orders`;
 `localhost`, `/voice` and the home page do not match that configured address.
 The panel follows active-tab navigation without reading page content. After
 reloading the extension, reload the orders page too so its content script is ready.
+
+## Accessible sign-in
+
+Start from the extension's **Sign in on the VSual website** button. The opened
+`/auth/sign-in` page supports labelled email/password fields, password managers,
+paste, Show password, English/Vietnamese feedback, Cancel and Google when enabled.
+It displays the account being connected. A website account is shown separately;
+it is never silently imported into the extension. Use **Sign out and change
+account** to replace an extension account. Authentication does not grant workspace
+membership: a signed-in user without access receives an explicit explanation.
+
+The worker creates a five-minute attempt and owns the new tab. The page obtains
+an extension-held random proof through targeted `chrome.runtime.sendMessage`;
+the worker checks the exact configured origin, `/auth/sign-in` path, recipient,
+top frame, owned tab, attempt, proof and expiry. The URL carries only public attempt
+identifiers. Email/password commands go directly to Supabase through the worker;
+no extension access/refresh token is returned to the website, DOM, content script
+or URL. There is no database handoff or new migration. Concurrent submissions,
+expired/replayed attempts and callbacks after cancellation are rejected.
+
+For extension Google sign-in, the worker owns `launchWebAuthFlow`, the original
+PKCE verifier and the single code exchange. Supabase returns a one-use PKCE code
+to the exact browser callback; the worker exchanges it with the recorded flow ID.
+For ordinary website Google sign-in, the existing Supabase cookie client owns its
+verifier; `/auth/callback` consumes short-lived non-secret flow metadata and exchanges
+once into website cookies. These are independent sessions, not two clients sharing
+one refresh token. No Google service scopes beyond identity are requested.
+
+Extension credentials and pending attempts live only in trusted
+`chrome.storage.session`. The worker coordinates refresh on validation/protected
+requests, with one in-flight refresh per session and no panel refresh loops.
+Closing/reopening the panel or suspending the worker retains sign-in. Browser
+restart, extension reload/update or disabling it may clear sign-in. Questions,
+capture consent, evidence and audio remain panel-session data. Only non-sensitive
+language/voice preferences persist on the device. Offline validation preserves
+credentials but blocks protected work until Retry succeeds; revoked sessions require
+sign-in. Provider requests are never silently replayed after uncertain failures.
+
+Logout immediately clears extension work and credentials, invalidates pending
+attempts/refreshes, then attempts Supabase **local-session** revocation. The website
+remains signed in independently. Offline/unconfirmed revocation is reported;
+already issued JWTs may remain valid until expiry. Old callbacks cannot reconnect
+the account. Return restores the original tab/window where possible; reopening a
+closed panel may still require the pinned VSual button or shortcut. Signing in
+never starts the microphone, captures a page or submits an old question.
+
+### Google configuration (manual; not applied by this branch)
+
+The stable Preview origin supplied for this project is
+`https://web-git-dev-anhminhnts2004-9847s-projects.vercel.app`.
+Use these exact destinations; do not add `*.vercel.app` or arbitrary return URLs.
+
+| Where                                                    | Setting and value                                                                                                                                                                                                                       |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Google Cloud OAuth client                                | Application type **Web application** (Supabase handles Google's callback)                                                                                                                                                               |
+| Google authorised JavaScript origins                     | `http://127.0.0.1:3000` and `https://web-git-dev-anhminhnts2004-9847s-projects.vercel.app`                                                                                                                                              |
+| Google authorised redirect URI                           | `https://yvhrbfyriauyyxyazqlo.supabase.co/auth/v1/callback` — Google's return to Supabase, **not** VSual's callback                                                                                                                     |
+| Google consent/audience                                  | Identity scopes only (`openid`, email, profile). If the OAuth app is in Testing, add the intended testers                                                                                                                               |
+| Supabase → Authentication → Sign In / Providers → Google | Enable Google; enter that Web client ID and client secret **here only**; retain nonce/refresh-token protections                                                                                                                         |
+| Supabase → URL Configuration → Redirect URLs             | `http://127.0.0.1:3000/auth/callback`; `https://web-git-dev-anhminhnts2004-9847s-projects.vercel.app/auth/callback`; `https://gnceohmhjehhlkfbhlhdhaheimilkocd.chromiumapp.org/auth`                                                    |
+| Supabase Site URL                                        | Use the intended stable website origin; for this Preview journey: `https://web-git-dev-anhminhnts2004-9847s-projects.vercel.app`                                                                                                        |
+| Local `apps/web/.env.local`                              | `AUTH_SITE_URL=http://127.0.0.1:3000`; `GOOGLE_AUTH_ENABLED=true` **after** provider setup; existing Supabase/database/workspace/origin settings above                                                                                  |
+| Vercel Preview environment                               | `AUTH_SITE_URL=https://web-git-dev-anhminhnts2004-9847s-projects.vercel.app`; `GOOGLE_AUTH_ENABLED=true` after setup. Keep Next.js preset and `apps/web` root; redeploy after environment changes                                       |
+| Extension `apps/extension/.env.local`                    | `VITE_API_BASE_URL` equals local origin or that exact Preview origin; existing public Supabase settings stay unchanged. Rebuild and reload                                                                                              |
+| Backend `VOICE_ALLOWED_ORIGINS`                          | Include `chrome-extension://gnceohmhjehhlkfbhlhdhaheimilkocd`; use the actual installed ID if different                                                                                                                                 |
+| Production later                                         | Once an exact production origin is chosen, add that origin to Google's origins, its `/auth/callback` to Supabase, and set production `AUTH_SITE_URL`/extension backend/origin allowlists accordingly. No production hostname is assumed |
+
+The extension callback is generated by `chrome.identity.getRedirectURL('auth')`;
+another unpacked install/Edge ID needs its own exact callback and backend origin
+entry. Never put a Google client secret in VSual env files or extension bundles.
+`GOOGLE_AUTH_ENABLED` is a deployment capability flag, not a live provider check.
+When false/missing, the page explains that Google is unavailable and offers email.
+Vercel Preview protection is separate from Supabase auth; an HTML protection
+response must be resolved through deployment access settings, not a token embedded
+in the extension. See [Supabase Google setup](https://supabase.com/docs/guides/auth/social-login/auth-google),
+[redirect configuration](https://supabase.com/docs/guides/auth/redirect-urls), and
+[Chrome identity](https://developer.chrome.com/docs/extensions/reference/api/identity).
+
+### Authentication acceptance
+
+Local verification on Node 24.17.0 / npm 11.13.0: clean `npm ci` and
+`npm run check` passed (302 tests, typecheck, lint, formatting and both builds).
+The mocked integration exercises website commands, the actual extension session
+manager/Supabase SDK, backend identity/workspace checks, grounded evidence,
+session restoration and logout. Production-server HTTP checks returned 200 for
+sign-in/orders/config and 401 for signed-out access, grounded-read, STT and TTS.
+Configured server secrets were absent from both browser build outputs. The Vite
+build reports advisory `use client` directive warnings for shared React components;
+both production builds still complete successfully.
+
+Automated tests mock Supabase, browser APIs, database and providers. A read-only
+Supabase Auth settings check confirmed Google and email providers are enabled;
+the maintainer subsequently reported Google sign-in working during local testing.
+The detailed browser acceptance sequence below, NVDA, password-manager integration
+and focus/zoom checks still require manual verification. No browser automation
+surface was available here to independently verify the interactive journey.
+
+1. Start the web server and build/load the extension as above. Open `/orders`.
+   Choose extension Sign in, enter an existing provisioned user's credentials on
+   the website, then Return. Verify the account and workspace status. Test an
+   invalid password and an existing account without membership separately.
+2. Ask the canonical orders question below, inspect both evidence rows, close and
+   reopen the panel, grant page-processing permission again, and ask again. Closing
+   the panel retains authentication, not its sensitive question/evidence state.
+3. Stop the service worker from browser extension tools and reopen the panel;
+   sign-in should survive. Restart the browser/reload the extension; fresh sign-in
+   may be required. Keep website and extension open across access-token expiry;
+   each must refresh its own session without repeated sign-in prompts.
+4. Cancel sign-in, close its tab, retry, and complete an older Google window late:
+   only the current attempt may connect. Test Google success, cancellation and an
+   unprovisioned Google account after configuration. A website signed in as A must
+   not silently replace extension B or bypass explicit sign-in.
+5. Disconnect the network during validation: Retry and Sign out stay available,
+   credentials survive recovery, protected work stays blocked. Revoke the session
+   through your existing account controls: retry should require sign-in.
+6. Sign out while recording, requesting an answer, generating/playing speech or
+   refreshing; old text/audio must never return. Switch A→B and confirm no captured
+   data, drafts, consent or evidence from A remains. Signed-out requests must fail
+   before Avis/ElevenLabs. Confirm website logout scope stays independent.
+7. Repeat with keyboard only and NVDA on Windows: Tab/Shift+Tab, Enter/Space,
+   Escape, Show password, password-manager fill/paste, EN/VI errors, visible focus,
+   200–400% zoom and a narrow panel. No spoken password or app speech is required.
 
 ## Ask about captured orders
 
@@ -456,6 +580,10 @@ Ask. Its answer controller sends only the validated answer text through the exis
 `/api/voice/speak` transport. This is the bounded integration point for later
 reasoning work. Model/page content never grants action authority.
 
-Review this work on `feat/grounded-read`, based on `dev`. Merge a reviewed feature
-before starting a separate follow-up branch for broader scope or pending acceptance.
+Review this work on `feat/accessible-auth`, based on `dev` at grounded-read merge
+`ea753af`. Merge a reviewed feature before starting a separate follow-up branch
+for broader scope or pending acceptance. When committing a completed feature,
+split changes into focused commits with concise messages that explain their purpose
+to technical and non-technical readers. Keep related tests with their implementation.
+Use this approach for subsequent feature branches as well.
 No automatic commit, push, merge or deployment is part of these scripts.
