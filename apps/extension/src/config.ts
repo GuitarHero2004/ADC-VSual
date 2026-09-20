@@ -1,4 +1,4 @@
-import { publicOrigin } from './config-values.ts';
+import { ordersOrigins, publicOrigin } from './config-values.ts';
 
 export function getExtensionConfig() {
   const backend = publicOrigin(
@@ -12,5 +12,10 @@ export function getExtensionConfig() {
     !publishableKey?.startsWith('sb_publishable_')
   )
     return null;
-  return { backend, supabaseUrl, publishableKey };
+  return {
+    backend,
+    supabaseUrl,
+    publishableKey,
+    ordersOrigins: ordersOrigins(import.meta.env),
+  };
 }
