@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { createServerClient, parseCookieHeader } from '@supabase/ssr';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, isAuthError, type User } from '@supabase/supabase-js';
 import { Pool, type PoolClient } from 'pg';
 import { requireSupabaseConfig } from '../supabase/env.ts';
 import { voiceDatabaseConfig } from './database-config.ts';
@@ -110,25 +110,33 @@ async function withIdentity<T>(
   }
 }
 
-export async function verifyVoiceUser(
-  request: Request,
-): Promise<VoiceIdentity> {
+function unauthenticated() {
+  return new VoiceError(
+    'UNAUTHENTICATED',
+    'Your session has expired. Sign in again.',
+    401,
+  );
+}
+
+function authUnavailable() {
+  return new VoiceError(
+    'AUTH_UNAVAILABLE',
+    'We could not verify your session right now. Check your connection and try again.',
+    503,
+    true,
+  );
+}
+
+/** Verify with Supabase Auth; stored client claims alone never authorize access. */
+export async function verifyAuthUser(request: Request): Promise<User> {
   const authorization = request.headers.get('Authorization');
   const cookieHeader = request.headers.get('Cookie');
   if (!authorization && !cookieHeader) {
-    throw new VoiceError(
-      'UNAUTHENTICATED',
-      'Sign in to use the voice test.',
-      401,
-    );
+    throw new VoiceError('UNAUTHENTICATED', 'Sign in to use VSual.', 401);
   }
   const bearer = authorization?.match(/^Bearer ([^\s]+)$/i)?.[1];
   if (authorization && (!bearer || bearer.length > 16_384)) {
-    throw new VoiceError(
-      'UNAUTHENTICATED',
-      'Your session has expired. Sign in again.',
-      401,
-    );
+    throw unauthenticated();
   }
 
   let config: ReturnType<typeof requireSupabaseConfig>;
@@ -164,22 +172,57 @@ export async function verifyVoiceUser(
         },
       });
 
-  const { data, error } = await supabase.auth.getUser(bearer);
-  if (request.signal.aborted) {
-    throw new VoiceError('CANCELLED', 'The voice request was cancelled.', 499);
+  try {
+    const { data, error } = await supabase.auth.getUser(bearer);
+    if (request.signal.aborted) {
+      throw new VoiceError('CANCELLED', 'The request was cancelled.', 499);
+    }
+    if (error) {
+      // A temporary network/service failure is not evidence of a revoked session.
+      if (
+        error.name === 'AuthSessionMissingError' ||
+        error.status === 401 ||
+        error.status === 403 ||
+        (error.status === 400 &&
+          [
+            'bad_jwt',
+            'session_not_found',
+            'refresh_token_not_found',
+            'refresh_token_already_used',
+          ].includes(error.code ?? ''))
+      ) {
+        throw unauthenticated();
+      }
+      throw authUnavailable();
+    }
+    if (!data.user || !uuidPattern.test(data.user.id)) throw unauthenticated();
+    return data.user;
+  } catch (error) {
+    if (request.signal.aborted) {
+      throw new VoiceError('CANCELLED', 'The request was cancelled.', 499);
+    }
+    if (error instanceof VoiceError) throw error;
+    if (isAuthError(error) && (error.status === 401 || error.status === 403)) {
+      throw unauthenticated();
+    }
+    throw authUnavailable();
   }
-  if (error || !data.user) {
+}
+
+/** Reuse only a User already verified by verifyAuthUser in this request. */
+export async function verifyVoiceIdentity(
+  request: Request,
+  user: User,
+): Promise<VoiceIdentity> {
+  // app_metadata is identity-admin controlled. Never read this mapping from user_metadata.
+  const userId: unknown = user.app_metadata.va_user_id;
+  if (typeof userId !== 'string' || !uuidPattern.test(userId)) {
     throw new VoiceError(
-      'UNAUTHENTICATED',
-      'Your session has expired. Sign in again.',
-      401,
+      'FORBIDDEN',
+      'Your account does not have active access to this workspace.',
+      403,
     );
   }
-
-  // app_metadata is identity-admin controlled. Never read this mapping from user_metadata.
-  const userId: unknown = data.user.app_metadata.va_user_id;
-  if (typeof userId !== 'string' || !uuidPattern.test(userId))
-    throw setupError();
   const workspaceId =
     request.headers.get('X-Workspace-ID') ??
     process.env.VA_VOICE_WORKSPACE_ID?.trim();
@@ -189,9 +232,15 @@ export async function verifyVoiceUser(
     }
     throw setupError();
   }
-  const identity = { subject: data.user.id, userId, workspaceId };
+  const identity = { subject: user.id, userId, workspaceId };
   await withIdentity(identity, async () => {});
   return identity;
+}
+
+export async function verifyVoiceUser(
+  request: Request,
+): Promise<VoiceIdentity> {
+  return verifyVoiceIdentity(request, await verifyAuthUser(request));
 }
 
 export async function reserveVoiceRequest(

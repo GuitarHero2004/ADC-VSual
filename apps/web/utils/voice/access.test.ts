@@ -3,6 +3,8 @@ import { afterEach, beforeEach, mock, test } from 'node:test';
 import { Pool, type PoolClient } from 'pg';
 import {
   reserveVoiceRequest,
+  verifyAuthUser,
+  verifyVoiceIdentity,
   verifyVoiceUser,
   type VoiceIdentity,
 } from './access.ts';
@@ -189,7 +191,47 @@ test('user-controlled metadata cannot supply the application identity mapping', 
   userMapping = identity.userId;
   await assert.rejects(
     verifyVoiceUser(authenticatedRequest()),
-    code('SETUP_REQUIRED'),
+    code('FORBIDDEN'),
+  );
+  assert.equal(connectCount, 0);
+});
+
+test('a verified account without application mapping remains signed in but has no workspace access', async () => {
+  adminMapping = undefined;
+  const request = authenticatedRequest();
+  const user = await verifyAuthUser(request);
+  assert.equal(user.id, identity.subject);
+  await assert.rejects(verifyVoiceIdentity(request, user), code('FORBIDDEN'));
+  assert.equal(networkRequests.length, 1);
+  assert.equal(connectCount, 0);
+});
+
+for (const status of [429, 500, 503]) {
+  test(`Auth ${status} is temporarily unavailable, not a revoked session`, async () => {
+    authStatus = status;
+    await assert.rejects(
+      verifyVoiceUser(authenticatedRequest()),
+      (error: unknown) => {
+        assert.ok(error instanceof VoiceError);
+        assert.equal(error.code, 'AUTH_UNAVAILABLE');
+        assert.equal(error.status, 503);
+        assert.equal(error.retryable, true);
+        return true;
+      },
+    );
+    assert.equal(networkRequests.length, 1);
+    assert.equal(connectCount, 0);
+  });
+}
+
+test('network and timeout failures never report a confirmed expired session', async () => {
+  mock.method(console, 'error', () => {});
+  mock.method(globalThis, 'fetch', async () => {
+    throw new DOMException('synthetic timeout', 'TimeoutError');
+  });
+  await assert.rejects(
+    verifyVoiceUser(authenticatedRequest()),
+    code('AUTH_UNAVAILABLE'),
   );
   assert.equal(connectCount, 0);
 });
