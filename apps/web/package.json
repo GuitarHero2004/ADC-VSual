@@ -8,8 +8,9 @@
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
     "typecheck": "next typegen && tsc --noEmit",
-    "test": "node --conditions=react-server --test utils/elevenlabs/*.test.ts utils/voice/*.test.ts",
-    "check:elevenlabs": "node --conditions=react-server --env-file-if-exists=.env.local scripts/check-elevenlabs.ts"
+    "test": "node --conditions=react-server --test utils/elevenlabs/*.test.ts utils/voice/*.test.ts utils/grounded/*.test.ts",
+    "check:elevenlabs": "node --conditions=react-server --env-file-if-exists=.env.local scripts/check-elevenlabs.ts",
+    "check:avis": "node --conditions=react-server --env-file-if-exists=.env.local scripts/check-avis.ts"
   },
   "dependencies": {
     "@adc/contracts": "*",
@@ -18,6 +19,7 @@
     "@supabase/ssr": "0.12.7",
     "@supabase/supabase-js": "2.116.0",
     "next": "16.3.5",
+    "openai": "7.20.0",
     "pg": "8.23.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",

@@ -23,7 +23,7 @@ type Dependencies = {
   ) => Promise<Uint8Array<ArrayBuffer>>;
 };
 
-function corsHeaders(request: Request) {
+export function corsHeaders(request: Request) {
   const origin = request.headers.get('origin');
   const headers = new Headers({ 'Cache-Control': 'no-store', Vary: 'Origin' });
   if (!origin) {

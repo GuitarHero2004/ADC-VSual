@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { extensionHosts, publicOrigin } from './config-values.ts';
+import {
+  extensionHosts,
+  ordersMatches,
+  ordersOrigins,
+  publicOrigin,
+} from './config-values.ts';
 import { createManifest } from '../manifest.ts';
 
 test('backend origins reject credentials, paths, unsafe schemes and remote HTTP', () => {
@@ -11,6 +16,7 @@ test('backend origins reject credentials, paths, unsafe schemes and remote HTTP'
     'https://example.test?key=value',
     'http://example.test',
     'https://example.test#fragment',
+    'https://*.vercel.app',
   ]) {
     assert.equal(publicOrigin(value), null);
   }
@@ -30,12 +36,45 @@ test('manifest limits permissions to configured hosts without secret settings', 
     'https://project.supabase.co/*',
   ]);
   assert.deepEqual(manifest.permissions, ['sidePanel', 'storage']);
+  assert.deepEqual(manifest.content_scripts[0]?.matches, [
+    'https://backend.example.test/orders*',
+  ]);
   assert.ok(!JSON.stringify(manifest).includes('private-sentinel'));
   assert.ok(!JSON.stringify(manifest).includes('<all_urls>'));
   assert.equal(
     manifest.commands['toggle-voice'].suggested_key.default,
     'Alt+Shift+A',
   );
+});
+
+test('orders allowlist accepts exact origins, fails closed on malformed entries and never wildcards subdomains', () => {
+  const environment = {
+    VITE_ORDERS_ORIGINS: 'http://localhost:3000, https://demo.example.test',
+  };
+  assert.deepEqual(ordersOrigins(environment), [
+    'http://localhost:3000',
+    'https://demo.example.test',
+  ]);
+  assert.deepEqual(ordersMatches(environment), [
+    'http://localhost/orders*',
+    'https://demo.example.test/orders*',
+  ]);
+  assert.deepEqual(
+    ordersOrigins({ VITE_ORDERS_ORIGINS: 'https://*.vercel.app' }),
+    [],
+  );
+  assert.deepEqual(
+    ordersOrigins({ VITE_ORDERS_ORIGINS: 'https://demo.example.test,/orders' }),
+    [],
+  );
+  assert.deepEqual(
+    ordersOrigins({ VITE_ORDERS_ORIGINS: 'https://demo.example.test/orders' }),
+    [],
+  );
+  const manifest = createManifest(environment);
+  assert.ok(!JSON.stringify(manifest).includes('web_accessible_resources'));
+  assert.equal(manifest.content_scripts[0]?.all_frames, false);
+  assert.deepEqual(manifest.content_scripts[0]?.js, ['orders-content.js']);
 });
 
 test('credential-free builds use only the development backend host', () => {

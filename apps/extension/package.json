@@ -7,7 +7,7 @@
     "dev": "vite build --watch",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/activation.test.ts src/config-values.test.ts src/auth.test.ts"
+    "test": "node --test src/*.test.ts"
   },
   "dependencies": {
     "@adc/contracts": "*",
@@ -18,6 +18,8 @@
   },
   "devDependencies": {
     "@types/chrome": "0.3.0",
+    "@types/jsdom": "30.0.0",
+    "jsdom": "30.1.0",
     "vite": "8.3.0"
   }
 }

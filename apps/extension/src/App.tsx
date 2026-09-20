@@ -24,6 +24,7 @@ import {
 import { getExtensionConfig } from './config.ts';
 import { usePanelActivation } from './use-activation.ts';
 import { text } from './i18n.ts';
+import { GroundedPanel } from './GroundedPanel.tsx';
 
 const configuration = getExtensionConfig();
 const auth = configuration ? createExtensionAuth(configuration) : null;
@@ -61,41 +62,56 @@ function SignedInVoice({
       alive.current = false;
     };
   }, []);
-  const transport = useMemo(
-    () =>
-      createVoiceTransport({
-        baseUrl: configuration!.backend,
-        async getHeaders() {
-          const { data, error } = await client.auth.getSession();
-          if (
-            error ||
-            !data.session ||
-            isExtensionSignedOut() ||
-            data.session.user.id !== session.user.id ||
-            !alive.current
-          ) {
-            if (alive.current) onExpired();
-            throw Object.assign(new Error('Sign in again to continue.'), {
-              code: 'UNAUTHENTICATED',
-            });
-          }
-          return { Authorization: `Bearer ${data.session.access_token}` };
-        },
-        onUnauthenticated() {
+  const requestOptions = useMemo(
+    () => ({
+      baseUrl: configuration!.backend,
+      async getHeaders() {
+        const { data, error } = await client.auth.getSession();
+        if (
+          error ||
+          !data.session ||
+          isExtensionSignedOut() ||
+          data.session.user.id !== session.user.id ||
+          !alive.current
+        ) {
           if (alive.current) onExpired();
-        },
-      }),
+          throw Object.assign(new Error('Sign in again to continue.'), {
+            code: 'UNAUTHENTICATED',
+          });
+        }
+        return { Authorization: `Bearer ${data.session.access_token}` };
+      },
+      onUnauthenticated() {
+        if (alive.current) onExpired();
+      },
+    }),
     [client, session.user.id, onExpired],
+  );
+  const transport = useMemo(
+    () => createVoiceTransport(requestOptions),
+    [requestOptions],
   );
   return (
     <div onClickCapture={onActivity}>
-      <VoiceTest
-        sessionKey={session.user.id}
-        transport={transport}
-        uiLanguage={language}
-        onReady={onReady}
-        preferencesKey="voice:extension-preferences"
-      />
+      {setupTab ? (
+        <VoiceTest
+          sessionKey={session.user.id}
+          transport={transport}
+          uiLanguage={language}
+          onReady={onReady}
+          preferencesKey="voice:extension-preferences"
+        />
+      ) : (
+        <GroundedPanel
+          sessionKey={session.user.id}
+          language={language}
+          voiceTransport={transport}
+          backend={configuration!.backend}
+          getHeaders={requestOptions.getHeaders}
+          onExpired={onExpired}
+          onReady={onReady}
+        />
+      )}
     </div>
   );
 }
@@ -301,9 +317,21 @@ export function App() {
   return (
     <div className="panel">
       <header>
-        <p className="eyebrow">{t.label}</p>
-        <h1>Browser Accessibility Agent</h1>
-        <p>{t.description}</p>
+        <p className="eyebrow">
+          {setupTab
+            ? t.label
+            : language === 'vi'
+              ? 'Trợ lý đọc bảng đơn hàng'
+              : 'Orders reading companion'}
+        </p>
+        <h1>VSual</h1>
+        <p>
+          {setupTab
+            ? t.description
+            : language === 'vi'
+              ? 'Hỏi về số đơn hoàn thành trên bảng mẫu và kiểm tra dữ liệu nguồn.'
+              : 'Ask about completed orders on the demo dashboard and inspect the source evidence.'}
+        </p>
         <label htmlFor="interface-language">{t.uiLanguage}</label>
         <select
           id="interface-language"
