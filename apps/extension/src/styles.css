@@ -163,3 +163,56 @@ button:disabled {
     outline-color: Highlight;
   }
 }
+
+.grounded-panel {
+  min-width: 0;
+}
+.grounded-panel fieldset {
+  min-width: 0;
+  margin-block: 1rem;
+  border: 1px solid #536887;
+}
+.grounded-panel .table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.grounded-panel table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.grounded-panel caption {
+  text-align: left;
+  font-weight: 700;
+  padding-block: 0.75rem;
+}
+.grounded-panel th,
+.grounded-panel td {
+  border: 1px solid #536887;
+  padding: 0.6rem;
+  text-align: left;
+}
+.grounded-panel a {
+  color: #004e9b;
+}
+.grounded-panel .primary {
+  color: white;
+  background: #0055a8;
+  border-color: #0055a8;
+}
+.grounded-panel .primary:hover:enabled {
+  background: #003c78;
+}
+.grounded-panel .primary:disabled {
+  color: #465265;
+  background: #edf0f4;
+}
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 44px;
+}
+.checkbox-row input {
+  width: 1.35rem;
+  height: 1.35rem;
+}
