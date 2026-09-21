@@ -7,7 +7,7 @@ VSual answers bounded questions about the rendered **synthetic `/orders` dashboa
 Allow page processing, then type and select **Ask VSual**, or record a question
 and pause for five seconds to submit automatically. The configured model through Avis interprets the comparison; application code calculates
 the answer from captured rows and exposes the evidence. English and Vietnamese are
-supported. Browser actions, other websites and wake words are outside this feature.
+supported. Reading other websites, browser actions and wake words are outside this feature.
 
 The separate **`/voice` setup** remains a labelled speech test: its read-back repeats
 supplied text. In the companion, **Read answer** speaks the validated answer instead.
@@ -15,6 +15,124 @@ Companion answer speech defaults ON for new preferences; recording cues and the
 standalone voice test remain optional. Text and evidence work with Speech OFF.
 
 ## Companion interface
+
+Ordinary HTTP/HTTPS pages now contain a **floating VSual companion**, subject to
+browser site access. Its circular logo button has an accessible **Open VSual
+companion** name and status description. Insertion does not capture page content,
+start the microphone, call an AI provider or move focus. Activate it to open the
+companion. Reading is still restricted to the configured synthetic `/orders`
+dashboard; other pages show that page assistance is unavailable.
+The floating surface uses a rounded white card, blue logo launcher and pale
+section cards, with large text and visible keyboard focus. Its styling is scoped
+to the floating document; the side-panel fallback and voice setup page retain
+their existing presentation.
+The extension toolbar button opens this floating interface on a registered web
+page; the existing shortcut retains its record/finish/cancel/stop behaviour.
+
+Choose **Sign in to VSual** inside the companion. Email/password entry, account
+state, sign-out and settings remain inside its extension-owned frame. Google uses
+Chrome's secure authentication window and returns to the same companion; Google
+credentials are never embedded in the page. Existing website and side-panel sign-in
+remain fallback journeys. Browser microphone permission/setup may also require
+browser UI outside the frame. No recording starts on sign-in.
+
+**Collapse** keeps the same draft, answer, evidence and audio cache and returns to
+the launcher when idle. During recording, processing or playback, a compact toolbar
+keeps status, **Stop and review**, **Cancel recording** and **Stop speech** available
+as appropriate. **End** stops recording, timers, requests and
+playback, clears transient content and removes the frame; it does not sign out.
+Use the extension button or shortcut to deliberately reopen a fresh companion.
+Settings remain behind **Settings**. The frame moves away from focused page
+controls and scrolls when the viewport cannot fit the enlarged interface.
+Switching tabs cancels recording, pending questions and speech in the hidden
+companion and clears its transient draft, answer and page-processing consent.
+Returning does not replay or submit anything automatically. Sign-in is preserved.
+
+The frame is an extension document (`floating.html`), not page DOM or a Chrome
+action popup. Only that document holds questions, answers, evidence and audio;
+the isolated content script receives layout/focus instructions only. The worker
+binds it to the exact source URL, tab, top-level document, frame document and a
+fresh bootstrap identifier. Capture/verification always targets that document.
+No tokens travel through page messages; no `window.postMessage` bridge is used.
+The existing worker still owns authentication and refresh in trusted session
+storage. Shadow DOM is used for layout isolation, not as the security boundary.
+The host uses a non-modal manual popover in the document's top layer, with a fixed
+z-index fallback. This does not cover browser chrome, other applications, restricted
+browser pages, the browser's PDF viewer, or every fullscreen/later modal surface.
+A page can remove or block an embedded frame. VSual does not repeatedly reinsert
+it or compete with later page dialogs. VSual `/auth/*` pages are excluded.
+
+The metadata-only floating content script now matches HTTP/HTTPS pages and exposes
+`floating.html`/assets to those pages. Chrome may request broader site access when
+loading/updating the extension. No new environment variable is needed. The separate
+orders content script and worker still enforce the configured exact origin/port
+and `/orders` path before extraction. Our frame is outside the extraction surface.
+Rebuild/reload the extension **and refresh already-open tabs** after updating.
+The current side panel remains the fallback on restricted/unregistered tabs,
+and is available from floating
+**Settings → Open side panel**. That switch stops work; drafts/answers are not
+transferred between surfaces. Microphone capture stays in the existing
+extension-document voice controller. Use **Microphone setup** if permission is
+needed; a host Permissions Policy may still require the side-panel fallback.
+While mounted, a metadata-only 20-second heartbeat keeps its worker binding alive;
+it performs no capture, authentication or provider request. Close stops it.
+Unexpected worker reconnection starts a fresh frame without resuming old work;
+after failed reconnection or extension reload, refresh the page. Navigation replaces
+the frame binding and clears old transient work; it never reuses a previous page's
+answer or processing consent on the next page.
+
+The generated logo lives at `apps/extension/src/assets/vsual-logo.png`. It was made
+with the built-in image generator from this brief: a cobalt-blue circular VSual
+mark, bold white V with an integrated speech symbol, transparent corners, no text.
+
+Floating verification uses mocked providers in CI. The Chrome 153 unpacked-frame
+check additionally exercised native frame/auth-message binding and actual orders
+capture/verification with mocked account, answer and audio responses. Collapse,
+cached Repeat, Speech OFF, End removal, native toolbar duplicate activation and
+fresh reopening, 40-second idle preservation, keyboard Settings/language/Escape
+and a 302px frame with text enlarged to twice its default size passed. A further
+launcher check passed Enter-to-open, collapse focus restoration and Vietnamese
+launcher reflow at twice the default text size. This does not
+verify live account access, microphone permission prompts, a physical microphone,
+audible pronunciation, NVDA or Edge. Use the manual sequence below for those.
+The circular/all-sites/inline-auth update passed a further Chrome 153 check:
+80px circular launcher, native top-layer popover without focus stealing, actual
+inline form and worker authentication against mocked Auth HTTP, no extra sign-in
+tab, empty-field validation, Google-unavailable recovery, native orders capture,
+cached Repeat, sign-out and End. A second local origin/port with an ordinary
+maximum-z-index overlay stayed below VSual, had page processing blocked, and passed
+320px viewport/200% text checks. Real Google login and microphone use remain manual.
+`npm run check` passed: **182 extension + 173 backend + 2 web UI + 68 shared voice
+= 425 tests**, typecheck, lint, formatting and both production builds. The extension
+build retains the existing non-failing shared-component `use client` warnings.
+A scan of 27 browser output files found none of the three configured private
+values checked; no values were printed.
+
+Floating acceptance on Windows:
+
+1. Start the web app and build/load the extension using the commands below. Open
+   `http://127.0.0.1:3000/orders` (or the configured orders origin), then refresh.
+   Confirm one small VSual launcher, unchanged page focus and no recording/request.
+2. Open VSual, choose Sign in to VSual and enter email/password in the floating form
+   (or complete Google's secure window), then allow page processing.
+   Turn Speech OFF in Settings. Type the canonical July/August comparison and
+   choose Ask VSual; inspect the answer and its two evidence rows.
+3. Collapse/reopen: draft and answer stay; no request or narration repeats. Enable
+   Speech, submit again, then Stop and Read again. Repeat must not call TTS again.
+4. Allow/deny microphone permission. Record while compact; pause five seconds,
+   then test continued speech resetting the timer. Test Stop and review separately:
+   the transcript waits for Ask VSual. Cancel discards it. Speech stops before recording.
+5. During recording, transcription, an answer request and TTS, choose End, navigate
+   away, or sign out. No late text/audio may return. End keeps sign-in; reopening
+   starts with empty transient content and fresh processing consent.
+6. Reopen using the extension button and the assigned shortcut; test a cold worker
+   and repeated activation. Check the side-panel/microphone-setup fallback.
+7. Repeat with Tab/Shift+Tab, Enter/Space and Escape, then NVDA. Check English and
+   Vietnamese, visible focus, no full-answer live-region duplication, a narrow
+   viewport, 200% zoom/text and page controls near each corner of the toolbar.
+8. Visit another ordinary website: the circular launcher remains available, but
+   page processing is unavailable. Sign-in/settings work there without capturing
+   that page. Switch tabs during recording or speech; the hidden companion stops.
 
 The extension is the working interface: **Current page → Your question → Ask VSual
 → Answer → View evidence**. The page status distinguishes unsupported pages,
@@ -366,9 +484,10 @@ npm run build --workspace=@adc/extension
 3. Copy its extension ID into the backend's `VOICE_ALLOWED_ORIGINS` as
    `chrome-extension://ID`, then restart the backend or redeploy.
 4. Pin **VSual - Accessible browser companion**. Its toolbar button opens
-   the side panel. Choose **Sign in on the VSual website**, complete sign-in in the
-   opened tab, and choose **Return to VSual**. Account identity and workspace
-   access are reported separately. No token copying or automatic recording occurs.
+   the floating companion on ordinary permitted web pages. Choose **Sign in to
+   VSual** and complete its inline form; Google uses its secure browser window.
+   The side panel remains a fallback on restricted pages. Account identity and
+   workspace access are reported separately. No token copying or automatic recording occurs.
 5. **Settings** displays the actual shortcut. **Alt+Shift+A** is suggested; change
    it at `chrome://extensions/shortcuts` or `edge://extensions/shortcuts`.
    It is browser-scoped toggle activation, not global hold-to-talk.
@@ -397,15 +516,23 @@ reloading the extension, reload the orders page too so its content script is rea
 
 ## Accessible sign-in
 
-Start from the extension's **Sign in on the VSual website** button. The opened
-`/auth/sign-in` page supports labelled email/password fields, password managers,
+The floating companion's **Sign in to VSual** opens email/password controls in the
+extension frame. Its five-minute attempt is bound to that frame's browser-supplied
+tab/frame/document identity and epoch. Only the worker calls Supabase and owns
+tokens/refresh. Cancel, End and navigation invalidate pending results; closing an
+unrelated page cannot cancel another frame's sign-in. Completed sessions survive
+closing the companion. Google uses the same worker PKCE owner and a secure browser
+identity window. No new callback or environment variable is required.
+
+For the preserved side-panel fallback, **Sign in on the VSual website** opens a
+`/auth/sign-in` page with labelled email/password fields, password managers,
 paste, Show password, English/Vietnamese feedback, Cancel and Google when enabled.
 It displays the account being connected. A website account is shown separately;
 it is never silently imported into the extension. Use **Sign out and change
 account** to replace an extension account. Authentication does not grant workspace
 membership: a signed-in user without access receives an explicit explanation.
 
-The worker creates a five-minute attempt and owns the new tab. The page obtains
+For that website fallback, the worker creates a five-minute attempt and owns the new tab. The page obtains
 an extension-held random proof through targeted `chrome.runtime.sendMessage`;
 the worker checks the exact configured origin, `/auth/sign-in` path, recipient,
 top frame, owned tab, attempt, proof and expiry. The URL carries only public attempt
@@ -626,8 +753,8 @@ or deployed backend as above.
    return to the companion, then try that shortcut. Confirm browser-scoped
    activation, predictable focus and reachable recording cancellation.
 2. Identify account/workspace status and **Current page**. If signed out, complete
-   the website sign-in using Tab, Shift+Tab, Enter/Space and a password manager or
-   Google, then **Return to VSual**. Verify the correct account and separate
+   the floating sign-in using Tab, Shift+Tab, Enter/Space and a password manager or
+   Google's secure window. Verify the correct account and separate
    workspace access. Open the supported `/orders` page and choose **Allow page
    processing**; permission alone must not capture/upload anything.
 3. Enter the canonical comparison below using only the keyboard. Enter adds a
@@ -807,10 +934,11 @@ voice; per-language selection and cloning are deferred.
   and `/api/grounded-read`. `utils/grounded` separates model interpretation, scope
   checks, deterministic math and HTTP validation. Existing `/api/voice/*` routes
   provide recorded transcription and optional speech.
-- `apps/extension`: the side panel owns question/capture/playback state; the orders
-  content script reads only the supported page through trusted extension messages.
-  The service worker retains browser command coordination. Tokens never enter the
-  target page or content script.
+- `apps/extension`: the floating extension frame and side-panel fallback reuse the
+  same companion/voice controllers. The orders content script reads only the
+  supported page through trusted extension messages. The worker binds floating
+  requests to their source document and retains authentication/command ownership.
+  Tokens never enter the target page or content script.
 - `packages/contracts`: browser-safe runtime schemas and inferred types.
 - `packages/voice-ui`: one recording/playback controller and bilingual UI shared
   by both apps, with an authenticated fetch transport.
@@ -826,13 +954,14 @@ uses MP3, a 30-second provider timeout and no automatic retries. See the officia
 [authentication](https://elevenlabs.io/docs/api-reference/authentication) and
 [model](https://elevenlabs.io/docs/overview/models) documentation.
 
-`GroundedPanel` submits reviewed `VoiceController` text only through an explicit
-Ask. Its answer controller sends only the validated answer text through the existing
+`GroundedPanel` submits typed/reviewed `VoiceController` text through an explicit
+Ask, or claims a silence-finished recording once through the existing automatic
+submission path. Its answer controller sends only validated answer text through the existing
 `/api/voice/speak` transport. This is the bounded integration point for later
 reasoning work. Model/page content never grants action authority.
 
-Review this work on `feat/automatic-voice-replies`, based on `dev` at companion-UI
-merge `a29b48c`. Merge a reviewed feature before starting a separate follow-up branch
+Review this work on `feat/floating-companion`, based on updated `dev` at automatic-voice
+merge `daf9708` (PR #11). Merge a reviewed feature before starting a separate follow-up branch
 for broader scope or pending acceptance. When committing a completed feature,
 split changes into focused commits with concise messages that explain their purpose
 to technical and non-technical readers. Keep related tests with their implementation.
