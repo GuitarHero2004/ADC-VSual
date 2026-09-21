@@ -23,6 +23,18 @@ export const groundedText = {
       'App speech is off. Enable it in Settings or use your screen reader.',
     readAgain: 'Read again',
     speechStopped: 'Speech stopped.',
+    answerSpeechFailed:
+      'The text answer is available, but its audio could not be generated or played.',
+    voiceHeld:
+      'Transcript ready. The question was not sent; see the explanation below.',
+    voiceHeldBusy:
+      'Your recording was transcribed, but another question is still being processed. Wait for it to finish or cancel it, then select Ask VSual to send this transcript.',
+    voiceHeldPermission:
+      'Your recording was transcribed, but the question was not sent because page-processing permission is missing. Allow page processing, review the transcript, then select Ask VSual. Granting permission will not send it automatically.',
+    voiceHeldPage:
+      'Your recording was transcribed, but the question was not sent because a supported orders page could not be confirmed. Open the configured orders dashboard, check the active page and its permission, then select Ask VSual.',
+    voiceHeldLength:
+      'Your recording was transcribed, but the question was not sent because it exceeds 1,000 characters. Shorten it, then select Ask VSual.',
     speechPlaying: 'Reading the answer.',
     typingHelp:
       'Allow page processing, then type a question. Microphone setup is optional and available in Settings.',
@@ -60,10 +72,12 @@ export const groundedText = {
     read: 'Read answer',
     stop: 'Stop speech',
     repeat: 'Play / Repeat',
-    speech: 'Enable app speech',
+    speech: 'Speech on',
     speechHelp:
-      'Off by default. Your screen reader can read the full answer and evidence. Speech generation is optional and AI-generated.',
-    speed: 'Playback speed',
+      'New answers are read automatically using AI-generated speech. Turn off to use your screen reader. This does not control NVDA.',
+    playAnswer: 'Play answer',
+    retrySpeech: 'Retry speech',
+    playbackBlocked: 'Automatic playback was blocked. Select Play answer.',
     return: 'Return to page',
     returned: 'Returned to the source page.',
     fallback:
@@ -86,7 +100,7 @@ export const groundedText = {
       'Your answer will appear here after you ask. You can inspect the source table without AI.',
     privacy: 'Avis privacy policy (PDF)',
     speechPending:
-      'Speech is being prepared. Stop speech cancels playback preparation.',
+      'Preparing audio. You can stop speech or inspect the answer.',
   },
   vi: {
     readyPage: 'Sẵn sàng trên trang này.',
@@ -110,6 +124,17 @@ export const groundedText = {
       'Giọng đọc đang tắt. Bật trong Cài đặt hoặc dùng trình đọc màn hình.',
     readAgain: 'Đọc lại',
     speechStopped: 'Đã dừng giọng đọc.',
+    answerSpeechFailed:
+      'Câu trả lời dạng chữ vẫn còn, nhưng chưa thể tạo hoặc phát âm thanh.',
+    voiceHeld: 'Đã có văn bản. Câu hỏi chưa được gửi; xem giải thích bên dưới.',
+    voiceHeldBusy:
+      'Đã chép lời, nhưng câu hỏi khác vẫn đang được xử lý. Chờ hoàn tất hoặc hủy rồi chọn Hỏi VSual để gửi văn bản này.',
+    voiceHeldPermission:
+      'Đã chép lời, nhưng chưa gửi câu hỏi vì chưa có quyền xử lý trang. Cho phép xử lý trang, kiểm tra văn bản rồi chọn Hỏi VSual. Cấp quyền sẽ không tự gửi câu hỏi này.',
+    voiceHeldPage:
+      'Đã chép lời, nhưng chưa gửi câu hỏi vì chưa xác nhận được trang đơn hàng hỗ trợ. Mở bảng đơn hàng đã cấu hình, kiểm tra thẻ và quyền xử lý rồi chọn Hỏi VSual.',
+    voiceHeldLength:
+      'Đã chép lời, nhưng chưa gửi câu hỏi vì dài hơn 1.000 ký tự. Rút ngắn rồi chọn Hỏi VSual.',
     speechPlaying: 'Đang đọc câu trả lời.',
     typingHelp:
       'Cho phép xử lý trang rồi nhập câu hỏi. Micro là tùy chọn và có thể thiết lập trong Cài đặt.',
@@ -148,10 +173,12 @@ export const groundedText = {
     read: 'Đọc câu trả lời',
     stop: 'Dừng giọng đọc',
     repeat: 'Phát / Phát lại',
-    speech: 'Bật giọng đọc ứng dụng',
+    speech: 'Bật giọng đọc',
     speechHelp:
-      'Mặc định tắt. Trình đọc màn hình có thể đọc đầy đủ câu trả lời và dữ liệu. Giọng đọc AI là tùy chọn.',
-    speed: 'Tốc độ phát',
+      'Tự động đọc câu trả lời mới bằng giọng AI. Tắt để dùng trình đọc màn hình. Cài đặt này không điều khiển NVDA.',
+    playAnswer: 'Phát câu trả lời',
+    retrySpeech: 'Thử lại giọng đọc',
+    playbackBlocked: 'Trình duyệt đã chặn tự phát. Chọn Phát câu trả lời.',
     return: 'Quay lại trang',
     returned: 'Đã quay lại trang nguồn.',
     fallback: 'Không tìm thấy vị trí trỏ trước đó. Đã quay lại tiêu đề trang.',
@@ -215,13 +242,21 @@ const errors: Record<string, [string, string]> = {
     'Your account or this extension does not have access. Check workspace and allowed-origin setup.',
     'Tài khoản hoặc tiện ích chưa có quyền. Kiểm tra không gian làm việc và nguồn được phép.',
   ],
+  APP_RATE_LIMITED: [
+    'VSual blocked this answer request because your application usage limit was reached. Your question is preserved. See the usage counts and estimated retry time below.',
+    'VSual đã chặn yêu cầu trả lời vì tài khoản đạt giới hạn sử dụng ứng dụng. Câu hỏi vẫn còn. Xem số lượt và thời điểm dự kiến thử lại bên dưới.',
+  ],
+  PROVIDER_RATE_LIMITED: [
+    'The answer provider reached through Avis is limiting requests. Your question is preserved. VSual has no confirmed reset time; retry manually later. Increasing VSual’s own limit does not change the provider’s limit.',
+    'Nhà cung cấp trả lời qua Avis đang giới hạn yêu cầu. Câu hỏi vẫn còn. VSual chưa có thời điểm khôi phục xác nhận; hãy tự thử lại sau. Tăng giới hạn VSual không thay đổi giới hạn nhà cung cấp.',
+  ],
   RATE_LIMITED: [
-    'The request limit was reached. Your question is preserved; try later.',
-    'Đã đạt giới hạn yêu cầu. Câu hỏi vẫn được giữ; hãy thử sau.',
+    'The request was rate limited, but this backend response did not identify whether VSual or the provider imposed it. Your question is preserved; no reset time is confirmed.',
+    'Yêu cầu bị giới hạn nhưng phản hồi máy chủ chưa xác định do VSual hay nhà cung cấp. Câu hỏi vẫn còn; chưa có thời điểm khôi phục xác nhận.',
   ],
   QUOTA_EXHAUSTED: [
-    'Provider quota is unavailable. Your question and source table are preserved.',
-    'Hết hạn mức nhà cung cấp. Câu hỏi và bảng nguồn vẫn được giữ.',
+    'The answer provider reported a credit or spending limit. Your question and source table are preserved. VSual has no confirmed remaining balance or reset time; ask the maintainer to check the provider account.',
+    'Nhà cung cấp trả lời báo giới hạn tín dụng hoặc chi tiêu. Câu hỏi và bảng nguồn vẫn còn. VSual chưa có số dư hoặc thời điểm khôi phục xác nhận; nhờ người quản lý kiểm tra tài khoản nhà cung cấp.',
   ],
   PROVIDER_ACCESS_REQUIRED: [
     'The configured AI model is unavailable to this account. Ask the project maintainer.',

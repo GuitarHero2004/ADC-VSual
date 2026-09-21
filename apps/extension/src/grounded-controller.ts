@@ -1,10 +1,12 @@
 import {
   groundedRequestSchema,
   groundedResponseSchema,
+  usageLimitSchema,
   type GroundedRequest,
   type GroundedResponse,
   type GroundedSnapshot,
   type UiLanguage,
+  type UsageLimit,
 } from '@adc/contracts';
 import type { OrdersPageContext } from './page-context.ts';
 
@@ -36,6 +38,7 @@ export interface GroundedState {
   result: GroundedResponse | null;
   resultLanguage: UiLanguage | null;
   error: string | null;
+  errorUsage: UsageLimit | null;
   stale: boolean;
 }
 export type GroundedTransport = (
@@ -54,6 +57,7 @@ export class GroundedController {
     result: null,
     resultLanguage: null,
     error: null,
+    errorUsage: null,
     stale: false,
   };
   private listeners = new Set<() => void>();
@@ -61,6 +65,7 @@ export class GroundedController {
   private contextGeneration = 0;
   private request: AbortController | undefined;
   private disposed = false;
+  private automaticSpeechRequest: string | null = null;
   private unsubscribe: () => void;
   private page: Page;
   private transport: GroundedTransport;
@@ -84,7 +89,13 @@ export class GroundedController {
   };
   private update(patch: Partial<GroundedState>) {
     if (this.disposed) return;
-    this.state = { ...this.state, ...patch };
+    this.state = {
+      ...this.state,
+      ...('error' in patch && patch.error !== 'APP_RATE_LIMITED'
+        ? { errorUsage: null }
+        : {}),
+      ...patch,
+    };
     this.listeners.forEach((listener) => listener());
   }
   private current(id: number) {
@@ -94,6 +105,20 @@ export class GroundedController {
     return (
       this.state.phase === 'reading' || this.state.phase === 'understanding'
     );
+  }
+  /** Only a fresh, accepted question can reserve one automatic read-back. */
+  claimAutomaticSpeech(): GroundedResponse | null {
+    const requestId = this.automaticSpeechRequest;
+    this.automaticSpeechRequest = null;
+    return !this.disposed &&
+      this.state.phase === 'ready' &&
+      !this.state.stale &&
+      this.state.result?.request_id === requestId
+      ? this.state.result
+      : null;
+  }
+  discardAutomaticSpeech() {
+    this.automaticSpeechRequest = null;
   }
   async refreshContext() {
     const lookup = ++this.contextGeneration;
@@ -150,6 +175,7 @@ export class GroundedController {
     this.update({ question });
   }
   cancel = () => {
+    this.discardAutomaticSpeech();
     ++this.generation;
     this.request?.abort();
     this.request = undefined;
@@ -160,6 +186,7 @@ export class GroundedController {
     });
   };
   private invalidate() {
+    this.discardAutomaticSpeech();
     const hadWork = this.busy || this.state.snapshot !== null;
     ++this.generation;
     this.request?.abort();
@@ -188,9 +215,18 @@ export class GroundedController {
           : rawCode === 'UNAVAILABLE'
             ? 'PAGE_UNAVAILABLE'
             : rawCode;
+    const usage = usageLimitSchema.safeParse(
+      code === 'APP_RATE_LIMITED' &&
+        typeof error === 'object' &&
+        error !== null &&
+        'usage' in error
+        ? error.usage
+        : undefined,
+    );
     this.update({
       phase: code === 'STALE_CONTEXT' ? 'stale' : 'error',
       error: code,
+      errorUsage: usage.success ? usage.data : null,
       stale: this.state.stale || code === 'STALE_CONTEXT',
     });
   }
@@ -231,7 +267,7 @@ export class GroundedController {
       this.fail(error, id);
     }
   }
-  async ask(language: UiLanguage) {
+  async ask() {
     if (this.busy || this.disposed) return;
     this.cancel();
     const id = this.generation;
@@ -249,7 +285,6 @@ export class GroundedController {
       const parsed = groundedRequestSchema.safeParse({
         request_id: crypto.randomUUID(),
         question: this.state.question,
-        language,
         consent: true,
         snapshot,
       });
@@ -275,9 +310,10 @@ export class GroundedController {
           code: 'STALE_CONTEXT',
         });
       if (!this.current(id)) return;
+      this.automaticSpeechRequest = result.request_id;
       this.update({
         result,
-        resultLanguage: language,
+        resultLanguage: result.answer_language,
         phase: 'ready',
         error: null,
       });
@@ -299,6 +335,8 @@ export class GroundedController {
       snapshot: null,
       result: null,
       consentOrigin: null,
+      error: null,
+      errorUsage: null,
     };
     this.disposed = true;
     this.listeners.clear();

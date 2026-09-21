@@ -3,8 +3,11 @@ import type {
   Recorder,
   VoiceDependencies,
 } from './controller.ts';
+import { observeAudioActivity } from './audio-activity.ts';
 
 export const browserDependencies: VoiceDependencies = {
+  observeAudioActivity,
+  now: () => performance.now(),
   async getMicrophone() {
     if (!navigator.mediaDevices?.getUserMedia) {
       throw Object.assign(new Error('Microphone unavailable'), {
@@ -52,6 +55,7 @@ export const browserDependencies: VoiceDependencies = {
   },
   createPlayback(url) {
     const audio = new Audio(url);
+    audio.preservesPitch = true;
     const playback = {
       get currentTime() {
         return audio.currentTime;
@@ -64,6 +68,7 @@ export const browserDependencies: VoiceDependencies = {
       },
       set playbackRate(value: number) {
         audio.playbackRate = value;
+        audio.preservesPitch = true;
       },
       onended: null as (() => void) | null,
       onerror: null as (() => void) | null,

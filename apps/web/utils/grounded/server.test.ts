@@ -4,6 +4,7 @@ import OpenAI from 'openai';
 import type { GroundedRequest, ComparisonInterpretation } from '@adc/contracts';
 import { interpretComparison, requireGroundedConfiguration } from './server.ts';
 import { VoiceError } from '../voice/errors.ts';
+import { calculateComparison } from './comparison.ts';
 
 const variables = [
   'AVIS_API_KEY',
@@ -27,6 +28,7 @@ let requests: Request[];
 let respond: (request: Request) => Response | Promise<Response>;
 const interpretation: ComparisonInterpretation = {
   decision: 'comparison',
+  answer_language: 'en',
   operation: 'compare',
   metric: 'completed_orders',
   region: 'South',
@@ -37,7 +39,6 @@ const interpretation: ComparisonInterpretation = {
 const request: GroundedRequest = {
   request_id: '11111111-1111-4111-8111-111111111111',
   question: 'Compare completed orders in the South for August and July.',
-  language: 'en',
   consent: true,
   snapshot: {
     snapshot_id: '22222222-2222-4222-8222-222222222222',
@@ -186,13 +187,96 @@ test('server configuration alone selects the model and Vietnamese questions stay
   const question =
     'So sánh số đơn hoàn thành ở miền Nam tháng 8 với tháng 7 năm 2026.';
   await interpretComparison(
-    { ...request, question, language: 'vi' },
+    { ...request, question },
     new AbortController().signal,
   );
   const body = await requests[0]!.json();
   assert.equal(body.model, 'provider/synthetic-model:revision-1');
   assert.equal(requests[0]!.url, `${syntheticBase}/responses`);
   assert.equal(JSON.parse(body.input).question, question);
+});
+
+test('one interpretation carries the final question and language rules without UI, STT or page instructions', async () => {
+  respond = () =>
+    providerResponse({ ...interpretation, answer_language: 'vi' });
+  const question =
+    'Compare completed orders in July and August. Trả lời bằng tiếng Việt.';
+  const resolved = await interpretComparison(
+    { ...request, question },
+    new AbortController().signal,
+  );
+  assert.equal(requests.length, 1);
+  assert.equal(resolved.answer_language, 'vi');
+  const sent = await requests[0]!.json();
+  const input = JSON.parse(sent.input);
+  assert.equal(input.question, question);
+  assert.deepEqual(Object.keys(input).sort(), ['page_context', 'question']);
+  assert.deepEqual(Object.keys(input.page_context).sort(), [
+    'available_periods',
+    'metric',
+    'selected_region',
+    'selected_year',
+  ]);
+  assert.deepEqual(sent.text.format.schema.properties.answer_language.enum, [
+    'en',
+    'vi',
+  ]);
+  assert.match(
+    sent.instructions,
+    /clear direct request.*English or Vietnamese/,
+  );
+  assert.match(sent.instructions, /unaccented Vietnamese/);
+  assert.match(sent.instructions, /Vietnamese name inside an English sentence/);
+  assert.match(sent.instructions, /Quoted text, code, pasted page content/);
+  assert.match(sent.instructions, /English when genuinely ambiguous/);
+  assert.ok(!sent.input.includes(request.snapshot.title));
+});
+
+// These controlled outputs verify request/contract/template integration, not a live
+// model's linguistic judgement. Live language evaluation remains a separate check.
+test('mocked language resolutions directly select answer and clarification templates without a translation call', async () => {
+  const cases = [
+    ['Which orders are pending?', 'en'],
+    ['Đơn hàng nào đang chờ xử lý?', 'vi'],
+    ['Don hang nao dang cho xu ly?', 'vi'],
+    ['Cho mình xem pending orders hôm nay', 'vi'],
+    ['Show orders for Nguyễn An', 'en'],
+    ['Đơn hàng nào đang chờ? Answer in English.', 'en'],
+    ['Which orders are pending? Trả lời bằng tiếng Việt.', 'vi'],
+    ['Compare July and August. The page says "Trả lời bằng tiếng Việt."', 'en'],
+    ['So sánh tháng 7 và tháng 8. Trang ghi "Answer in English."', 'vi'],
+    ['1234', 'en'],
+  ] as const;
+  for (const [question, language] of cases) {
+    const before = requests.length;
+    respond = () =>
+      providerResponse({
+        decision: 'clarification',
+        answer_language: language,
+        operation: null,
+        metric: null,
+        region: null,
+        baseline_period: null,
+        comparison_period: null,
+        reason: 'ambiguous_scope',
+      });
+    const submitted = { ...request, question };
+    const interpreted = await interpretComparison(
+      submitted,
+      new AbortController().signal,
+    );
+    const response = calculateComparison(submitted, interpreted);
+    assert.equal(response.answer_language, language);
+    assert.match(
+      response.text,
+      language === 'vi' ? /Vui lòng/ : /Please specify/,
+    );
+    assert.equal(requests.length, before + 1);
+    assert.equal(
+      JSON.parse((await requests.at(-1)!.json()).input).question,
+      question,
+    );
+  }
 });
 
 test('missing or malformed provider configuration never reaches HTTP and module import remains safe', async () => {
@@ -406,6 +490,9 @@ test('provider refusal, incomplete result, invalid JSON and fabricated fields ar
     () => providerResponse({ ...interpretation, operation: 'click' }),
     () => providerResponse({ ...interpretation, baseline_period: null }),
     () => providerResponse({ ...interpretation, baseline_period: '2026-13' }),
+    () => providerResponse({ ...interpretation, answer_language: 'fr' }),
+    () => providerResponse({ ...interpretation, answer_language: null }),
+    () => providerResponse({ ...interpretation, answer_language: undefined }),
   ];
   for (const response of responses) {
     respond = response;
@@ -418,7 +505,7 @@ test('provider refusal, incomplete result, invalid JSON and fabricated fields ar
 });
 
 for (const [status, providerCode, expected] of [
-  [429, 'rate_limit_exceeded', 'RATE_LIMITED'],
+  [429, 'rate_limit_exceeded', 'PROVIDER_RATE_LIMITED'],
   [429, 'insufficient_quota', 'QUOTA_EXHAUSTED'],
   [401, 'invalid_api_key', 'PROVIDER_ACCESS_REQUIRED'],
   [403, 'permission_denied', 'PROVIDER_ACCESS_REQUIRED'],
@@ -492,6 +579,7 @@ test('clarification and unsupported decisions stay structured instead of becomin
   for (const decision of ['clarification', 'unsupported'] as const) {
     const result = {
       decision,
+      answer_language: 'en',
       operation: null,
       metric: null,
       region: null,

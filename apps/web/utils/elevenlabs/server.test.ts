@@ -85,7 +85,7 @@ function transcriptResponse(
   });
 }
 
-test('TTS preserves supplied text and uses only configured voice, explicit Flash model and MP3', async () => {
+test('TTS preserves supplied text and uses the configured voice, Flash model and normal-speed MP3', async () => {
   createFetchResponse = mp3Response;
   const text = '  Ngày 09/10, 1.250.000 VND và 12.5%.  ';
   assert.deepEqual(
@@ -104,6 +104,7 @@ test('TTS preserves supplied text and uses only configured voice, explicit Flash
     text,
     model_id: 'eleven_flash_v2_5',
     language_code: 'vi',
+    voice_settings: { speed: 1 },
   });
 });
 
@@ -115,6 +116,7 @@ test('English and absent TTS language remain server-controlled supported options
   assert.deepEqual(await capturedRequests[1]!.json(), {
     text: 'Compare Q3 with Q2.',
     model_id: 'eleven_flash_v2_5',
+    voice_settings: { speed: 1 },
   });
 });
 
@@ -249,7 +251,10 @@ for (const [status, providerCode, expected] of [
   [429, 'quota_exceeded', 'QUOTA_EXHAUSTED'],
   [402, 'insufficient_credits', 'QUOTA_EXHAUSTED'],
   [402, 'payment_required', 'PROVIDER_ACCESS_REQUIRED'],
-  [429, 'rate_limit_exceeded', 'RATE_LIMITED'],
+  [422, 'language_not_supported', 'VOICE_LANGUAGE_UNSUPPORTED'],
+  [400, 'unsupported_language', 'VOICE_LANGUAGE_UNSUPPORTED'],
+  [422, 'unsupported_language_code', 'VOICE_LANGUAGE_UNSUPPORTED'],
+  [429, 'rate_limit_exceeded', 'PROVIDER_RATE_LIMITED'],
   [503, 'unavailable', 'PROVIDER_FAILURE'],
 ] as const) {
   test(`provider ${status}/${providerCode} is safely mapped without retries`, async () => {
@@ -270,6 +275,11 @@ for (const [status, providerCode, expected] of [
         if (expected === 'PROVIDER_ACCESS_REQUIRED') {
           assert.ok(error instanceof VoiceError);
           assert.equal(error.status, 503);
+          assert.equal(error.retryable, false);
+        }
+        if (expected === 'VOICE_LANGUAGE_UNSUPPORTED') {
+          assert.ok(error instanceof VoiceError);
+          assert.equal(error.status, 422);
           assert.equal(error.retryable, false);
         }
         return true;

@@ -4,6 +4,7 @@ import {
   comparisonInterpretationSchema,
   fingerprintSnapshot,
   groundedRequestSchema,
+  groundedResponseSchema,
   groundedSnapshotSchema,
   parseDisplayedCount,
   type ComparisonInterpretation,
@@ -51,7 +52,6 @@ function request(source = snapshot()): GroundedRequest {
   return {
     request_id: '33333333-3333-4333-8333-333333333333',
     question: 'Compare completed orders in the South for August and July.',
-    language: 'en',
     consent: true,
     snapshot: source,
   };
@@ -61,6 +61,7 @@ function intent(
 ): ComparisonInterpretation {
   return {
     decision: 'comparison',
+    answer_language: 'en',
     operation: 'compare',
     metric: 'completed_orders',
     region: 'South',
@@ -210,14 +211,62 @@ test('scope refusals and clarifications use application messages, never model pr
 
 test('Vietnamese deterministic output preserves periods, counts and decimal precision', () => {
   const input = request(snapshot(1200, 1050));
-  input.language = 'vi';
-  const result = calculateComparison(input, intent());
+  const result = calculateComparison(input, intent({ answer_language: 'vi' }));
   assert.equal(result.status, 'answer');
+  assert.equal(result.answer_language, 'vi');
   assert.match(result.text, /miền Nam giảm 150 đơn, tương đương 12,5%/);
   assert.match(result.text, /từ tháng 7 đến tháng 8 năm 2026/);
   if (result.status === 'answer') {
     assert.match(result.evidence.calculation.description, /1\.050 trừ 1\.200/);
     assert.equal(result.evidence.rows[0].raw_value, '1,200');
+  }
+});
+
+test('resolved answer language covers every response without translating or mutating evidence', () => {
+  const input = request();
+  const original = structuredClone(input.snapshot);
+  const english = calculateComparison(input, intent());
+  const vietnamese = calculateComparison(
+    input,
+    intent({ answer_language: 'vi' }),
+  );
+  assert.equal(english.answer_language, 'en');
+  assert.equal(vietnamese.answer_language, 'vi');
+  assert.equal(english.status, 'answer');
+  assert.equal(vietnamese.status, 'answer');
+  if (english.status !== 'answer' || vietnamese.status !== 'answer') return;
+  assert.deepEqual(english.evidence.rows, vietnamese.evidence.rows);
+  assert.deepEqual(input.snapshot, original);
+  assert.equal(vietnamese.evidence.table_title, original.table_title);
+  assert.equal(vietnamese.evidence.region, original.region);
+  for (const reason of ['missing_periods', 'unsupported_operation'] as const) {
+    const response = calculateComparison(
+      input,
+      intent({
+        answer_language: 'vi',
+        decision:
+          reason === 'missing_periods' ? 'clarification' : 'unsupported',
+        reason,
+      }),
+    );
+    assert.equal(response.answer_language, 'vi');
+    assert.match(
+      response.text,
+      reason === 'missing_periods' ? /Vui lòng/ : /Chưa hỗ trợ/,
+    );
+    assert.equal(groundedResponseSchema.safeParse(response).success, true);
+    assert.equal(
+      groundedResponseSchema.safeParse({
+        ...response,
+        answer_language: undefined,
+      }).success,
+      false,
+    );
+    assert.equal(
+      groundedResponseSchema.safeParse({ ...response, answer_language: 'fr' })
+        .success,
+      false,
+    );
   }
 });
 
@@ -298,6 +347,8 @@ test('request limits count Unicode characters and require explicit consent witho
     { workspaceId: 'supplied-workspace' },
     { session_id: 'foreign-persisted-session' },
     { language: 'fr' },
+    { language: 'vi' },
+    { answer_language: 'vi' },
   ])
     assert.equal(
       groundedRequestSchema.safeParse({ ...input, ...extra }).success,
@@ -318,6 +369,8 @@ test('interpretation validates decision completeness and rejects invented operat
     { decision: 'clarification', reason: null },
     { answer: '25%' },
     { source_id: 'invented' },
+    { answer_language: 'fr' },
+    { answer_language: undefined },
   ])
     assert.equal(
       comparisonInterpretationSchema.safeParse({ ...intent(), ...extra })

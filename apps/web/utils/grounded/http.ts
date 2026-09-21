@@ -10,7 +10,7 @@ import {
   type GroundedRequest,
 } from '@adc/contracts';
 import type { VoiceIdentity } from '../voice/access.ts';
-import { corsHeaders } from '../voice/http.ts';
+import { applicationLimitDetails, corsHeaders } from '../voice/http.ts';
 import { VoiceError } from '../voice/errors.ts';
 import { calculateComparison } from './comparison.ts';
 
@@ -164,6 +164,7 @@ function failure(
         code: safe.code,
         message: messages[safe.code] ?? safe.message,
         retryable: safe.retryable,
+        ...applicationLimitDetails(safe, request, id, headers),
       },
     },
     { status: safe.status, headers },

@@ -19,7 +19,7 @@ const words = {
       'Open VSual and choose Sign in. Complete sign-in on the website that opens.',
     pageStep: 'Open the synthetic orders demo',
     askStep:
-      'Allow page processing in VSual. Type or record a question, review it, then select Ask VSual.',
+      'Allow page processing in VSual. Type and select Ask VSual, or record a question and pause for 5 seconds to send. Stop and review manually to review first.',
     optional: 'You can type without enabling the microphone.',
     test: 'Optional website voice test',
     install: 'Developer installation instructions',
@@ -47,7 +47,7 @@ const words = {
       'Mở VSual và chọn Đăng nhập. Đăng nhập trên trang web vừa mở.',
     pageStep: 'Mở bản mẫu đơn hàng giả lập',
     askStep:
-      'Cho phép xử lý trang trong VSual. Nhập hoặc ghi âm câu hỏi, xem lại rồi chọn Hỏi VSual.',
+      'Cho phép xử lý trang trong VSual. Nhập rồi chọn Hỏi VSual, hoặc ghi âm và im lặng 5 giây để gửi. Chọn Dừng và xem lại nếu muốn kiểm tra trước.',
     optional: 'Bạn có thể nhập câu hỏi mà không cần bật micrô.',
     test: 'Thử giọng nói trên trang web (tùy chọn)',
     install: 'Hướng dẫn cài đặt dành cho nhà phát triển',

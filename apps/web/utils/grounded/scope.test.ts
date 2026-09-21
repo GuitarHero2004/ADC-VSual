@@ -5,6 +5,7 @@ import { enforceQuestionScope } from './scope.ts';
 
 const south: ComparisonInterpretation = {
   decision: 'comparison',
+  answer_language: 'en',
   operation: 'compare',
   metric: 'completed_orders',
   region: 'South',
@@ -99,6 +100,7 @@ test('unsupported causes, forecasts, revenue and actions remain unsupported even
 test('the veto never fabricates a comparison from model uncertainty or unsupported output', () => {
   const uncertain: ComparisonInterpretation = {
     decision: 'clarification',
+    answer_language: 'en',
     operation: null,
     metric: null,
     region: null,
@@ -110,6 +112,21 @@ test('the veto never fabricates a comparison from model uncertainty or unsupport
     enforceQuestionScope('Compare July and August in South.', uncertain),
     uncertain,
   );
+});
+
+test('application scope vetoes preserve the resolved answer language', () => {
+  for (const question of [
+    'Compare revenue in July and August.',
+    'Compare North for July and August.',
+    'Why did orders fall?',
+  ]) {
+    const result = enforceQuestionScope(question, {
+      ...south,
+      answer_language: 'vi',
+    });
+    assert.notEqual(result.decision, 'comparison');
+    assert.equal(result.answer_language, 'vi');
+  }
 });
 
 test('a named baseline overrides neutral ordering without silently substituting the model baseline', () => {

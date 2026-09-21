@@ -268,8 +268,18 @@ test('actual extension Settings preserves drafts, exposes session recovery on ac
     assert.equal(companion.hidden, true);
     assert.equal(document.activeElement?.id, 'settings-heading');
     assert.equal(settingsButton.getAttribute('aria-expanded'), 'true');
-    assert.ok(settings.contains(select('Recognition and speech language')));
-    assert.ok(settings.contains(document.getElementById('answer-speed')));
+    assert.ok(settings.contains(select('Recording language')));
+    assert.equal(document.getElementById('answer-speed'), null);
+    const speechToggle = document.getElementById(
+      'answer-speech-enabled',
+    ) as HTMLInputElement;
+    assert.ok(settings.contains(speechToggle));
+    assert.equal(speechToggle.type, 'checkbox');
+    assert.equal(
+      speechToggle.checked,
+      true,
+      'No saved preference enables companion speech after preferences load',
+    );
     assert.match(settings.textContent!, /Ctrl\+Shift\+Y/);
     assert.ok(
       !Array.from(settings.querySelectorAll('label')).some((label) =>
@@ -277,14 +287,15 @@ test('actual extension Settings preserves drafts, exposes session recovery on ac
       ),
       'The fixed light, large interface has no appearance controls',
     );
-    await change(select('Recognition and speech language'), 'vi');
-    await change(
-      document.getElementById('answer-speed') as HTMLSelectElement,
-      '1.5',
+    await change(select('Recording language'), 'vi');
+    await settle(() => speechToggle.click());
+    assert.equal(speechToggle.checked, false);
+    assert.deepEqual(
+      JSON.parse(localStorage.getItem('vsual:answer-preferences')!),
+      { speechEnabled: false },
+      'An explicit OFF preference is stored without a configurable speed',
     );
-    await settle(() =>
-      document.getElementById('answer-speech-enabled')!.click(),
-    );
+    await settle(() => speechToggle.click());
     assert.equal(
       (document.getElementById('answer-speech-enabled') as HTMLInputElement)
         .checked,
@@ -385,7 +396,9 @@ test('actual extension Settings preserves drafts, exposes session recovery on ac
     // recovery, rather than leaving focus in a removed portal or hidden account.
     const connectedStatus = status;
     await settle(() => settingsButton.click());
-    select('Recognition and speech language').focus();
+    await settle(() => speechToggle.click());
+    assert.equal(speechToggle.checked, false);
+    select('Recording language').focus();
     await settle(() =>
       publishStatus({
         ...connectedStatus,
@@ -402,7 +415,7 @@ test('actual extension Settings preserves drafts, exposes session recovery on ac
     assert.match(companion.textContent!, /member@example\.test/);
     assert.ok(button('Try again'));
     assert.equal(document.querySelector('textarea'), null);
-    assert.equal(document.getElementById('answer-speed'), null);
+    assert.equal(document.getElementById('answer-speech-enabled'), null);
     assert.deepEqual(
       authCalls.map((message) => message.type),
       ['auth:status'],
@@ -410,7 +423,17 @@ test('actual extension Settings preserves drafts, exposes session recovery on ac
 
     await settle(() => publishStatus(connectedStatus));
     await settle(() => settingsButton.click());
-    select('Recognition and speech language').focus();
+    const restoredSpeechToggle = document.getElementById(
+      'answer-speech-enabled',
+    ) as HTMLInputElement;
+    assert.equal(
+      restoredSpeechToggle.checked,
+      false,
+      'Saved OFF survives remounting the protected companion',
+    );
+    await settle(() => restoredSpeechToggle.click());
+    assert.equal(restoredSpeechToggle.checked, true);
+    select('Recording language').focus();
     await settle(() =>
       publishStatus({
         ...connectedStatus,
@@ -445,6 +468,12 @@ test('actual extension Settings preserves drafts, exposes session recovery on ac
     await settle(() => button('Back to companion').click());
     assert.equal(document.activeElement, settingsButton);
     await settle(() => publishStatus(connectedStatus));
+    assert.equal(
+      (document.getElementById('answer-speech-enabled') as HTMLInputElement)
+        .checked,
+      true,
+      'Saved ON survives a new session surface',
+    );
     await settle(() => button('Use example question').click());
     const logoutDraft = document.querySelector('textarea')!;
     assert.ok(logoutDraft.value);
@@ -458,7 +487,7 @@ test('actual extension Settings preserves drafts, exposes session recovery on ac
     assert.equal(logoutDraft.isConnected, false);
     assert.equal(textarea.isConnected, false);
     assert.equal(document.querySelector('textarea'), null);
-    assert.equal(document.getElementById('answer-speed'), null);
+    assert.equal(document.getElementById('answer-speech-enabled'), null);
     assert.ok(button('Sign in on the VSual website'));
     assert.equal(
       document.body.textContent?.includes('member@example.test'),
@@ -477,7 +506,10 @@ test('actual extension Settings preserves drafts, exposes session recovery on ac
       'Drafts must not enter preference storage',
     );
     assert.match(saved, /"language":"vi"/);
-    assert.match(saved, /"playbackRate":1.5/);
+    assert.deepEqual(
+      JSON.parse(localStorage.getItem('vsual:answer-preferences')!),
+      { speechEnabled: true },
+    );
   } finally {
     await act(async () => root.unmount());
     hook.deregister();

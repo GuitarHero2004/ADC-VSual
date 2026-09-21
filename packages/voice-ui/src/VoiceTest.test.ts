@@ -184,11 +184,11 @@ test('question composer retains text, focus and explicit actions across recordin
     assert.ok(button('Cancel recording'));
     await act(async () => resolvePermission(stream));
     assert.equal(controller.getSnapshot().phase, 'recording');
-    assert.ok(button('Stop recording'));
+    assert.ok(button('Stop and review'));
     recorder.ondata(new Blob(['first chunk;']));
     await act(async () => {
-      button('Stop recording').click();
-      button('Stop recording')?.click();
+      button('Stop and review').click();
+      button('Stop and review')?.click();
     });
     assert.equal(uploads.length, 1);
     assert.equal(await uploads[0]!.text(), 'first chunk;final chunk');
@@ -245,7 +245,7 @@ test('question composer retains text, focus and explicit actions across recordin
     // A recoverable asynchronous error keeps both draft and unrelated focus.
     await act(async () => button('Record question').click());
     await act(async () => resolvePermission(stream));
-    await act(async () => button('Stop recording').click());
+    await act(async () => button('Stop and review').click());
     outside.focus();
     await act(async () =>
       rejectTranscript(
@@ -260,7 +260,36 @@ test('question composer retains text, focus and explicit actions across recordin
     );
     assert.equal(button('Record question').disabled, false);
 
+    await act(async () => button('Record question').click());
+    await act(async () => resolvePermission(stream));
+    await act(async () => button('Stop and review').click());
+    const usage = {
+      minute_count: 24,
+      minute_limit: 24,
+      day_count: 73,
+      day_limit: 240,
+      limited_by: 'minute',
+      retry_after_seconds: 42,
+      retry_at: '2026-09-21T00:01:00.000Z',
+    };
+    await act(async () =>
+      rejectTranscript({ code: 'APP_RATE_LIMITED', usage }),
+    );
+    assert.match(
+      document.querySelector('[role=status]')!.textContent!,
+      /^Transcription could not finish\./,
+    );
+    const usageNotice = document.querySelector('.usage-limit-notice')!;
+    assert.match(usageNotice.textContent!, /24 \/ 24 requests/);
+    assert.equal(
+      usageNotice.closest('[role=status], [role=alert], [aria-live]'),
+      null,
+    );
+    assert.equal(usageNotice.querySelector('time')!.dateTime, usage.retry_at);
+    assert.equal(textarea.value, 'Lọc doanh thu tháng chín.');
+
     await act(async () => controller.editText('😀'.repeat(1001)));
+    assert.equal(document.querySelector('.usage-limit-notice'), null);
     assert.equal(textarea.getAttribute('aria-invalid'), 'true');
     assert.match(
       document.getElementById(

@@ -9,6 +9,7 @@ import {
   type VoiceIdentity,
 } from './access.ts';
 import { VoiceError } from './errors.ts';
+import type { UsageWindow } from './limits.ts';
 
 const identity: VoiceIdentity = {
   subject: '10000000-0000-4000-8000-000000000001',
@@ -21,6 +22,9 @@ const variables = [
   'VA_VOICE_WORKSPACE_ID',
   'NEXT_PUBLIC_SUPABASE_URL',
   'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
+  'VOICE_REQUESTS_PER_MINUTE',
+  'VOICE_REQUESTS_PER_DAY',
+  'NODE_ENV',
 ] as const;
 const originalVariables = Object.fromEntries(
   variables.map((name) => [name, process.env[name]]),
@@ -29,7 +33,9 @@ let queries: { text: string; values: unknown[] | undefined }[];
 let networkRequests: Request[];
 let safeRole: boolean;
 let activeMembership: boolean;
-let usage: { duplicate: boolean; minute_count: number; day_count: number };
+let usage: UsageWindow & { duplicate: boolean };
+const checkedAt = new Date('2026-09-21T12:00:00.000Z');
+const environment: Record<string, string | undefined> = process.env;
 let authStatus: number;
 let adminMapping: unknown;
 let userMapping: unknown;
@@ -44,11 +50,20 @@ beforeEach(() => {
   process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://supabase.example.test';
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY =
     'sb_publishable_synthetic_test_key';
+  environment.NODE_ENV = 'test';
+  delete process.env.VOICE_REQUESTS_PER_MINUTE;
+  delete process.env.VOICE_REQUESTS_PER_DAY;
   queries = [];
   networkRequests = [];
   safeRole = true;
   activeMembership = true;
-  usage = { duplicate: false, minute_count: 0, day_count: 0 };
+  usage = {
+    duplicate: false,
+    minute_count: 0,
+    day_count: 0,
+    minute_retry_at: null,
+    day_retry_at: null,
+  };
   authStatus = 200;
   adminMapping = identity.userId;
   userMapping = undefined;
@@ -65,6 +80,8 @@ beforeEach(() => {
         if (failDatabase) throw new Error('private database detail');
         if (text.includes('FROM pg_roles'))
           return { rows: [{ safe: safeRole }] };
+        if (text === 'SELECT clock_timestamp() AS checked_at')
+          return { rows: [{ checked_at: checkedAt }] };
         if (text.includes('FROM va.app_users'))
           return { rows: activeMembership ? [{ id: identity.userId }] : [] };
         if (text.includes('AS minute_count')) return { rows: [usage] };
@@ -102,7 +119,7 @@ afterEach(() => {
   for (const name of variables) {
     const value = originalVariables[name];
     if (value === undefined) delete process.env[name];
-    else process.env[name] = value;
+    else environment[name] = value;
   }
 });
 
@@ -290,8 +307,31 @@ test('reservation locks the user before counting and records exactly one bounded
   const count = queries.findIndex(({ text }) =>
     text.includes('AS minute_count'),
   );
-  assert.ok(lock > 0 && count > lock);
+  const clock = queries.findIndex(
+    ({ text }) => text === 'SELECT clock_timestamp() AS checked_at',
+  );
+  const prune = queries.findIndex(({ text }) => text.startsWith('DELETE'));
+  assert.ok(lock > 0 && clock > lock && prune > clock && count > prune);
   assert.deepEqual(queries[lock]?.values, [identity.userId]);
+  assert.deepEqual(queries[count]?.values, [
+    identity.userId,
+    requestId,
+    checkedAt,
+    6,
+    30,
+  ]);
+  assert.match(
+    queries[count]!.text,
+    /ORDER BY created_at DESC OFFSET \(\$4::int - 1\)/,
+  );
+  assert.match(
+    queries[count]!.text,
+    /ORDER BY created_at DESC OFFSET \(\$5::int - 1\)/,
+  );
+  assert.deepEqual(
+    queries.find(({ text }) => text.startsWith('DELETE'))?.values,
+    [identity.userId, checkedAt],
+  );
   const inserts = queries.filter(({ text }) => text.startsWith('INSERT'));
   assert.equal(inserts.length, 1);
   assert.deepEqual(inserts[0]?.values, [
@@ -307,10 +347,15 @@ for (const counts of [
   { minute_count: 0, day_count: 30 },
 ]) {
   test(`rate limit blocks ${counts.minute_count} minute / ${counts.day_count} daily attempts without reserving`, async () => {
-    usage = { duplicate: false, ...counts };
+    usage = {
+      duplicate: false,
+      ...counts,
+      minute_retry_at: new Date(checkedAt.getTime() + 45_000),
+      day_retry_at: new Date(checkedAt.getTime() + 3_600_000),
+    };
     await assert.rejects(
       reserveVoiceRequest(identity, requestId),
-      code('RATE_LIMITED'),
+      code('APP_RATE_LIMITED'),
     );
     assert.ok(!queries.some(({ text }) => text.startsWith('INSERT')));
     assert.equal(queries.at(-1)?.text, 'ROLLBACK');
@@ -324,6 +369,31 @@ test('a repeated request ID cannot reserve a second billable attempt', async () 
     code('DUPLICATE_REQUEST'),
   );
   assert.ok(!queries.some(({ text }) => text.startsWith('INSERT')));
+});
+
+test('configured limits are bound into the same locked reservation query', async () => {
+  process.env.VOICE_REQUESTS_PER_MINUTE = '30';
+  process.env.VOICE_REQUESTS_PER_DAY = '1000';
+  usage.minute_count = 6;
+  usage.day_count = 30;
+  await reserveVoiceRequest(identity, requestId);
+  assert.deepEqual(
+    queries.find(({ text }) => text.includes('AS minute_count'))?.values,
+    [identity.userId, requestId, checkedAt, 30, 1000],
+  );
+  assert.equal(
+    queries.filter(({ text }) => text.startsWith('INSERT')).length,
+    1,
+  );
+});
+
+test('invalid server limit configuration fails closed before a database reservation', async () => {
+  process.env.VOICE_REQUESTS_PER_DAY = 'unlimited';
+  await assert.rejects(
+    reserveVoiceRequest(identity, requestId),
+    code('SETUP_REQUIRED'),
+  );
+  assert.equal(connectCount, 0);
 });
 
 test('invalid request IDs do not touch the database', async () => {

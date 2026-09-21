@@ -12,7 +12,7 @@ const words = {
     table: 'Completed orders table; scroll horizontally if needed',
     try: 'Try the companion',
     steps:
-      'Open VSual, sign in and allow page processing when you choose to use this demo. Type or record a question, review it, then select Ask VSual.',
+      'Open VSual, sign in and allow page processing. Type and select Ask VSual, or record a question and pause for 5 seconds to send. Stop and review manually to review first.',
     consent:
       'VSual reads this table only after you allow page processing and ask a question or choose to inspect the source table. Opening this page does not send its contents to AI. VSual does not change this page.',
     setup: 'Setup and optional voice test',
@@ -27,7 +27,7 @@ const words = {
     table: 'Bảng số đơn hoàn thành; cuộn ngang nếu cần',
     try: 'Dùng thử trợ lý',
     steps:
-      'Mở VSual, đăng nhập và cho phép xử lý trang khi bạn muốn sử dụng bản mẫu. Nhập hoặc ghi âm câu hỏi, xem lại rồi chọn Hỏi VSual.',
+      'Mở VSual, đăng nhập và cho phép xử lý trang. Nhập rồi chọn Hỏi VSual, hoặc ghi âm và im lặng 5 giây để gửi. Chọn Dừng và xem lại nếu muốn kiểm tra trước.',
     consent:
       'VSual chỉ đọc bảng sau khi bạn cho phép xử lý trang và đặt câu hỏi hoặc chọn xem bảng nguồn. Mở trang này không gửi nội dung đến AI. VSual không thay đổi trang.',
     setup: 'Thiết lập và thử giọng nói tùy chọn',

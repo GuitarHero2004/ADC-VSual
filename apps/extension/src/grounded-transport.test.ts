@@ -11,7 +11,6 @@ function input(): GroundedRequest {
   return {
     request_id: crypto.randomUUID(),
     question: 'Compare July and August.',
-    language: 'en',
     consent: true,
     snapshot: {
       snapshot_id: crypto.randomUUID(),
@@ -43,6 +42,7 @@ function input(): GroundedRequest {
 }
 function resultFor(request: GroundedRequest): GroundedResponse {
   return {
+    answer_language: 'en',
     request_id: request.request_id,
     snapshot_id: request.snapshot.snapshot_id,
     fingerprint: request.snapshot.fingerprint,
@@ -223,4 +223,54 @@ test('malformed successful output and raw error payloads cannot become grounded 
         !error.message.includes('private-provider-payload'),
     );
   }
+});
+
+test('application usage details cross the response boundary once and malformed metadata is rejected', async () => {
+  const usage = {
+    minute_count: 30,
+    minute_limit: 30,
+    day_count: 72,
+    day_limit: 1000,
+    limited_by: 'minute',
+    retry_after_seconds: 42,
+    retry_at: '2026-09-21T06:30:42.000Z',
+  };
+  let calls = 0;
+  const transport = createGroundedTransport({
+    baseUrl: 'https://backend.example.test',
+    getHeaders: async () => ({}),
+    onUnauthenticated() {
+      assert.fail('Usage limits do not sign out');
+    },
+  });
+  for (const details of [usage, { ...usage, minute_count: -1 }]) {
+    globalThis.fetch = async () => {
+      calls++;
+      return Response.json(
+        {
+          request_id: crypto.randomUUID(),
+          error: {
+            code: 'APP_RATE_LIMITED',
+            message: 'Application limit.',
+            retryable: true,
+            usage: details,
+          },
+        },
+        { status: 429 },
+      );
+    };
+    await assert.rejects(
+      transport(input(), new AbortController().signal),
+      (error: unknown) => {
+        assert.ok(error instanceof Error && 'code' in error);
+        if (details.minute_count >= 0) {
+          assert.equal(error.code, 'APP_RATE_LIMITED');
+          assert.ok('usage' in error);
+          assert.deepEqual(error.usage, usage);
+        } else assert.equal(error.code, 'PROVIDER_FAILURE');
+        return true;
+      },
+    );
+  }
+  assert.equal(calls, 2, 'Retryable errors never cause an automatic retry');
 });

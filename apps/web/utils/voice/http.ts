@@ -3,7 +3,11 @@ import { z } from 'zod';
 import { VoiceError } from './errors.ts';
 import { readAudioInput, readSpeechInput } from './input.ts';
 import type { VoiceIdentity } from './access.ts';
-import type { SpeechSynthesisInput, RecognitionLanguage } from '@adc/contracts';
+import {
+  usageLimitSchema,
+  type SpeechSynthesisInput,
+  type RecognitionLanguage,
+} from '@adc/contracts';
 
 type Dependencies = {
   verifyVoiceUser: (request: Request) => Promise<VoiceIdentity>;
@@ -70,8 +74,39 @@ export function corsHeaders(request: Request) {
     'Access-Control-Allow-Headers',
     'Authorization, Content-Type, X-Request-ID, X-Workspace-ID',
   );
-  headers.set('Access-Control-Expose-Headers', 'X-Request-ID');
+  headers.set('Access-Control-Expose-Headers', 'X-Request-ID, Retry-After');
   return headers;
+}
+
+/** Application-only usage evidence; provider throttling never receives local counts. */
+export function applicationLimitDetails(
+  error: VoiceError,
+  request: Request,
+  id: string,
+  headers: Headers,
+) {
+  if (error.code !== 'APP_RATE_LIMITED') return {};
+  const parsed = usageLimitSchema.safeParse(error.usage);
+  if (!parsed.success) return {};
+  headers.set('Retry-After', String(parsed.data.retry_after_seconds));
+  const pathname = new URL(request.url).pathname;
+  const route = [
+    '/api/voice/transcribe',
+    '/api/voice/speak',
+    '/api/grounded-read',
+  ].includes(pathname)
+    ? pathname
+    : 'unknown';
+  console.info(
+    JSON.stringify({
+      event: 'app_request_limit',
+      request_id: id,
+      route,
+      code: error.code,
+      ...parsed.data,
+    }),
+  );
+  return { usage: parsed.data };
 }
 
 function failure(
@@ -97,6 +132,7 @@ function failure(
         code: safe.code,
         message: safe.message,
         retryable: safe.retryable,
+        ...applicationLimitDetails(safe, request, id, headers),
       },
     },
     { status: safe.status, headers },

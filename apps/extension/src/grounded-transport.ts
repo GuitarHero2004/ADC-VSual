@@ -37,6 +37,7 @@ export function createGroundedTransport(options: {
       const failure = voiceErrorResponseSchema.safeParse(payload);
       throw Object.assign(new Error('Grounded request failed'), {
         code: failure.success ? failure.data.error.code : 'PROVIDER_FAILURE',
+        usage: failure.success ? failure.data.error.usage : undefined,
       });
     }
     return groundedResponseSchema.parse(payload);

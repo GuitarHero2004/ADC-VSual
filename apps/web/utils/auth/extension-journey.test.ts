@@ -54,7 +54,6 @@ async function canonicalQuestion(): Promise<GroundedRequest> {
   const input: GroundedRequest = {
     request_id: crypto.randomUUID(),
     question: 'Compare completed orders in the South for August and July.',
-    language: 'en',
     consent: true,
     snapshot: {
       snapshot_id: crypto.randomUUID(),
@@ -178,6 +177,8 @@ test('extension email connection → grounded evidence → reopened panel → si
     async () =>
       ({
         async query(sql: string, values?: unknown[]) {
+          if (sql === 'SELECT clock_timestamp() AS checked_at')
+            return { rows: [{ checked_at: new Date() }] };
           if (sql.includes('FROM pg_roles')) return { rows: [{ safe: true }] };
           if (sql.includes("set_config('app.user_id'")) {
             contexts.push(values ?? []);
@@ -225,6 +226,7 @@ test('extension email connection → grounded evidence → reopened panel → si
       providerCalls += 1;
       return {
         decision: 'comparison',
+        answer_language: 'en',
         operation: 'compare',
         metric: 'completed_orders',
         region: 'South',

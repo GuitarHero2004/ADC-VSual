@@ -53,11 +53,11 @@ test('captures displayed rows and context, then recaptures a changed rendered DO
           request_id: crypto.randomUUID(),
           question:
             'Compare completed orders for August and July in the South.',
-          language: 'en',
           consent: true,
           snapshot,
         },
         {
+          answer_language: 'en',
           decision: 'comparison',
           operation: 'compare',
           metric: 'completed_orders',

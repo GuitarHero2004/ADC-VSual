@@ -142,6 +142,7 @@ export async function fingerprintSnapshot(
 
 export const groundedRequestSchema = z.strictObject({
   request_id: z.uuid(),
+  // The reviewed question determines answer language; interface/STT locales are not sent.
   question: z
     .string()
     .min(1)
@@ -150,7 +151,6 @@ export const groundedRequestSchema = z.strictObject({
         text.trim().length > 0 &&
         Array.from(text).length <= GROUNDED_QUESTION_MAX_LENGTH,
     ),
-  language: z.enum(['en', 'vi']),
   consent: z.literal(true),
   snapshot: groundedSnapshotSchema,
 });
@@ -167,6 +167,8 @@ export const interpretationReasonSchema = z.enum([
 export const comparisonInterpretationSchema = z
   .strictObject({
     decision: z.enum(['comparison', 'clarification', 'unsupported']),
+    // Resolved in the existing interpretation request, never from page-language metadata.
+    answer_language: z.enum(['en', 'vi']),
     operation: z.literal('compare').nullable(),
     metric: z.literal('completed_orders').nullable(),
     region: label(80).nullable(),
@@ -242,6 +244,7 @@ const responseLink = {
   request_id: z.uuid(),
   snapshot_id: z.uuid(),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  answer_language: z.enum(['en', 'vi']),
   text: label(1500),
 };
 export const groundedResponseSchema = z.discriminatedUnion('status', [

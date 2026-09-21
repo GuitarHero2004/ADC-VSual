@@ -59,8 +59,11 @@ function source(): GroundedSnapshot {
     fingerprint: 'a'.repeat(64),
   };
 }
-function resultFor(input: GroundedRequest): GroundedResponse {
+function resultFor(
+  input: GroundedRequest,
+): Extract<GroundedResponse, { status: 'clarification' }> {
   return {
+    answer_language: 'en',
     request_id: input.request_id,
     snapshot_id: input.snapshot.snapshot_id,
     fingerprint: input.snapshot.fingerprint,
@@ -169,7 +172,7 @@ test('opening, subscription and denied consent never capture or upload content',
   const unsubscribe = controller.subscribe(() => {});
   controller.getSnapshot();
   controller.getSnapshot();
-  await controller.ask('en');
+  await controller.ask();
   assert.equal(controller.getSnapshot().error, 'CONSENT_REQUIRED');
   await controller.inspect();
   assert.equal(calls.capture, 0);
@@ -188,7 +191,7 @@ test('unsupported pages cannot capture even after consent to an earlier supporte
     pathname: null,
     reason: 'unsupported',
   });
-  await controller.ask('en');
+  await controller.ask();
   assert.equal(controller.getSnapshot().error, 'UNSUPPORTED_PAGE');
   assert.equal(calls.capture, 0);
   assert.equal(calls.provider, 0);
@@ -215,13 +218,9 @@ test('duplicate Ask and panel subscriptions do not create extra captures or requ
     submitted = input;
     return pending.promise;
   };
-  const first = controller.ask('en');
+  const first = controller.ask();
   await flush();
-  await Promise.all([
-    controller.ask('en'),
-    controller.ask('en'),
-    controller.inspect(),
-  ]);
+  await Promise.all([controller.ask(), controller.ask(), controller.inspect()]);
   const off = controller.subscribe(() => {});
   controller.getSnapshot();
   off();
@@ -231,6 +230,61 @@ test('duplicate Ask and panel subscriptions do not create extra captures or requ
   await first;
   assert.equal(calls.verify, 1);
   assert.equal(controller.getSnapshot().phase, 'ready');
+});
+
+test('only a fresh accepted answer can reserve automatic speech, once across subscribers', async () => {
+  const { controller, hooks } = setup();
+  await permit(controller);
+  assert.equal(controller.claimAutomaticSpeech(), null);
+  await controller.inspect();
+  assert.equal(controller.claimAutomaticSpeech(), null);
+  for (const status of ['clarification', 'unsupported'] as const) {
+    hooks.transport = async (input) => ({
+      ...resultFor(input),
+      status,
+      answer_language: 'vi',
+    });
+    await controller.ask();
+    const result = controller.getSnapshot().result;
+    assert.ok(result);
+    assert.equal(controller.getSnapshot().resultLanguage, 'vi');
+    assert.equal(controller.claimAutomaticSpeech(), result);
+    assert.equal(controller.claimAutomaticSpeech(), null);
+    controller.getSnapshot();
+    await controller.refreshContext();
+    assert.equal(controller.claimAutomaticSpeech(), null);
+  }
+  controller.dispose();
+});
+
+test('cancellation, invalidation and disposal consume an unclaimed automatic answer', async () => {
+  for (const reason of ['cancel', 'page', 'dispose', 'speech-off'] as const) {
+    const { controller, invalidate } = setup();
+    await permit(controller);
+    await controller.ask();
+    if (reason === 'cancel') controller.cancel();
+    if (reason === 'page') invalidate();
+    if (reason === 'dispose') controller.dispose();
+    if (reason === 'speech-off') controller.discardAutomaticSpeech();
+    assert.equal(controller.claimAutomaticSpeech(), null, reason);
+  }
+});
+
+test('the final edited question reaches the backend without an interface-language preference', async () => {
+  const { controller, hooks } = setup();
+  await permit(controller);
+  controller.setQuestion('So sánh tháng 8 với tháng 7.');
+  controller.setQuestion('Compare August with July. Answer in English.');
+  hooks.transport = async (input) => {
+    assert.equal(
+      input.question,
+      'Compare August with July. Answer in English.',
+    );
+    assert.equal('language' in input, false);
+    return resultFor(input);
+  };
+  await controller.ask();
+  assert.equal(controller.getSnapshot().resultLanguage, 'en');
 });
 
 test('cancel during model work aborts locally and ignores a late provider success', async () => {
@@ -244,7 +298,7 @@ test('cancel during model work aborts locally and ignores a late provider succes
     providerSignal = signal;
     return pending.promise;
   };
-  const work = controller.ask('en');
+  const work = controller.ask();
   await flush();
   controller.cancel();
   assert.equal(providerSignal.aborted, true);
@@ -266,12 +320,12 @@ test('editing a question cancels pending work and a new answer cannot be overwri
     oldInput = input;
     return pending.promise;
   };
-  const old = controller.ask('en');
+  const old = controller.ask();
   await flush();
   controller.setQuestion('Compare from August to July in South.');
   assert.equal(controller.getSnapshot().phase, 'cancelled');
   hooks.transport = async (input) => resultFor(input);
-  await controller.ask('en');
+  await controller.ask();
   const current = controller.getSnapshot().result;
   assert.ok(current);
   assert.notEqual(current.request_id, oldInput.request_id);
@@ -295,7 +349,7 @@ test('context invalidation during capture, interpretation or verification withho
         return model.promise;
       };
     if (stage === 'verify') hooks.verify = () => verification.promise;
-    const work = controller.ask('en');
+    const work = controller.ask();
     await flush();
     invalidate();
     capture.resolve(source());
@@ -318,7 +372,7 @@ test('a failed final freshness check cannot label a response current', async () 
   const { controller, hooks } = setup();
   await permit(controller);
   hooks.verify = async () => false;
-  await controller.ask('en');
+  await controller.ask();
   assert.equal(controller.getSnapshot().phase, 'stale');
   assert.equal(controller.getSnapshot().result, null);
   assert.equal(controller.getSnapshot().error, 'STALE_CONTEXT');
@@ -332,7 +386,7 @@ test('responses with different request, snapshot or fingerprint are withheld bef
       ...resultFor(input),
       [field]: field === 'fingerprint' ? 'b'.repeat(64) : crypto.randomUUID(),
     });
-    await controller.ask('en');
+    await controller.ask();
     assert.equal(controller.getSnapshot().error, 'PROVIDER_FAILURE', field);
     assert.equal(controller.getSnapshot().result, null, field);
     assert.equal(calls.verify, 0, field);
@@ -342,7 +396,7 @@ test('responses with different request, snapshot or fingerprint are withheld bef
 test('origin changes clear consent and captured data; same-origin table changes preserve consent but mark old evidence stale', async () => {
   const { controller, calls, changeContext, invalidate } = setup();
   await permit(controller);
-  await controller.ask('en');
+  await controller.ask();
   const previous = controller.getSnapshot().result;
   invalidate();
   await flush();
@@ -365,7 +419,7 @@ test('origin changes clear consent and captured data; same-origin table changes 
 test('Cancel cannot relabel previous stale evidence current; explicit fresh inspection clears stale status', async () => {
   const { controller, calls, invalidate } = setup();
   await permit(controller);
-  await controller.ask('en');
+  await controller.ask();
   const previousResult = controller.getSnapshot().result;
   const previousSnapshot = controller.getSnapshot().snapshot;
   assert.ok(previousResult);
@@ -398,7 +452,7 @@ test('logout disposal clears pending work, question, source evidence and media a
     input = value;
     return pending.promise;
   };
-  const work = controller.ask('vi');
+  const work = controller.ask();
   await flush();
   controller.dispose();
   assert.equal(controller.getSnapshot().question, '');
@@ -408,7 +462,7 @@ test('logout disposal clears pending work, question, source evidence and media a
   pending.resolve(resultFor(input));
   invalidate();
   await work;
-  await controller.ask('en');
+  await controller.ask();
   assert.equal(controller.getSnapshot().result, null);
   assert.equal(calls.provider, 1);
   assert.equal(calls.dispose, 1);
@@ -423,16 +477,66 @@ test('provider quota and timeout errors preserve the question and allow an expli
     hooks.transport = async () => {
       throw Object.assign(new Error('Recoverable'), { code });
     };
-    await controller.ask('en');
+    await controller.ask();
     assert.equal(controller.getSnapshot().error, code);
     assert.equal(controller.getSnapshot().question, question);
     assert.equal(controller.getSnapshot().result, null);
     assert.equal(calls.provider, 1);
     hooks.transport = async (input) => resultFor(input);
-    await controller.ask('en');
+    await controller.ask();
     assert.equal(controller.getSnapshot().phase, 'ready');
     assert.equal(calls.provider, 2);
   }
+});
+
+test('grounded application-limit details are validated, preserved with the question and cleared on recovery or logout', async () => {
+  const { controller, hooks, calls } = setup();
+  await permit(controller);
+  const question = controller.getSnapshot().question;
+  const usage = {
+    minute_count: 30,
+    minute_limit: 30,
+    day_count: 75,
+    day_limit: 1000,
+    limited_by: 'minute',
+    retry_after_seconds: 12,
+    retry_at: '2026-09-21T06:30:12.000Z',
+  };
+  hooks.transport = async () => {
+    throw Object.assign(new Error('Application limit'), {
+      code: 'APP_RATE_LIMITED',
+      usage,
+    });
+  };
+  await controller.ask();
+  assert.deepEqual(controller.getSnapshot().errorUsage, usage);
+  assert.equal(controller.getSnapshot().question, question);
+  assert.equal(calls.provider, 1);
+  const pending = deferred<GroundedResponse>();
+  let nextInput!: GroundedRequest;
+  hooks.transport = async (input) => {
+    nextInput = input;
+    return pending.promise;
+  };
+  const retry = controller.ask();
+  assert.equal(controller.getSnapshot().errorUsage, null);
+  await flush();
+  pending.resolve(resultFor(nextInput));
+  await retry;
+  assert.equal(controller.getSnapshot().phase, 'ready');
+  for (const code of ['PROVIDER_RATE_LIMITED', 'APP_RATE_LIMITED']) {
+    hooks.transport = async () => {
+      throw Object.assign(new Error('Untrusted details'), {
+        code,
+        usage: { ...usage, minute_count: -1 },
+      });
+    };
+    await controller.ask();
+    assert.equal(controller.getSnapshot().errorUsage, null);
+  }
+  controller.dispose();
+  assert.equal(controller.getSnapshot().question, '');
+  assert.equal(controller.getSnapshot().errorUsage, null);
 });
 
 test('revoking while Allow waits for a page lookup cannot grant consent afterwards', async () => {

@@ -84,10 +84,22 @@ async function callProvider<T>(
     }
     if (error instanceof VoiceError) throw error;
     const { status, code } = providerStatus(error);
+    if (
+      feature === 'speak' &&
+      (code === 'language_not_supported' ||
+        code === 'unsupported_language' ||
+        code === 'unsupported_language_code')
+    ) {
+      throw new VoiceError(
+        'VOICE_LANGUAGE_UNSUPPORTED',
+        'Speech is unavailable for this language with the configured voice and model. Your text is still available.',
+        422,
+      );
+    }
     if (code === 'quota_exceeded' || code === 'insufficient_credits') {
       throw new VoiceError(
         'QUOTA_EXHAUSTED',
-        'The voice allowance has been used. You can keep editing your text.',
+        'ElevenLabs reported insufficient credits or allowance for this request. Your text is preserved.',
         429,
       );
     }
@@ -100,8 +112,8 @@ async function callProvider<T>(
     }
     if (status === 429)
       throw new VoiceError(
-        'RATE_LIMITED',
-        'The voice service is busy. Wait before trying again.',
+        'PROVIDER_RATE_LIMITED',
+        'ElevenLabs is temporarily limiting requests. No reset time is confirmed; retry manually later.',
         429,
         true,
       );
@@ -178,6 +190,9 @@ export async function synthesiseSpeech(input: unknown, signal?: AbortSignal) {
           text: parsed.data.text,
           modelId: config.model,
           outputFormat: 'mp3_44100_128',
+          // Override only this request. The player applies the companion's
+          // slower rate; account-level voice settings must not slow it twice.
+          voiceSettings: { speed: 1 },
           ...(parsed.data.language
             ? { languageCode: parsed.data.language }
             : {}),
