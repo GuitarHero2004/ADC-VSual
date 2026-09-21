@@ -3,16 +3,190 @@
 Hackathon project by **In Motion or Element**, for blind and low-vision users.
 The assistant complements existing screen readers.
 
-VSual answers bounded questions about the rendered **synthetic `/orders` dashboard**.
-Allow page processing, then type and select **Ask VSual**, or record a question
-and pause for five seconds to submit automatically. The configured model through Avis interprets the comparison; application code calculates
-the answer from captured rows and exposes the evidence. English and Vietnamese are
-supported. Reading other websites, browser actions and wake words are outside this feature.
+VSual answers bounded questions about **structured HTML articles/information pages**
+and the rendered **synthetic `/orders` dashboard**.
+Type and select **Ask VSual**, or deliberately record a question
+and pause for five seconds to submit automatically. The configured model through
+Avis answers from captured article excerpts. For orders comparisons, it interprets
+the question and application code calculates from the captured rows. English and Vietnamese are
+supported. Screenshots, Google resource access, arbitrary spreadsheet calculations,
+browser actions, automatic arrival summaries and wake words are outside this feature.
 
 The separate **`/voice` setup** remains a labelled speech test: its read-back repeats
 supplied text. In the companion, **Read answer** speaks the validated answer instead.
 Companion answer speech defaults ON for new preferences; recording cues and the
 standalone voice test remain optional. Text and evidence work with Speech OFF.
+
+## Structured page reading
+
+Open the floating VSual button on the source tab. This checks structure using any
+site permission the browser has already granted, including the configured local
+demo host. It does not request new site access. If access is missing, activate
+VSual using its **browser toolbar button** on that tab; the status updates
+automatically. **Check active page** performs a fresh access/structure check.
+An in-page button click does not itself grant `activeTab`. This branch
+adds `activeTab` and `scripting`; it does not expand the previous floating UI's site
+matches or backend host permissions. Toolbar/command activation injects the reader
+into the top-level document and checks structure only. Opening a toolbar/panel,
+rechecking structure or loading preferences never
+captures source text or calls the model. The existing command remains an explicit
+record/finish/cancel/stop toggle; the toolbar button opens without recording.
+
+There is no separate **Allow page processing** step or stored processing grant.
+**Ask VSual**, an explicit source-inspection action, or a deliberately started
+recording that reaches silence submission authorises that task's processing.
+A brief, nonblocking notice explains the data handling: asking sends the question
+and captured article text through Avis to the configured model; source inspection
+captures locally without calling the model. Orders retain their existing bounded
+question/scope interpretation and deterministic calculation path.
+Browser site access, supported page structure, authentication and workspace access
+remain separate requirements. Granting missing browser access never submits an
+existing draft automatically. There is no promise of access until the computer
+shuts down: extension sign-in and active-tab following are browser-session state
+and can clear on browser restart or extension reload. A subsequent deliberate task
+still has no additional processing-approval gate.
+Excluding forms does **not** guarantee that rendered prose has no private
+information. Our application does not persist content, transcripts or audio;
+provider retention follows its own policies and zero retention has not been established.
+
+Supported extraction is deliberately conservative: one identifiable `main`/main
+landmark or standalone `article`, containing headings, paragraphs and lists. Main
+regions containing multiple articles are rejected. There is no whole-`body` fallback.
+Navigation/chrome, forms and input values, editable regions, hidden/script/style
+content and VSual's interface are excluded. Tables, frames, canvas, diagrams,
+collapsed content and detectable pagination/unloaded content are disclosed as
+limitations; the reader does not expand or traverse them. Unrecognised application
+internals, closed shadow roots and content not present in the DOM are not read.
+Google Docs/Sheets/Slides, Gmail and PDF pages receive specific explanations when
+their structure is unsupported. This branch does not add their resource readers,
+OCR or visual interpretation; another permission click cannot enable those features.
+The snapshot may include text below the viewport and is never described as a
+screenshot, full website, full file or proof of all visible content.
+
+**Ask VSual captures the current supported page automatically** when browser access is available;
+there is no separate required capture step. The recorded-question silence flow
+uses the same capture-on-submit path. **Inspect source (optional, no AI) → Capture
+page content** shows the included sections, readable blocks and omissions without
+sending them to the model. Asking captures again and validates source
+freshness before accepting the answer. For **Explain this section**, choose a
+captured section or name a heading explicitly; scrolling and the screen-reader
+cursor do not identify a section. The answer identifies its source and model-input
+sections separately from the snapshot's coverage. **Supporting excerpts** displays
+the exact referenced blocks in the trusted extension frame, outside live regions.
+
+`POST /api/structured-read` reuses the existing authenticated backend, workspace
+membership, durable usage reservation, CORS and provider error reporting. Orders
+continue using `/api/grounded-read` and their deterministic calculation adapter.
+Structured requests never use the orders row schema. Page text is untrusted evidence,
+with no tools or action authority. References are checked against the selected
+snapshot/section; an answer without supporting references is rejected. Digit-based
+numbers in answers must match literal tokens in cited text. This is reference and
+literal validation, **not proof that every model paraphrase is semantically correct**.
+Users can inspect the source excerpts. Arbitrary calculations are unsupported.
+
+Shared `STRUCTURED_LIMITS` applies ceilings of 20,000 Unicode code points across
+source text/metadata, 512 KiB serialized JSON, 6,000 model-input tokens, 600 output
+tokens and 1,000 Unicode code points in answer/speech text. A client task and backend
+request each have a 45-second deadline; the provider stage has a 35-second timeout.
+The existing voice routes retain their own bounded recording/provider limits.
+Each submitted question makes at most one model call and one initial automatic TTS
+call. Repeat uses cached audio. There are no paid retry loops.
+
+The configured `gpt-6-astra` model's availability and 1,050,000-token context were
+confirmed through a read-only Avis model-list request. Its documented 128,000-token
+output maximum exceeds this feature's 600-token ceiling. Only that verified model
+profile is enabled for structured reading; other models give a lazy setup error.
+No provider is called on page load or during builds. Existing `AVIS_API_KEY`,
+`AVIS_API_BASE_URL`, `AVIS_AI_MODEL`, Supabase, database/workspace and allowed extension
+origin settings are reused; no new secret, database migration or cloud service is needed.
+
+Input budgeting conservatively counts UTF-8 bytes of instructions, question/evidence
+JSON and output schema, plus a 1,024-token framing reserve for the verified byte-level
+tokenizer family. This is an upper-bound guard, not an exact character/token ratio.
+It can reject a page well below the separate extraction ceiling. Select a shorter
+section or page after a budget error; nothing is silently truncated to fit the model
+and no extra model calls are made. Capture truncation uses whole blocks and reports
+partial coverage. Model limits: [official model profile](https://developers.openai.com/api/docs/models/gpt-6-astra);
+tokenizer background: [OpenAI tiktoken](https://github.com/openai/tiktoken).
+
+The existing companion controller owns one active content task. The backend retains
+per-user quota/idempotency; this is not a new distributed cross-device task scheduler.
+Browser access and each captured source remain bound to the relevant browser
+tab/window/document/resource; no application processing grants are stored.
+Navigation, relevant source mutations, logout, account changes and End invalidate
+work and audio. Source changes during recording disarm automatic submission. A
+remaining text draft requires deliberate review and revalidation. Page content,
+questions and answers are excluded from routine usage logs.
+
+Local acceptance sequence (Node 24 and npm 11):
+
+1. From the repository root run `npm ci --include=dev --include-workspace-root`,
+   `npm run dev:web`, and in another terminal `npm run build --workspace=@adc/extension`.
+2. Reload/load `apps/extension/dist` at `chrome://extensions` or `edge://extensions`,
+   then refresh open tabs. The manifest changes require extension reload.
+3. Open `http://127.0.0.1:3000/reading-demo`, a synthetic article with a deliberately
+   excluded table. Open the floating button: its structure should be checked using
+   the existing local-backend host permission. Sign in; no processing-approval
+   button is required.
+   On a site without existing access, select the pinned **VSual browser toolbar
+   button**; the page status should update without another manual check.
+   Opening, checking access and sign-in must not capture source text or ask.
+4. Start with Speech OFF. Type “What should the facilitator share before the meeting?”
+   and select **Ask VSual**. Check the source label and exact supporting excerpts.
+   Inspect the source and confirm that the attendance table's cells are not captured.
+5. Ask “How many people attended the morning session?” The table is outside coverage;
+   VSual should explain that the captured text does not supply that answer. Select
+   “Before the meeting” and ask “Explain this section.” Try a Vietnamese question.
+6. Enable Speech and submit once. Text/evidence must appear while audio is preparing.
+   Test Stop during preparation/playback and Read again without another TTS call.
+7. Record deliberately: continued speech resets the five-second silence timer;
+   **Stop and review** preserves manual submission. Change tabs or navigate during
+   recording or a pending answer and confirm no obsolete question/answer/audio is used.
+8. Repeat using only the keyboard and NVDA, with Speech OFF and ON, a narrow panel
+   and 200% text. End/reopen must not replay or submit anything. Sign-out clears work.
+9. Open another article on the same origin, switch between its tab and the first
+   article, and navigate within the site. After deliberate opening, VSual follows
+   the active source without an approval step. An already accepted answer and its
+   preparing/playing speech may continue in the original floating frame when only
+   the active tab changes. The new tab shows the remote speech status and Stop;
+   it must not present the old answer as evidence for the new page. A new Ask,
+   recording or Read action stops the old speech. Navigation or relevant changes
+   to the original source stop it too. No new page is captured until you ask or
+   inspect it. End disables following for that window.
+10. Visit an unsupported Docs/Gmail/PDF view: confirm an honest limitation and no
+    processing-approval button presented as the solution. Recheck the canonical
+    `/orders` comparison and the manual `/voice` setup page.
+
+Automated tests mock providers. **Historical browser checks below predate the
+latest removal of processing approval and cross-tab speech continuity.** Those
+latest behaviours are covered by mocked lifecycle/UI tests only; no desktop
+automation, microphone, audible playback or NVDA check was performed for this
+revision. Run `npm run check` for the current complete automated checks and builds.
+
+An earlier isolated Chrome 153 check with the unpacked,
+unmodified build exercised the floating Open button, real existing-permission
+lookup, scripting injection and capture, with mocked auth/answer HTTP. No standby
+injection/capture, a fresh Check active page probe, the then-required approval flow,
+draft preservation, Ask without prior source inspection, readable excerpts,
+excluded form/table/canvas content, Speech OFF, stale-answer rejection, End and
+320px/200% text reflow passed. No toolbar-handler simulation was used in this
+follow-up check. Missing browser permission is covered by mocks; physical
+toolbar/hotkey granting remains unverified. A native Tab event moved focus, but the
+complete keyboard/NVDA journey, physical microphone/permission, pronunciation,
+live Google and live model answers remain unrun. A build or model-list lookup does
+not verify them. Historical floating checks below refer to the earlier baseline.
+
+A further historical Chrome 153 run verified active-tab following, the earlier
+stored-approval behaviour, single-page navigation with Chrome's original-document
+message metadata, unsupported-page guidance and End across new and previously
+opened tabs. Only the deliberately submitted question captured text: the capture
+count stayed at one throughout the navigation checks, with Speech OFF and zero
+TTS calls. The latest frame also passed 320px viewport/200% text reflow and a native
+Tab focus smoke check. Auth/model/audio HTTP remained mocked. That earlier
+`npm run check` passed typechecking, lint, formatting, tests and both builds.
+The extension had existing non-failing shared-component `use client`
+warnings. A literal scan of that build's 30 browser output files found none of the three
+configured private values checked; no values were printed.
 
 ## Companion interface
 
@@ -20,8 +194,8 @@ Ordinary HTTP/HTTPS pages now contain a **floating VSual companion**, subject to
 browser site access. Its circular logo button has an accessible **Open VSual
 companion** name and status description. Insertion does not capture page content,
 start the microphone, call an AI provider or move focus. Activate it to open the
-companion. Reading is still restricted to the configured synthetic `/orders`
-dashboard; other pages show that page assistance is unavailable.
+companion. Article reading requires browser access and a deliberate task as
+described above; unsupported structures remain unavailable.
 The floating surface uses a rounded white card, blue logo launcher and pale
 section cards, with large text and visible keyboard focus. Its styling is scoped
 to the floating document; the side-panel fallback and voice setup page retain
@@ -44,9 +218,24 @@ playback, clears transient content and removes the frame; it does not sign out.
 Use the extension button or shortcut to deliberately reopen a fresh companion.
 Settings remain behind **Settings**. The frame moves away from focused page
 controls and scrolls when the viewport cannot fit the enlarged interface.
-Switching tabs cancels recording, pending questions and speech in the hidden
-companion and clears its transient draft, answer and page-processing consent.
-Returning does not replay or submit anything automatically. Sign-in is preserved.
+After a deliberate Open or browser activation, VSual follows the active tab in
+that browser window, preserving expanded/collapsed presentation. Following checks
+structure using existing browser access only; it never captures text, records,
+submits, starts a new speech request or moves focus automatically. Passive launcher insertion does not
+enable following. End disables following for the window until deliberate reopening.
+It also collapses earlier companion surfaces in that window; returning to an old
+tab does not reopen its expanded interface.
+Switching tabs cancels pending questions and stops/disarms recording and its
+silence submission. An already accepted, valid answer can retain its current or
+preparing speech in the original floating frame. The new tab exposes that remote
+speech's status and **Stop speech** without copying its answer/evidence into the
+new source. A new Ask, recording or explicit Read action takes over and stops the
+old speech. Returning to the original tab does not replay or submit anything.
+Navigation, relevant changes to the original source, closing/discarding that tab,
+End, logout and account changes stop and clear its work. Closing the owning frame
+or reconnecting its worker also ends audio: no background audio host is introduced.
+The side-panel fallback retains its stop-and-clear behaviour on tab changes.
+Browser-session sign-in is independent of the floating frame's transient content.
 
 The frame is an extension document (`floating.html`), not page DOM or a Chrome
 action popup. Only that document holds questions, answers, evidence and audio;
@@ -79,13 +268,15 @@ it performs no capture, authentication or provider request. Close stops it.
 Unexpected worker reconnection starts a fresh frame without resuming old work;
 after failed reconnection or extension reload, refresh the page. Navigation replaces
 the frame binding and clears old transient work; it never reuses a previous page's
-answer or processing consent on the next page.
+answer. Source capability and browser access are checked again without a separate
+processing-approval step. This is a browser interface, not an always-on-top desktop
+application; it cannot follow or read native applications outside the browser.
 
 The generated logo lives at `apps/extension/src/assets/vsual-logo.png`. It was made
 with the built-in image generator from this brief: a cobalt-blue circular VSual
 mark, bold white V with an integrated speech symbol, transparent corners, no text.
 
-Floating verification uses mocked providers in CI. The Chrome 153 unpacked-frame
+Historical floating-baseline verification used mocked providers in CI. The Chrome 153 unpacked-frame
 check additionally exercised native frame/auth-message binding and actual orders
 capture/verification with mocked account, answer and audio responses. Collapse,
 cached Repeat, Speech OFF, End removal, native toolbar duplicate activation and
@@ -102,8 +293,8 @@ tab, empty-field validation, Google-unavailable recovery, native orders capture,
 cached Repeat, sign-out and End. A second local origin/port with an ordinary
 maximum-z-index overlay stayed below VSual, had page processing blocked, and passed
 320px viewport/200% text checks. Real Google login and microphone use remain manual.
-`npm run check` passed: **182 extension + 173 backend + 2 web UI + 68 shared voice
-= 425 tests**, typecheck, lint, formatting and both production builds. The extension
+That baseline's `npm run check` passed tests, typecheck, lint, formatting and both
+production builds. The extension
 build retains the existing non-failing shared-component `use client` warnings.
 A scan of 27 browser output files found none of the three configured private
 values checked; no values were printed.
@@ -114,7 +305,8 @@ Floating acceptance on Windows:
    `http://127.0.0.1:3000/orders` (or the configured orders origin), then refresh.
    Confirm one small VSual launcher, unchanged page focus and no recording/request.
 2. Open VSual, choose Sign in to VSual and enter email/password in the floating form
-   (or complete Google's secure window), then allow page processing.
+   (or complete Google's secure window). Read the brief processing notice;
+   no extra approval step is required.
    Turn Speech OFF in Settings. Type the canonical July/August comparison and
    choose Ask VSual; inspect the answer and its two evidence rows.
 3. Collapse/reopen: draft and answer stay; no request or narration repeats. Enable
@@ -124,19 +316,23 @@ Floating acceptance on Windows:
    the transcript waits for Ask VSual. Cancel discards it. Speech stops before recording.
 5. During recording, transcription, an answer request and TTS, choose End, navigate
    away, or sign out. No late text/audio may return. End keeps sign-in; reopening
-   starts with empty transient content and fresh processing consent.
+   starts with empty transient content; sign-in may remain valid for the browser session.
 6. Reopen using the extension button and the assigned shortcut; test a cold worker
    and repeated activation. Check the side-panel/microphone-setup fallback.
 7. Repeat with Tab/Shift+Tab, Enter/Space and Escape, then NVDA. Check English and
    Vietnamese, visible focus, no full-answer live-region duplication, a narrow
    viewport, 200% zoom/text and page controls near each corner of the toolbar.
-8. Visit another ordinary website: the circular launcher remains available, but
-   page processing is unavailable. Sign-in/settings work there without capturing
-   that page. Switch tabs during recording or speech; the hidden companion stops.
+8. Visit another ordinary website: the launcher and sign-in/settings do not capture
+   that page. Reading requires browser access and supported article structure.
+   Switch tabs during recording or a pending question: it cancels/disarms. Switch
+   tabs after an answer is accepted: preparing/playing speech continues, with a
+   remote Stop control on the new tab. Stop it there, then repeat and start a new
+   Ask or recording; the old speech must stop. Close the original source tab while
+   it speaks and confirm playback ends. Return/reopen must not replay old audio.
 
 The extension is the working interface: **Current page → Your question → Ask VSual
 → Answer → View evidence**. The page status distinguishes unsupported pages,
-missing page access and processing consent; account and workspace access remain
+missing browser access and supported structure; account and workspace access remain
 separate. Starting **Record question** enables automatic submission after five
 seconds of silence following detected sound. Continued speech resets that timer
 and stays in the same recording, with one transcription request. **Stop and review**
@@ -151,8 +347,8 @@ review, and the 3 MiB limit still discards oversized recordings. Silence detecti
 uses local audio levels, not speaker identification: quiet voices, background
 noise and screen-reader audio need device testing. If local audio analysis is
 unavailable, use **Stop and review** and **Ask VSual**. Empty/failed transcriptions,
-cancellation, account/page changes and missing page permission never auto-submit.
-Permission granted later does not submit a previously held transcript. Only
+cancellation, account/page changes and missing browser access never auto-submit.
+Browser access granted later does not submit a previously held transcript. Only
 nonempty silence-finished transcripts may automatically ask once; all existing
 authentication, workspace and page checks still apply. This confirmed voice flow
 supersedes the earlier requirement to review every recorded question. `/voice`
@@ -202,9 +398,11 @@ The setting controls VSual only, not NVDA.
 The grounded controller reserves each fresh response once before asynchronous
 speech work. Old/restored answers, rerenders and UI-language changes cannot claim
 it again. Cancellation, new questions/recordings, logout, context invalidation and
-panel disposal prevent late playback. Only the latest answer audio is kept in
-session memory. New answers/context/session changes release it; nothing is stored
-in a database or browser preference storage.
+panel disposal prevent late playback. Only the latest answer audio in an owning
+companion document is kept in memory. New answers and invalidated source/session
+contexts release it; a floating tab switch alone may retain accepted answer speech
+in its original document. Remote status/Stop does not transfer audio or evidence to
+the newly active page. Nothing is stored in a database or browser preference storage.
 
 `COMPANION_PLAYBACK_RATE` is applied only by the browser player, including Repeat;
 pitch is preserved. ElevenLabs receives normal per-request speed `1`, without
@@ -219,7 +417,7 @@ now omit UI `language`, and validated responses include `answer_language` (`en` 
 `vi`). Automatic speech defaults here supersede the older reference-document
 default; Speech OFF retains the screen-reader journey. `/voice` remains manual.
 
-Local automatic-voice verification: `npm run check` passed **366 tests**, strict
+Historical automatic-voice verification: `npm run check` passed tests, strict
 type checking, lint, formatting and both production builds on Node 24.17.0 / npm
 11.13.0. Two explicit synthetic Avis requests (English/Vietnamese) passed the new
 language contract and deterministic evidence checks. Read-only ElevenLabs model
@@ -233,7 +431,7 @@ only one automatic question is claimed, manual Stop/30-second expiry stay review
 only, and cancellation, page changes or account switches reject late transcripts.
 Audio-analysis setup timeout and suspension fall back to manual controls. No live
 provider calls were made to test this addition.
-The built extension also passed a Chrome check with native Web Audio and
+That earlier built extension also passed a Chrome check with native Web Audio and
 MediaRecorder fed synthetic sound: a three-second pause followed by more sound
 reset the countdown; subsequent silence produced one recording upload, one
 question and one reply playback. Microphone tracks and audio analysis were
@@ -241,7 +439,7 @@ released. Authentication, transcription, answer and playback responses were
 controlled test substitutes; this does not verify a real microphone or spoken
 recognition. Real quiet/noisy-room and NVDA checks remain pending.
 
-Chrome 153 loaded the actual unpacked extension, service worker and orders content
+In that historical check, Chrome 153 loaded the actual unpacked extension, service worker and orders content
 script in a disposable profile. Controlled authentication/answer/Audio mocks
 verified automatic playback, Stop, cached Repeat/autoplay recovery, mute, language
 metadata, visible evidence while TTS is pending and no replay after document
@@ -502,17 +700,19 @@ request → cancel; speaking → stop. The toolbar opens without recording. A
 readiness/acknowledgement handshake handles cold workers and new panels. Escape
 cancels within the companion or web voice surface; in extension Settings it returns
 to the companion. A narrowly matched content script
-reads the orders table only after permission and a capture/Ask action or a
+reads the orders table only with browser access and a capture/Ask action or a
 deliberately started question recording that finishes after silence.
 There is no offscreen document or background microphone.
 Reload the extension and reopen the panel after any build/configuration change.
 
-If **Allow page processing** is disabled, select the exact supported `/orders`
-address shown beside the permission controls, then choose **Check active page**.
-With the local example configuration this is `http://127.0.0.1:3000/orders`;
-`localhost`, `/voice` and the home page do not match that configured address.
-The panel follows active-tab navigation without reading page content. After
-reloading the extension, reload the orders page too so its content script is ready.
+If page reading is unavailable, check **Current page**. Missing browser access
+requires the VSual browser toolbar button on that tab; **Check active page**
+rechecks access and structure without capturing. Unsupported structure needs a
+supported source, not a processing-approval click. For synthetic orders, use the
+exact configured origin and `/orders` path: the local example is
+`http://127.0.0.1:3000/orders`; `localhost`, `/voice` and the home page do not match
+that orders address. Structured article reading has its separate bounded support
+described above. After reloading the extension, refresh open source pages too.
 
 ## Accessible sign-in
 
@@ -553,8 +753,10 @@ Extension credentials and pending attempts live only in trusted
 `chrome.storage.session`. The worker coordinates refresh on validation/protected
 requests, with one in-flight refresh per session and no panel refresh loops.
 Closing/reopening the panel or suspending the worker retains sign-in. Browser
-restart, extension reload/update or disabling it may clear sign-in. Questions,
-capture consent, evidence and audio remain panel-session data. Only non-sensitive
+restart, extension reload/update or disabling it may clear sign-in and tab following.
+Questions, evidence and audio remain transient data in their owning companion
+document; accepted answer audio may continue across tab switches only as described
+above. There is no stored processing-approval grant. Only non-sensitive
 language/voice preferences persist on the device. Offline validation preserves
 credentials but blocks protected work until Retry succeeds; revoked sessions require
 sign-in. Provider requests are never silently replayed after uncertain failures.
@@ -601,8 +803,8 @@ in the extension. See [Supabase Google setup](https://supabase.com/docs/guides/a
 
 ### Authentication acceptance
 
-Accessible-auth baseline verification on Node 24.17.0 / npm 11.13.0: clean `npm ci` and
-`npm run check` passed (302 tests, typecheck, lint, formatting and both builds).
+Historical accessible-auth baseline verification on Node 24.17.0 / npm 11.13.0:
+clean `npm ci` and `npm run check` passed tests, typecheck, lint, formatting and both builds.
 The mocked integration exercises website commands, the actual extension session
 manager/Supabase SDK, backend identity/workspace checks, grounded evidence,
 session restoration and logout. Production-server HTTP checks returned 200 for
@@ -624,7 +826,7 @@ the interactive journey.
    the website, then Return. Verify the account and workspace status. Test an
    invalid password and an existing account without membership separately.
 2. Ask the canonical orders question below, inspect both evidence rows, close and
-   reopen the panel, grant page-processing permission again, and ask again. Closing
+   reopen the panel and ask again without a processing-approval step. Closing
    the panel retains authentication, not its sensitive question/evidence state.
 3. Stop the service worker from browser extension tools and reopen the panel;
    sign-in should survive. Restart the browser/reload the extension; fresh sign-in
@@ -639,7 +841,7 @@ the interactive journey.
    through your existing account controls: retry should require sign-in.
 6. Sign out while recording, requesting an answer, generating/playing speech or
    refreshing; old text/audio must never return. Switch A→B and confirm no captured
-   data, drafts, consent or evidence from A remains. Signed-out requests must fail
+   data, drafts, pending work or evidence from A remains. Signed-out requests must fail
    before Avis/ElevenLabs. Confirm website logout scope stays independent.
 7. Repeat with keyboard only and NVDA on Windows: Tab/Shift+Tab, Enter/Space,
    Escape, Show password, password-manager fill/paste, EN/VI errors, visible focus,
@@ -649,8 +851,9 @@ the interactive journey.
 
 1. Sign into the extension and open the configured `/orders` page. Choose the
    interface language independently from the recording language.
-2. Select **Allow page processing**. Permission lasts only for this signed-in panel
-   session and origin; withdraw it to cancel work and clear captured data.
+2. Check that browser access and the orders source are available. The brief notice
+   explains processing; there is no separate Allow step. Opening VSual alone does
+   not capture anything. End clears captured content without signing out.
 3. Enter **“Compare completed orders in the South for August and July.”** or
    **“So sánh số đơn hoàn thành ở miền Nam tháng 8 với tháng 7 năm 2026.”**
    For hands-free submission after activation, choose **Record question**, speak,
@@ -755,8 +958,9 @@ or deployed backend as above.
 2. Identify account/workspace status and **Current page**. If signed out, complete
    the floating sign-in using Tab, Shift+Tab, Enter/Space and a password manager or
    Google's secure window. Verify the correct account and separate
-   workspace access. Open the supported `/orders` page and choose **Allow page
-   processing**; permission alone must not capture/upload anything.
+   workspace access. Open the supported `/orders` page and review the processing
+   notice; opening/checking the source must not capture/upload anything. There is
+   no processing-approval control to find.
 3. Enter the canonical comparison below using only the keyboard. Enter adds a
    newline; **Ask VSual** submits once. The microphone can remain denied or unused.
 4. Hear the brief result status without losing focus. Use **Go to answer**, then
@@ -776,7 +980,7 @@ or deployed backend as above.
    transcript for manual review and Ask. **Cancel recording** discards without
    upload. Test initial silence, the 30-second cap, soft speech and background
    noise. Cancel during transcription, sign out or change source tabs; late
-   transcripts must never ask. Missing permission must hold the text for review.
+   transcripts must never ask. Missing browser access must hold the text for review.
 8. Deny microphone permission or disconnect the network. Retain the typed question,
    hear a useful error and retry deliberately. Cancel pending work and sign out
    during a request; late text, answers or audio must not return.
@@ -785,9 +989,13 @@ or deployed backend as above.
    panel, 200% browser zoom, long labels and Windows contrast themes. On the website,
    repeat using **Language** while email is entered; sign-in must not
    restart. Read the English orders source unchanged in the Vietnamese interface.
-10. Navigate or select another tab. Earlier evidence must be cleared or explicitly
-    marked as previous context, playback must stop, and no page content should be
-    transmitted automatically. Return to the supported page and ask deliberately.
+10. Navigate the source page: earlier evidence and speech must be invalidated.
+    Separately, switch tabs after accepting an answer: the floating companion's
+    preparing/playing speech may continue from its original frame; the new tab
+    must identify remote speech and offer Stop without showing old evidence as
+    current. Start a new Ask or recording to stop old speech. Pending questions and
+    recording must cancel/disarm on a tab switch. No new page content is transmitted
+    automatically. Return to the source without replay, then ask deliberately.
 
 Also turn Speech OFF and complete the full typed/NVDA journey. The answer remains
 normal readable text; our polite status regions must not announce its full text
@@ -799,10 +1007,10 @@ explicit requests such as “Answer in English” / “Trả lời bằng tiến
 Focused automated coverage includes settings focus/persistence, retained drafts,
 unchanged captured source evidence across language changes, manual and silence-
 finished transcript submission and existing cancellation/authentication boundaries. Local
-rendered checks in Chrome 153 covered the fixed light palette (including a dark
+historical rendered checks in Chrome 153 covered the fixed light palette (including a dark
 system preference), large default text, 320/1280-CSS-pixel layouts, Vietnamese,
 200% text with spacing overrides, and emulated forced colours.
-The actual unpacked extension and service worker were loaded in a disposable
+During that earlier check, the actual unpacked extension and service worker were loaded in a disposable
 profile: keyboard Settings navigation, preference persistence on reload, real
 website sign-in handoff and cancellation passed without entering credentials or
 calling a billable provider. This exercised the extension document in a tab, not
@@ -889,7 +1097,8 @@ recordings and text are sent to ElevenLabs under its
 Run the journey in the companion panel, then check:
 
 - [ ] Windows Chrome/Edge: cold shortcut, toolbar without microphone activation,
-      initial focus, sign-in, allow/withdraw permission and unsupported-page refusal.
+      initial focus, sign-in, first Ask without extra processing approval,
+      browser-access denial/recovery and unsupported-page refusal.
 - [ ] English and Vietnamese questions: both cited rows, period direction, capture
       time, Go to answer, evidence disclosure/Close evidence and Return to page focus.
 - [ ] In browser DevTools, change the displayed August cell from `900` to `1,050`.
@@ -897,7 +1106,7 @@ Run the journey in the companion panel, then check:
       (12.5%)**. Changing the rendered DOM this way is also covered by automated tests.
 - [ ] During a request, Cancel, change tab, navigate, edit the relevant table or
       sign out. Late responses must not appear; no automatic provider retry occurs.
-- [ ] Deny page permission: no capture/upload. Missing Avis configuration: honest
+- [ ] Deny browser site access: no capture/upload. Missing Avis configuration: honest
       setup error, question preserved, source inspection still available.
 - [ ] Keyboard-only and NVDA: labels, brief announcements, no unexpected focus move
       on answer arrival, semantic evidence, 200–400% zoom and narrow-panel reflow.
@@ -916,8 +1125,9 @@ On 20 September 2026, the configured Avis model passed one live English and one 
 Vietnamese synthetic provider check: both returned valid structured interpretations,
 then application code calculated the expected decrease of 300 orders (25%). These
 checks did not exercise application sign-in, database reservations or browser capture.
-The automated tests, type checking, lint, formatting and both production builds
-passed. No deployment was performed for this branch.
+That earlier verification also passed automated tests, type checking, lint,
+formatting and both production builds. Run `npm run check` to verify the current
+checkout. No deployment is performed as part of this feature implementation.
 
 Earlier voice verification recorded one successful synthetic English STT provider
 check and a restricted TLS/RLS database read check. That earlier live TTS check
@@ -960,8 +1170,8 @@ submission path. Its answer controller sends only validated answer text through 
 `/api/voice/speak` transport. This is the bounded integration point for later
 reasoning work. Model/page content never grants action authority.
 
-Review this work on `feat/floating-companion`, based on updated `dev` at automatic-voice
-merge `daf9708` (PR #11). Merge a reviewed feature before starting a separate follow-up branch
+Review this work on `feat/structured-page-read`, based on updated `dev` at floating-companion
+merge `8500f0d` (PR #12), which includes automatic voice replies. Merge a reviewed feature before starting a separate follow-up branch
 for broader scope or pending acceptance. When committing a completed feature,
 split changes into focused commits with concise messages that explain their purpose
 to technical and non-technical readers. Keep related tests with their implementation.

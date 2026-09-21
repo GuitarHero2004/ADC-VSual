@@ -1,11 +1,20 @@
-import type { GroundedSnapshot } from '@adc/contracts';
 import {
   OrdersPageError,
   parseOrdersPageResponse,
   type OrdersPageRequest,
   type OrdersPageResponse,
 } from './orders-adapter.ts';
-import type { OrdersContext, OrdersInvalidation } from './page-context.ts';
+import {
+  validStructuredContext,
+  type OrdersContext,
+  type OrdersInvalidation,
+  type PageSnapshot,
+} from './page-context.ts';
+import {
+  parseStructuredPageResponse,
+  type StructuredPageRequest,
+  type StructuredPageResponse,
+} from './structured-adapter.ts';
 import {
   exactMessage,
   FLOATING_SURFACE_PORT,
@@ -13,7 +22,7 @@ import {
 } from './floating-protocol.ts';
 
 type Pending = {
-  resolve(value: OrdersPageResponse): void;
+  resolve(value: OrdersPageResponse | StructuredPageResponse): void;
   reject(error: Error): void;
   cleanup(): void;
 };
@@ -30,12 +39,25 @@ export class FloatingClient {
     (reason: OrdersInvalidation) => void
   >();
   private readonly pending = new Map<string, Pending>();
+  private contextCheck: {
+    id: string;
+    promise: Promise<OrdersContext>;
+    resolve(context: OrdersContext): void;
+    reject(error: Error): void;
+    cleanup(): void;
+  } | null = null;
   private readonly consumed = new Set<string>();
   private readonly activations: Extract<FloatingEvent, { type: 'activate' }>[] =
     [];
+  private resume: Extract<FloatingEvent, { type: 'resume' }> | null = null;
+  private speechStatus: Extract<
+    FloatingEvent,
+    { type: 'speech-status' }
+  > | null = null;
+  private reportedSpeech: boolean | null = null;
   private documentKey: string | null = null;
   private readonly port: chrome.runtime.Port;
-  private readonly context: OrdersContext;
+  private context: OrdersContext;
   private readonly browser: typeof chrome;
   private readonly heartbeat: ReturnType<typeof setInterval>;
 
@@ -61,6 +83,12 @@ export class FloatingClient {
   }
   private invalidate(reason: OrdersInvalidation) {
     this.revision++;
+    if (reason === 'tab') this.resume = null;
+    if (this.contextCheck) {
+      this.contextCheck.cleanup();
+      this.contextCheck.reject(new OrdersPageError('CONTEXT_CHANGED'));
+      this.contextCheck = null;
+    }
     this.documentKey = null;
     for (const work of this.pending.values()) {
       work.cleanup();
@@ -75,16 +103,67 @@ export class FloatingClient {
     this.bound = false;
     clearInterval(this.heartbeat);
     this.activations.length = 0;
+    this.resume = null;
+    this.speechStatus = null;
+    this.reportedSpeech = null;
     this.invalidate('unavailable');
     this.emit({ type: 'ended' });
   };
   private receive = (value: unknown) => {
     if (!this.bound) return;
+    if (
+      exactMessage(value, 'floating:speech-status', ['active', 'other']) &&
+      typeof value.active === 'boolean' &&
+      typeof value.other === 'boolean' &&
+      (value.active || !value.other)
+    ) {
+      this.speechStatus = {
+        type: 'speech-status',
+        active: value.active,
+        other: value.other,
+      };
+      if (this.readyState) this.emit(this.speechStatus);
+      return;
+    }
+    if (exactMessage(value, 'floating:speech-stop')) {
+      this.emit({ type: 'speech-stop' });
+      return;
+    }
+    if (
+      exactMessage(value, 'floating:resume', ['expanded']) &&
+      typeof value.expanded === 'boolean'
+    ) {
+      const event = { type: 'resume' as const, expanded: value.expanded };
+      if (this.readyState) this.emit(event);
+      else this.resume = event;
+      return;
+    }
+    if (
+      exactMessage(value, 'floating:context-checked', ['id', 'context']) &&
+      this.contextCheck &&
+      this.contextCheck.id === value.id &&
+      this.validContext(value.context)
+    ) {
+      const check = this.contextCheck;
+      this.contextCheck = null;
+      check.cleanup();
+      this.updateContext(value.context);
+      check.resolve({ ...this.context });
+      return;
+    }
+    if (
+      exactMessage(value, 'floating:context', ['context']) &&
+      this.validContext(value.context)
+    ) {
+      this.updateContext(value.context);
+      return;
+    }
     if (exactMessage(value, 'floating:ended')) {
       this.disconnected();
       return;
     }
     if (exactMessage(value, 'floating:cancel')) {
+      this.resume = null;
       this.emit({ type: 'cancel' });
       return;
     }
@@ -114,9 +193,13 @@ export class FloatingClient {
       else this.activations.push(event);
       return;
     }
-    const response = parseOrdersPageResponse(value);
+    const response =
+      parseOrdersPageResponse(value) ?? parseStructuredPageResponse(value);
     if (!response) return;
-    if (response.type === 'orders:changed') {
+    if (
+      response.type === 'orders:changed' ||
+      response.type === 'structured:changed'
+    ) {
       this.invalidate('page');
       return;
     }
@@ -124,10 +207,57 @@ export class FloatingClient {
     if (!pending) return;
     pending.cleanup();
     this.pending.delete(response.id);
-    if (response.type === 'orders:error')
+    if (
+      response.type === 'orders:error' ||
+      response.type === 'structured:error'
+    )
       pending.reject(new OrdersPageError(response.code));
     else pending.resolve(response);
   };
+  private validContext(value: unknown): value is OrdersContext {
+    return (
+      validStructuredContext(
+        value,
+        this.context.tabId ?? undefined,
+        this.context.windowId ?? undefined,
+      ) &&
+      value.origin === this.context.origin &&
+      value.pathname === this.context.pathname
+    );
+  }
+  private updateContext(context: OrdersContext) {
+    const changed = JSON.stringify(this.context) !== JSON.stringify(context);
+    this.context = context;
+    if (changed) this.invalidate('page');
+  }
+  /** Explicit Open/Check only: reuse browser permission; never capture source text. */
+  preparePage(): Promise<OrdersContext> {
+    if (!this.bound) return Promise.reject(new OrdersPageError('UNAVAILABLE'));
+    if (this.context.sourceKind !== 'structured_page')
+      return Promise.resolve({ ...this.context });
+    if (this.contextCheck) return this.contextCheck.promise;
+    const id = crypto.randomUUID();
+    let resolve!: (context: OrdersContext) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<OrdersContext>((done, fail) => {
+      resolve = done;
+      reject = fail;
+    });
+    const timer = setTimeout(() => {
+      if (this.contextCheck?.id !== id) return;
+      this.contextCheck = null;
+      reject(new OrdersPageError('UNAVAILABLE'));
+    }, 10_000);
+    this.contextCheck = {
+      id,
+      promise,
+      resolve,
+      reject,
+      cleanup: () => clearTimeout(timer),
+    };
+    this.post({ type: 'floating:check-page', id });
+    return promise;
+  }
   private post(value: unknown) {
     if (!this.bound) return;
     try {
@@ -149,6 +279,12 @@ export class FloatingClient {
     if (!this.bound) return;
     this.readyState = true;
     this.post({ type: 'floating:ready' });
+    if (this.speechStatus) this.emit(this.speechStatus);
+    if (this.resume) {
+      const resume = this.resume;
+      this.resume = null;
+      this.emit(resume);
+    }
     for (const activation of this.activations.splice(0)) this.emit(activation);
   }
   layout(expanded: boolean, height?: number, launcher = false, width?: number) {
@@ -167,6 +303,15 @@ export class FloatingClient {
   }
   claim() {
     this.post({ type: 'floating:claim' });
+  }
+  /** Metadata only; the player and its audio remain in their original frame. */
+  reportSpeech(active: boolean) {
+    if (active === this.reportedSpeech) return;
+    this.reportedSpeech = active;
+    this.post({ type: 'floating:speech-state', active });
+  }
+  stopSpeech() {
+    this.post({ type: 'floating:stop-speech' });
   }
   close() {
     this.post({ type: 'floating:close' });
@@ -207,9 +352,9 @@ export class FloatingClient {
     this.invalidate('unavailable');
   }
   private request(
-    message: OrdersPageRequest,
+    message: OrdersPageRequest | StructuredPageRequest,
     signal: AbortSignal,
-  ): Promise<OrdersPageResponse> {
+  ): Promise<OrdersPageResponse | StructuredPageResponse> {
     signal.throwIfAborted();
     if (!this.bound) return Promise.reject(new OrdersPageError('UNAVAILABLE'));
     return new Promise((resolve, reject) => {
@@ -239,6 +384,12 @@ export class FloatingClient {
       if (disposed || !this.bound) throw new OrdersPageError('UNAVAILABLE');
     };
     return {
+      prepareContext: async (): Promise<OrdersContext> => {
+        available();
+        const context = await this.preparePage();
+        available();
+        return context;
+      },
       getContext: async (): Promise<OrdersContext> => {
         if (disposed || !this.bound)
           return {
@@ -255,7 +406,7 @@ export class FloatingClient {
         signal: AbortSignal,
         expectedOrigin: string,
         expectedTabId?: number,
-      ): Promise<GroundedSnapshot> => {
+      ): Promise<PageSnapshot> => {
         available();
         if (!this.context.supported)
           throw new OrdersPageError('UNSUPPORTED_PAGE');
@@ -266,27 +417,40 @@ export class FloatingClient {
           throw new OrdersPageError('CONTEXT_CHANGED');
         const revision = this.revision;
         const response = await this.request(
-          {
-            type: 'orders:capture',
-            id: crypto.randomUUID(),
-            expected_origin: expectedOrigin,
-          },
+          this.context.sourceKind === 'structured_page'
+            ? {
+                type: 'structured:capture',
+                id: crypto.randomUUID(),
+                expected_origin: expectedOrigin,
+                expected_pathname: this.context.pathname!,
+                tab_id: this.context.tabId!,
+                window_id: this.context.windowId!,
+              }
+            : {
+                type: 'orders:capture',
+                id: crypto.randomUUID(),
+                expected_origin: expectedOrigin,
+              },
           signal,
         );
         signal.throwIfAborted();
         available();
         if (
           revision !== this.revision ||
-          response.type !== 'orders:result' ||
+          (response.type !== 'orders:result' &&
+            response.type !== 'structured:result') ||
           response.snapshot.origin !== expectedOrigin ||
-          response.snapshot.pathname !== this.context.pathname
+          response.snapshot.pathname !== this.context.pathname ||
+          (response.type === 'structured:result' &&
+            (response.snapshot.tab_id !== this.context.tabId ||
+              response.snapshot.window_id !== this.context.windowId))
         )
           throw new OrdersPageError('CONTEXT_CHANGED');
         this.documentKey = response.snapshot.document_key;
         return response.snapshot;
       },
       verify: async (
-        snapshot: GroundedSnapshot,
+        snapshot: PageSnapshot,
         signal: AbortSignal,
       ): Promise<boolean> => {
         if (
@@ -300,13 +464,24 @@ export class FloatingClient {
         const revision = this.revision;
         try {
           const response = await this.request(
-            {
-              type: 'orders:verify',
-              id: crypto.randomUUID(),
-              document_key: snapshot.document_key,
-              fingerprint: snapshot.fingerprint,
-              expected_origin: snapshot.origin,
-            },
+            'source_kind' in snapshot
+              ? {
+                  type: 'structured:verify',
+                  id: crypto.randomUUID(),
+                  document_key: snapshot.document_key,
+                  fingerprint: snapshot.fingerprint,
+                  expected_origin: snapshot.origin,
+                  expected_pathname: snapshot.pathname,
+                  tab_id: snapshot.tab_id,
+                  window_id: snapshot.window_id,
+                }
+              : {
+                  type: 'orders:verify',
+                  id: crypto.randomUUID(),
+                  document_key: snapshot.document_key,
+                  fingerprint: snapshot.fingerprint,
+                  expected_origin: snapshot.origin,
+                },
             signal,
           );
           return (
@@ -314,7 +489,8 @@ export class FloatingClient {
             this.bound &&
             revision === this.revision &&
             !signal.aborted &&
-            response.type === 'orders:verified' &&
+            (response.type === 'orders:verified' ||
+              response.type === 'structured:verified') &&
             response.current
           );
         } catch {
@@ -324,11 +500,20 @@ export class FloatingClient {
       returnToPage: async (): Promise<{ restored: boolean }> => {
         available();
         const response = await this.request(
-          { type: 'orders:focus', id: crypto.randomUUID() },
+          {
+            type:
+              this.context.sourceKind === 'structured_page'
+                ? 'structured:focus'
+                : 'orders:focus',
+            id: crypto.randomUUID(),
+          },
           new AbortController().signal,
         );
         available();
-        if (response.type !== 'orders:focused')
+        if (
+          response.type !== 'orders:focused' &&
+          response.type !== 'structured:focused'
+        )
           throw new OrdersPageError('UNAVAILABLE');
         return { restored: response.restored };
       },
@@ -385,9 +570,11 @@ export function connectFloating(
         typeof context.origin !== 'string' ||
         typeof context.pathname !== 'string' ||
         !context.pathname.startsWith('/') ||
-        (context.supported
-          ? context.pathname !== '/orders' || context.reason !== null
-          : context.reason !== 'unsupported')
+        (context.sourceKind === 'structured_page'
+          ? !validStructuredContext(context)
+          : context.supported
+            ? context.pathname !== '/orders' || context.reason !== null
+            : context.reason !== 'unsupported')
       )
         return;
       try {

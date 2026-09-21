@@ -7,7 +7,7 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'VSual — Accessible browser companion',
   description:
-    'Ask about the supported orders demo and inspect the evidence behind each answer. A companion to your screen reader.',
+    'Ask about supported HTML articles or the orders demo and inspect supporting excerpts. A companion to your screen reader.',
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

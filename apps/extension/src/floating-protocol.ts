@@ -1,5 +1,6 @@
 import type { OrdersContext, OrdersInvalidation } from './page-context.ts';
 import type { OrdersPageResponse } from './orders-adapter.ts';
+import type { StructuredPageResponse } from './structured-adapter.ts';
 
 export const FLOATING_HOST_PORT = 'floating-host';
 export const FLOATING_SURFACE_PORT = 'floating-surface';
@@ -20,13 +21,22 @@ export type FloatingHostCommand =
   | { type: 'floating:remove' };
 export type FloatingSurfaceMessage =
   | { type: 'floating:bound'; context: OrdersContext }
+  | { type: 'floating:context'; context: OrdersContext }
+  | { type: 'floating:context-checked'; id: string; context: OrdersContext }
+  | { type: 'floating:resume'; expanded: boolean }
+  | { type: 'floating:speech-status'; active: boolean; other: boolean }
+  | { type: 'floating:speech-stop' }
   | { type: 'floating:activate'; id: string; record: boolean }
   | { type: 'floating:invalidated'; reason: OrdersInvalidation }
   | { type: 'floating:cancel' }
   | { type: 'floating:ended' }
-  | OrdersPageResponse;
+  | OrdersPageResponse
+  | StructuredPageResponse;
 export type FloatingEvent =
   | { type: 'activate'; id: string; record: boolean }
+  | { type: 'resume'; expanded: boolean }
+  | { type: 'speech-status'; active: boolean; other: boolean }
+  | { type: 'speech-stop' }
   | { type: 'cancel' }
   | { type: 'ended' };
 

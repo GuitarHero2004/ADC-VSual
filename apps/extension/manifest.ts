@@ -15,10 +15,10 @@ export function createManifest(
     manifest_version: 3,
     name: 'VSual - Accessible browser companion',
     description:
-      'Ask about the supported orders dashboard and inspect captured evidence. Optional recorded speech and read-aloud.',
+      'Ask about supported HTML articles or the orders demo and inspect supporting evidence. Optional recorded speech and read-aloud.',
     version: '0.1.0',
     minimum_chrome_version: '116',
-    permissions: ['sidePanel', 'storage', 'identity'],
+    permissions: ['sidePanel', 'storage', 'identity', 'activeTab', 'scripting'],
     ...(authUrl
       ? {
           externally_connectable: {

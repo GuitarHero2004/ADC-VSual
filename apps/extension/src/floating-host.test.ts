@@ -308,6 +308,33 @@ test('SPA navigation replaces the frame binding and resumes UI after an excluded
   }
 });
 
+test('End dismissal remains explicit across a same-document route change', () => {
+  const fixture = setup();
+  const stop = installFloatingHost(
+    fixture.dom.window.document,
+    fixture.options,
+  );
+  try {
+    fixture.send({ type: 'floating:mount' });
+    fixture.send({ type: 'floating:remove' });
+    fixture.dom.window.history.pushState({}, '', '/another-article');
+    fixture.dom.window.dispatchEvent(
+      new fixture.dom.window.PopStateEvent('popstate'),
+    );
+    const ready = fixture.sent.at(-1) as { type: string; dismissed?: boolean };
+    assert.equal(ready.type, 'floating:host-ready');
+    assert.equal(ready.dismissed, true);
+    assert.equal(
+      fixture.dom.window.document.querySelectorAll('[data-vsual-floating-host]')
+        .length,
+      0,
+    );
+  } finally {
+    stop();
+    fixture.dom.window.close();
+  }
+});
+
 test('consecutive failed worker registrations use fresh bindings, preserve dismissal and stop after three retries', () => {
   const fixture = setup();
   const scheduled: { callback: () => void; delay: number }[] = [];

@@ -95,6 +95,12 @@ test('actual floating App starts as an idle launcher and preserves work when ope
     },
   );
   const noEvents = { addListener() {}, removeListener() {} };
+  const storageListeners = new Set<
+    (
+      changes: Record<string, { newValue?: unknown; oldValue?: unknown }>,
+      area: string,
+    ) => void
+  >();
   const status: AuthStatus = {
     phase: 'signed_in',
     account: { id: crypto.randomUUID(), email: 'member@example.test' },
@@ -127,7 +133,26 @@ test('actual floating App starts as an idle launcher and preserves work when ope
         return [{ name: 'toggle-voice', shortcut: 'Ctrl+Shift+Y' }];
       },
     },
-    storage: { onChanged: noEvents },
+    storage: {
+      onChanged: {
+        addListener(
+          listener: (
+            changes: Record<string, { newValue?: unknown; oldValue?: unknown }>,
+            area: string,
+          ) => void,
+        ) {
+          storageListeners.add(listener);
+        },
+        removeListener(
+          listener: (
+            changes: Record<string, { newValue?: unknown; oldValue?: unknown }>,
+            area: string,
+          ) => void,
+        ) {
+          storageListeners.delete(listener);
+        },
+      },
+    },
     tabs: { async create() {} },
     sidePanel: { async open() {} },
   });
@@ -368,6 +393,25 @@ test('actual floating App starts as an idle launcher and preserves work when ope
       ),
     );
 
+    for (const hidden of [true, false]) {
+      await settle(() => {
+        Object.defineProperty(document, 'hidden', {
+          configurable: true,
+          value: hidden,
+        });
+        document.dispatchEvent(new dom.window.Event('visibilitychange'));
+      });
+    }
+    assert.equal(launcher().getAttribute('aria-expanded'), 'false');
+    assert.equal(
+      hostMessages.some((message) => message.type === 'floating:check-page'),
+      false,
+      'Returning to a passive launcher must not prepare a reader or arm following',
+    );
+    assert.equal(captures, 0);
+    assert.equal(microphoneCalls, 0);
+    assert.deepEqual(network, { questions: 0, transcription: 0, speech: 0 });
+
     await settle(() => {
       launcher().focus();
       launcher().click();
@@ -380,7 +424,78 @@ test('actual floating App starts as an idle launcher and preserves work when ope
       textarea,
       'An explicit opening focuses the question',
     );
-    await settle(() => button('Allow page processing').click());
+    const claimsBeforeRemote = hostMessages.filter(
+      (message) => message.type === 'floating:claim',
+    ).length;
+    const notifyRemoteSpeech = (active: boolean) =>
+      messages.forEach((listener) =>
+        listener({
+          type: 'floating:speech-status',
+          active,
+          other: active,
+        }),
+      );
+    await settle(() => notifyRemoteSpeech(true));
+    const remoteStop = button('Stop speech in other tab');
+    assert.ok(visible(remoteStop));
+    assert.match(
+      remoteStop.parentElement!.textContent!,
+      /Reading an answer from another tab\. New questions use this page\./u,
+    );
+    await settle(() => button('Settings').click());
+    await settle(() => button('Back to companion').click());
+    await settle(() => button('Collapse companion').click());
+    assert.ok(
+      visible(remoteStop),
+      'Remote Stop remains reachable when compact',
+    );
+    await settle(() => button('Expand companion').click());
+    assert.equal(
+      hostMessages.filter((message) => message.type === 'floating:claim')
+        .length,
+      claimsBeforeRemote,
+      'Opening, collapsing and settings navigation do not take over remote speech',
+    );
+    const remoteStopsBefore = hostMessages.filter(
+      (message) => message.type === 'floating:stop-speech',
+    ).length;
+    await settle(() => {
+      remoteStop.focus();
+      remoteStop.click();
+    });
+    assert.equal(
+      hostMessages.filter((message) => message.type === 'floating:stop-speech')
+        .length,
+      remoteStopsBefore + 1,
+      'The remote Stop control sends one trusted stop request',
+    );
+    await settle(() => notifyRemoteSpeech(false));
+    assert.equal(visible(remoteStop), false);
+    assert.equal(
+      document.activeElement,
+      button('Settings'),
+      'When remote speech ends, focus moves from the hidden Stop to a stable expanded control',
+    );
+    await settle(() => button('Collapse companion').click());
+    await settle(() => notifyRemoteSpeech(true));
+    remoteStop.focus();
+    await settle(() => notifyRemoteSpeech(false));
+    assert.equal(
+      document.activeElement,
+      launcher(),
+      'When remote speech ends in compact view, focus returns to the launcher',
+    );
+    await settle(() => launcher().click());
+    assert.equal(captures, 0);
+    assert.equal(microphoneCalls, 0);
+    assert.equal(audio.plays, 0);
+    assert.deepEqual(network, { questions: 0, transcription: 0, speech: 0 });
+    assert.equal(
+      [...document.querySelectorAll('button')].some(
+        (control) => control.textContent === 'Allow page processing',
+      ),
+      false,
+    );
     await settle(() => button('Use example question').click());
     const draft = textarea.value;
     await settle(() => button('Collapse companion').click());
@@ -465,15 +580,16 @@ test('actual floating App starts as an idle launcher and preserves work when ope
       });
       document.dispatchEvent(new dom.window.Event('visibilitychange'));
     });
-    assert.ok(
-      audio.pauses > pausesBeforeTabChange,
-      'Switching tabs stops speech',
+    assert.equal(
+      audio.pauses,
+      pausesBeforeTabChange,
+      'An accepted answer keeps speaking while its owning tab is temporarily hidden',
     );
-    assert.equal(document.querySelector('.answer-text'), null);
+    assert.equal(document.querySelector('.answer-text'), answer);
     assert.equal(
       textarea.value,
-      '',
-      'Hidden-tab cleanup clears transient content',
+      'Compare July and August orders.',
+      'Temporarily hiding the source tab preserves the reviewable draft',
     );
     await settle(() => {
       Object.defineProperty(document, 'hidden', {
@@ -488,6 +604,8 @@ test('actual floating App starts as an idle launcher and preserves work when ope
       'Returning to the tab never replays an answer',
     );
     assert.equal(network.speech, 1);
+    assert.equal(document.querySelector('.answer-text'), answer);
+    await settle(() => button('Stop speech').click());
     await settle(() => button('Collapse companion').click());
     assert.equal(document.activeElement, launcher());
     assert.equal(network.questions, 1);

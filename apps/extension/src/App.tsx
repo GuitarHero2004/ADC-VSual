@@ -86,7 +86,7 @@ function SignedInVoice({
     [requestOptions],
   );
   return (
-    <div onClickCapture={onActivity}>
+    <div onClickCapture={setupTab ? onActivity : undefined}>
       {setupTab ? (
         <VoiceTest
           sessionKey={`${userId}:${epoch}`}
@@ -107,8 +107,14 @@ function SignedInVoice({
           onReady={onReady}
           settingsTarget={settingsTarget}
           onControls={onControls}
+          onActivity={onActivity}
+          onSpeechOff={() => floating?.stopSpeech()}
           {...(floating
-            ? { createPage: () => floating.createPage(), autoFocus: false }
+            ? {
+                createPage: () => floating.createPage(),
+                autoFocus: false,
+                continueAnswerAcrossTabs: true,
+              }
             : {})}
         />
       )}
@@ -123,8 +129,14 @@ export function App({
   const [language, setLanguage] = useState<UiLanguage>(initialLanguage);
   const [expanded, setExpanded] = useState(!floating);
   const [controls, setControls] = useState<CompanionControls | null>(null);
+  const controlsRef = useRef(controls);
+  controlsRef.current = controls;
+  const [remoteSpeech, setRemoteSpeech] = useState(false);
+  const remoteStopButton = useRef<HTMLButtonElement>(null);
+  const remoteStopFocus = useRef(false);
   const floatingStatus = useFloatingStatus(floating ? controls : null);
-  const launcher = !!floating && !expanded && floatingStatus !== 'active';
+  const launcher =
+    !!floating && !expanded && floatingStatus !== 'active' && !remoteSpeech;
   const [opening, setOpening] = useState(0);
   const [fallbackFailed, setFallbackFailed] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
@@ -160,12 +172,19 @@ export function App({
     setExpanded(true);
     setSettingsOpen(false);
     setOpening((value) => value + 1);
-  }, []);
+    // Opening is deliberate; checking structure does not capture text or call providers.
+    void floating?.preparePage().catch(() => undefined);
+  }, [floating]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTarget, setSettingsTarget] = useState<HTMLDivElement | null>(
     null,
   );
   const settingsButton = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    if (remoteSpeech || !remoteStopFocus.current) return;
+    remoteStopFocus.current = false;
+    (expanded ? settingsButton : launcherButton).current?.focus();
+  }, [remoteSpeech, expanded]);
   const settingsHeading = useRef<HTMLHeadingElement>(null);
   const settingsNavigation = useRef(false);
   const activationFocus = useRef(false);
@@ -293,6 +312,21 @@ export function App({
     if (!floating || !floatingReady) return;
     const stop = floating.subscribe((event) => {
       if (event.type === 'cancel') cancelVoice.current();
+      if (event.type === 'speech-stop') {
+        controlsRef.current?.controller.discardAutomaticSpeech();
+        controlsRef.current?.speech.stopPlayback();
+      }
+      if (event.type === 'speech-status') {
+        if (!event.other && document.activeElement === remoteStopButton.current)
+          remoteStopFocus.current = true;
+        setRemoteSpeech(event.active && event.other);
+        return;
+      }
+      if (event.type === 'resume') {
+        // Follow the active source without focusing, recording or submitting.
+        setExpanded(event.expanded);
+        return;
+      }
       if (event.type !== 'activate') return;
       if (!event.record || !allowedRef.current) openCompanion();
       if (event.record) {
@@ -303,6 +337,21 @@ export function App({
     floating.ready();
     return stop;
   }, [floating, floatingReady, openCompanion]);
+  useEffect(() => {
+    if (!floating || !controls) return;
+    const report = () =>
+      floating.reportSpeech(
+        ['generating', 'speaking'].includes(
+          controls.speech.getSnapshot().phase,
+        ),
+      );
+    const stop = controls.speech.subscribe(report);
+    report();
+    return () => {
+      stop();
+      floating.reportSpeech(false);
+    };
+  }, [floating, controls]);
   useEffect(() => {
     if (!floating || !panel.current) return;
     const resize = () => {
@@ -423,7 +472,7 @@ export function App({
           companion: 'Trợ lý trình duyệt',
           welcome: 'Bắt đầu với VSual',
           guidance:
-            'Đăng nhập rồi mở bảng đơn hàng mẫu. Bạn có thể nhập hoặc ghi âm câu hỏi.',
+            'Đăng nhập, rồi kích hoạt VSual từ thanh công cụ trên bài viết hoặc trang đơn hàng mẫu. Bạn có thể nhập hoặc ghi âm câu hỏi.',
           stop: 'Hủy thao tác hiện tại',
           demo: 'Mở bảng đơn hàng mẫu',
         }
@@ -433,7 +482,7 @@ export function App({
           companion: 'Browser companion',
           welcome: 'Get started with VSual',
           guidance:
-            'Sign in, then open sample orders. You can type or record a question.',
+            'Sign in, then activate VSual from the browser toolbar on an article or the sample orders page. You can type or record a question.',
           stop: 'Cancel current operation',
           demo: 'Open sample orders',
         };
@@ -533,6 +582,26 @@ export function App({
           {ui.settings}
         </button>
       </header>
+      {floating && (
+        <div className="notice" hidden={!remoteSpeech}>
+          <p role="status" aria-atomic="true">
+            {remoteSpeech
+              ? language === 'vi'
+                ? 'Đang đọc câu trả lời từ thẻ khác. Câu hỏi mới sẽ dùng trang hiện tại.'
+                : 'Reading an answer from another tab. New questions use this page.'
+              : ''}
+          </p>
+          <button
+            type="button"
+            ref={remoteStopButton}
+            onClick={() => floating.stopSpeech()}
+          >
+            {language === 'vi'
+              ? 'Dừng giọng đọc ở thẻ khác'
+              : 'Stop speech in other tab'}
+          </button>
+        </div>
+      )}
       {floating && (
         <div hidden={expanded || launcher}>
           {session.allowed && controls ? (

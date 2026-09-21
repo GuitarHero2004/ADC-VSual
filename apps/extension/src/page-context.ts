@@ -1,4 +1,4 @@
-import type { GroundedSnapshot } from '@adc/contracts';
+import type { GroundedSnapshot, StructuredSnapshot } from '@adc/contracts';
 import {
   OrdersPageError,
   parseOrdersPageResponse,
@@ -6,6 +6,15 @@ import {
   type OrdersPageRequest,
   type OrdersPageResponse,
 } from './orders-adapter.ts';
+import {
+  parseStructuredPageResponse,
+  type StructuredPageRequest,
+  type StructuredPageResponse,
+} from './structured-adapter.ts';
+
+export type PageSnapshot = GroundedSnapshot | StructuredSnapshot;
+type PageRequest = OrdersPageRequest | StructuredPageRequest;
+type PageResponse = OrdersPageResponse | StructuredPageResponse;
 
 export interface OrdersContext {
   supported: boolean;
@@ -13,13 +22,62 @@ export interface OrdersContext {
   windowId: number | null;
   origin: string | null;
   pathname: string | null;
-  reason: 'unsupported' | 'unavailable' | null;
+  reason: 'unsupported' | 'unavailable' | 'permission_required' | null;
   title?: string;
+  sourceKind?: 'orders' | 'structured_page';
+  permission?: 'granted' | 'required';
+  capability?: 'unchecked' | 'supported' | 'unsupported';
+  documentId?: string;
 }
 export type PageContextInfo = OrdersContext;
+export function validStructuredContext(
+  value: unknown,
+  tabId?: number,
+  windowId?: number,
+): value is OrdersContext {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const context = value as OrdersContext;
+  if (
+    context.sourceKind !== 'structured_page' ||
+    typeof context.supported !== 'boolean' ||
+    !Number.isInteger(context.tabId) ||
+    !Number.isInteger(context.windowId) ||
+    (tabId !== undefined && context.tabId !== tabId) ||
+    (windowId !== undefined && context.windowId !== windowId) ||
+    typeof context.origin !== 'string' ||
+    typeof context.pathname !== 'string' ||
+    !context.pathname.startsWith('/')
+  )
+    return false;
+  try {
+    const url = new URL(context.origin);
+    if (
+      !['http:', 'https:'].includes(url.protocol) ||
+      url.origin !== context.origin
+    )
+      return false;
+  } catch {
+    return false;
+  }
+  if (context.permission === 'required')
+    return (
+      !context.supported &&
+      context.capability === 'unchecked' &&
+      context.reason === 'permission_required'
+    );
+  return (
+    context.permission === 'granted' &&
+    typeof context.documentId === 'string' &&
+    !!context.documentId &&
+    (context.supported
+      ? context.capability === 'supported' && context.reason === null
+      : context.capability === 'unsupported' &&
+        context.reason === 'unsupported')
+  );
+}
 export type OrdersInvalidation = 'page' | 'tab' | 'unavailable';
 type Pending = {
-  resolve: (value: OrdersPageResponse) => void;
+  resolve: (value: PageResponse) => void;
   reject: (error: Error) => void;
   cleanup: () => void;
 };
@@ -27,7 +85,8 @@ type Pending = {
 /** Session-local panel transport. It never places access tokens in page messages. */
 export class OrdersPageContext {
   private readonly origins: readonly string[];
-  private readonly browser: Pick<typeof chrome, 'tabs' | 'windows'>;
+  private readonly browser: Pick<typeof chrome, 'tabs' | 'windows'> &
+    Partial<Pick<typeof chrome, 'runtime'>>;
   private port: chrome.runtime.Port | null = null;
   // Observe navigation before permission/capture creates a content-script port.
   private activeTabId: number | null = null;
@@ -35,6 +94,7 @@ export class OrdersPageContext {
   private windowId: number | null = null;
   private contextLookup = 0;
   private documentKey: string | null = null;
+  private sourceKind: 'orders' | 'structured_page' = 'orders';
   private revision = 0;
   private disposed = false;
   private readonly listeners = new Set<(reason: OrdersInvalidation) => void>();
@@ -42,14 +102,40 @@ export class OrdersPageContext {
 
   constructor(
     origins: readonly string[],
-    browser: Pick<typeof chrome, 'tabs' | 'windows'> = chrome,
+    browser: Pick<typeof chrome, 'tabs' | 'windows'> &
+      Partial<Pick<typeof chrome, 'runtime'>> = chrome,
   ) {
     this.origins = origins;
     this.browser = browser;
     browser.tabs.onActivated.addListener(this.onActivated);
     browser.tabs.onUpdated.addListener(this.onUpdated);
     browser.tabs.onRemoved.addListener(this.onRemoved);
+    browser.windows.onFocusChanged?.addListener(this.onWindowFocus);
+    browser.runtime?.onMessage?.addListener(this.onPermission);
   }
+
+  private onPermission = (
+    value: unknown,
+    sender: chrome.runtime.MessageSender,
+  ) => {
+    if (
+      sender.id !== this.browser.runtime?.id ||
+      sender.tab ||
+      !value ||
+      typeof value !== 'object' ||
+      !('type' in value) ||
+      value.type !== 'structured:permission-updated' ||
+      !('tabId' in value) ||
+      value.tabId !== this.activeTabId
+    )
+      return;
+    this.invalidate('page');
+  };
+
+  private onWindowFocus = (windowId: number) => {
+    if (this.windowId !== null && windowId !== this.windowId)
+      this.invalidate('tab');
+  };
 
   private onActivated = (info: { tabId: number; windowId: number }) => {
     if (info.windowId === this.windowId && info.tabId !== this.activeTabId) {
@@ -101,7 +187,11 @@ export class OrdersPageContext {
     };
   }
 
-  async getContext(): Promise<OrdersContext> {
+  prepareContext(): Promise<OrdersContext> {
+    return this.getContext(true);
+  }
+
+  async getContext(prepare = false): Promise<OrdersContext> {
     if (this.disposed) throw new OrdersPageError('UNAVAILABLE');
     const lookup = ++this.contextLookup;
     const revision = this.revision;
@@ -125,7 +215,24 @@ export class OrdersPageContext {
       const parsed = tab?.url
         ? supportedOrdersUrl(tab.url, this.origins)
         : null;
-      return {
+      if (!parsed && tab?.id !== undefined && this.browser.runtime) {
+        const value: unknown = await this.browser.runtime.sendMessage({
+          type: prepare ? 'structured:prepare' : 'structured:context',
+          tabId: tab.id,
+        });
+        if (
+          this.disposed ||
+          lookup !== this.contextLookup ||
+          revision !== this.revision
+        )
+          throw new OrdersPageError('CONTEXT_CHANGED');
+        if (validStructuredContext(value, tab.id, tab.windowId)) {
+          if (value.permission === 'granted' && !this.port)
+            this.openPort(value);
+          return value;
+        }
+      }
+      const context: OrdersContext = {
         supported: !!parsed && tab?.id !== undefined,
         tabId: tab?.id ?? null,
         windowId: tab?.windowId ?? null,
@@ -136,6 +243,7 @@ export class OrdersPageContext {
           ? { title: tab.title.slice(0, 300) }
           : {}),
       };
+      return context;
     } catch {
       return {
         supported: false,
@@ -170,50 +278,76 @@ export class OrdersPageContext {
       this.invalidate('tab');
       throw new OrdersPageError('CONTEXT_CHANGED');
     }
-    if (!this.port) {
-      this.tabId = context.tabId;
-      this.port = this.browser.tabs.connect(context.tabId, {
-        name: 'orders-page',
-        frameId: 0,
-      });
-      const port = this.port;
-      port.onMessage.addListener((value: unknown) => {
-        if (this.port !== port || this.disposed) return;
-        const response = parseOrdersPageResponse(value);
-        if (!response) {
-          this.invalidate('unavailable');
-          return;
-        }
-        if (response.type === 'orders:changed') {
-          if (!this.documentKey || response.document_key === this.documentKey)
-            this.invalidate('page');
-          return;
-        }
-        const pending = this.pending.get(response.id);
-        if (!pending) return;
-        pending.cleanup();
-        this.pending.delete(response.id);
-        if (response.type === 'orders:error')
-          pending.reject(new OrdersPageError(response.code));
-        else pending.resolve(response);
-      });
-      port.onDisconnect.addListener(() => {
-        // Read lastError so an unavailable content script is a handled, recoverable state.
-        void globalThis.chrome?.runtime?.lastError;
-        if (this.port !== port) return;
-        this.port = null;
-        this.documentKey = null;
+    if (!this.port) this.openPort(context);
+    return this.port!;
+  }
+
+  private openPort(context: OrdersContext) {
+    if (context.tabId === null) throw new OrdersPageError('UNAVAILABLE');
+    this.sourceKind = context.sourceKind ?? 'orders';
+    this.tabId = context.tabId;
+    this.port = this.browser.tabs.connect(context.tabId, {
+      name:
+        this.sourceKind === 'structured_page'
+          ? 'structured-page'
+          : 'orders-page',
+      frameId: 0,
+      ...(context.documentId ? { documentId: context.documentId } : {}),
+    });
+    const port = this.port;
+    port.onMessage.addListener((value: unknown) => {
+      if (this.port !== port || this.disposed) return;
+      const response =
+        this.sourceKind === 'structured_page'
+          ? parseStructuredPageResponse(value)
+          : parseOrdersPageResponse(value);
+      if (!response) {
         this.invalidate('unavailable');
+        return;
+      }
+      if (
+        response.type === 'orders:changed' ||
+        response.type === 'structured:changed'
+      ) {
+        if (!this.documentKey || response.document_key === this.documentKey)
+          this.invalidate('page');
+        return;
+      }
+      const pending = this.pending.get(response.id);
+      if (!pending) return;
+      pending.cleanup();
+      this.pending.delete(response.id);
+      if (
+        response.type === 'orders:error' ||
+        response.type === 'structured:error'
+      )
+        pending.reject(new OrdersPageError(response.code));
+      else pending.resolve(response);
+    });
+    port.onDisconnect.addListener(() => {
+      // Read lastError so an unavailable content script is a handled, recoverable state.
+      void globalThis.chrome?.runtime?.lastError;
+      if (this.port !== port) return;
+      this.port = null;
+      this.documentKey = null;
+      this.invalidate('unavailable');
+    });
+    if (this.sourceKind === 'structured_page')
+      this.port.postMessage({
+        type: 'structured:probe',
+        id: crypto.randomUUID(),
+        expected_origin: context.origin,
+        expected_pathname: context.pathname,
+        window_id: context.windowId,
+        tab_id: context.tabId,
       });
-    }
-    return this.port;
   }
 
   private async request(
-    message: OrdersPageRequest,
+    message: PageRequest,
     signal: AbortSignal,
     expectedTabId?: number,
-  ): Promise<OrdersPageResponse> {
+  ): Promise<PageResponse> {
     const port = await this.connect(
       signal,
       'expected_origin' in message || expectedTabId !== undefined
@@ -257,18 +391,32 @@ export class OrdersPageContext {
     signal: AbortSignal,
     expectedOrigin: string,
     expectedTabId?: number,
-  ): Promise<GroundedSnapshot> {
+  ): Promise<PageSnapshot> {
+    const current = await this.getContext();
+    if (!current.supported) throw new OrdersPageError('UNSUPPORTED_PAGE');
     const revision = this.revision;
     const response = await this.request(
-      {
-        type: 'orders:capture',
-        id: crypto.randomUUID(),
-        expected_origin: expectedOrigin,
-      },
+      current.sourceKind === 'structured_page'
+        ? {
+            type: 'structured:capture',
+            id: crypto.randomUUID(),
+            expected_origin: expectedOrigin,
+            expected_pathname: current.pathname!,
+            window_id: current.windowId!,
+            tab_id: current.tabId!,
+          }
+        : {
+            type: 'orders:capture',
+            id: crypto.randomUUID(),
+            expected_origin: expectedOrigin,
+          },
       signal,
       expectedTabId,
     );
-    if (response.type !== 'orders:result')
+    if (
+      response.type !== 'orders:result' &&
+      response.type !== 'structured:result'
+    )
       throw new OrdersPageError('INVALID_PAGE');
     const context = await this.getContext();
     signal.throwIfAborted();
@@ -277,28 +425,39 @@ export class OrdersPageContext {
       !context.supported ||
       context.tabId !== this.tabId ||
       context.origin !== response.snapshot.origin ||
-      context.pathname !== response.snapshot.pathname
+      context.pathname !== response.snapshot.pathname ||
+      (response.type === 'structured:result' &&
+        (response.snapshot.tab_id !== context.tabId ||
+          response.snapshot.window_id !== context.windowId))
     )
       throw new OrdersPageError('CONTEXT_CHANGED');
     this.documentKey = response.snapshot.document_key;
     return response.snapshot;
   }
 
-  async verify(
-    snapshot: GroundedSnapshot,
-    signal: AbortSignal,
-  ): Promise<boolean> {
+  async verify(snapshot: PageSnapshot, signal: AbortSignal): Promise<boolean> {
     if (!this.port || snapshot.document_key !== this.documentKey) return false;
     const revision = this.revision;
     try {
       const response = await this.request(
-        {
-          type: 'orders:verify',
-          id: crypto.randomUUID(),
-          document_key: snapshot.document_key,
-          fingerprint: snapshot.fingerprint,
-          expected_origin: snapshot.origin,
-        },
+        'source_kind' in snapshot
+          ? {
+              type: 'structured:verify',
+              id: crypto.randomUUID(),
+              document_key: snapshot.document_key,
+              fingerprint: snapshot.fingerprint,
+              expected_origin: snapshot.origin,
+              expected_pathname: snapshot.pathname,
+              window_id: snapshot.window_id,
+              tab_id: snapshot.tab_id,
+            }
+          : {
+              type: 'orders:verify',
+              id: crypto.randomUUID(),
+              document_key: snapshot.document_key,
+              fingerprint: snapshot.fingerprint,
+              expected_origin: snapshot.origin,
+            },
         signal,
       );
       const context = await this.getContext();
@@ -308,7 +467,8 @@ export class OrdersPageContext {
         context.tabId === this.tabId &&
         context.origin === snapshot.origin &&
         context.pathname === snapshot.pathname &&
-        response.type === 'orders:verified' &&
+        (response.type === 'orders:verified' ||
+          response.type === 'structured:verified') &&
         response.current &&
         !signal.aborted
       );
@@ -330,11 +490,20 @@ export class OrdersPageContext {
     await this.browser.tabs.update(context.tabId, { active: true });
     await this.browser.windows.update(context.windowId, { focused: true });
     const response = await this.request(
-      { type: 'orders:focus', id: crypto.randomUUID() },
+      {
+        type:
+          context.sourceKind === 'structured_page'
+            ? 'structured:focus'
+            : 'orders:focus',
+        id: crypto.randomUUID(),
+      },
       new AbortController().signal,
       context.tabId,
     );
-    if (response.type !== 'orders:focused')
+    if (
+      response.type !== 'orders:focused' &&
+      response.type !== 'structured:focused'
+    )
       throw new OrdersPageError('UNAVAILABLE');
     return { restored: response.restored };
   }
@@ -359,5 +528,7 @@ export class OrdersPageContext {
     this.browser.tabs.onActivated.removeListener(this.onActivated);
     this.browser.tabs.onUpdated.removeListener(this.onUpdated);
     this.browser.tabs.onRemoved.removeListener(this.onRemoved);
+    this.browser.windows.onFocusChanged?.removeListener(this.onWindowFocus);
+    this.browser.runtime?.onMessage?.removeListener(this.onPermission);
   }
 }

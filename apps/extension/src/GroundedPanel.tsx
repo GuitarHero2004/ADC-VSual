@@ -16,7 +16,6 @@ import {
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
@@ -24,9 +23,19 @@ import {
 import { createPortal } from 'react-dom';
 import { OrdersPageContext } from './page-context.ts';
 import { ordersOrigins } from './config-values.ts';
-import { GroundedController } from './grounded-controller.ts';
+import {
+  GroundedController,
+  isStructuredSnapshot,
+} from './grounded-controller.ts';
 import { createGroundedTransport } from './grounded-transport.ts';
-import { groundedError, groundedText } from './grounded-strings.ts';
+import { groundedText } from './grounded-strings.ts';
+import {
+  companionError,
+  companionText,
+  structuredText,
+  unsupportedPageText,
+} from './structured-strings.ts';
+import { StructuredSource } from './StructuredSource.tsx';
 import {
   ANSWER_PREFERENCES_KEY,
   loadAnswerSpeech,
@@ -44,6 +53,9 @@ interface Props {
   onReady(activate: () => void, cancel: () => void): () => void;
   settingsTarget?: HTMLElement | null;
   createPage?: () => ConstructorParameters<typeof GroundedController>[0];
+  continueAnswerAcrossTabs?: boolean;
+  onActivity?: () => void;
+  onSpeechOff?: () => void;
   onControls?: (controls: CompanionControls | null) => void;
   autoFocus?: boolean;
 }
@@ -85,8 +97,8 @@ export function GroundedPanel(props: Props) {
         getHeaders: () => latest.current.getHeaders(),
         onUnauthenticated: () => latest.current.onExpired(),
       }),
-      () => {
-        speech.clear();
+      (preserveAnswerSpeech = false) => {
+        if (!preserveAnswerSpeech) speech.clear();
         const voice = questionVoice.current;
         if (
           voice &&
@@ -100,16 +112,23 @@ export function GroundedPanel(props: Props) {
         )
           voice.cancel();
       },
+      { continueAnswerAcrossTabs: !!latest.current.continueAnswerAcrossTabs },
     );
     setMounted({ controller, speech });
     void controller.refreshContext();
     const end = () => {
-      controller.revoke();
+      controller.clearTransient();
       questionVoice.current?.clear();
       speech.clear();
     };
     const visibility = () => {
-      if (document.hidden) end();
+      if (document.hidden) {
+        if (latest.current.continueAnswerAcrossTabs) controller.pauseForTab();
+        else end();
+      }
+      // The worker prepares a followed source. A passive launcher becoming
+      // visible must not arm following or acquire a reader by itself.
+      else void controller.refreshContext();
     };
     window.addEventListener('pagehide', end);
     document.addEventListener('visibilitychange', visibility);
@@ -135,12 +154,14 @@ function Companion({
   Mounted & {
     questionVoice: React.RefObject<VoiceController | null>;
   }) {
-  const t = groundedText[props.language];
   const state = useSyncExternalStore(
     controller.subscribe,
     controller.getSnapshot,
     controller.getSnapshot,
   );
+  const structured = state.context?.sourceKind === 'structured_page';
+  const t = companionText(props.language, structured);
+  const s = structuredText[props.language];
   const audio = useSyncExternalStore(
     speech.subscribe,
     speech.getSnapshot,
@@ -150,32 +171,24 @@ function Companion({
   const [voiceReady, setVoiceReady] = useState(false);
   const [returnStatus, setReturnStatus] = useState('');
   const [heldVoiceQuestion, setHeldVoiceQuestion] = useState<
-    'permission' | 'page' | 'length' | 'busy' | null
+    'page' | 'length' | 'busy' | null
   >(null);
   const answerHeading = useRef<HTMLHeadingElement>(null);
   const evidenceDetails = useRef<HTMLDetailsElement>(null);
   const pageHeading = useRef<HTMLHeadingElement>(null);
   const initialFocus = useRef(false);
-  const permissionFocus = useRef(false);
-  const permissionDetails = useRef<HTMLDetailsElement>(null);
   const surface = useRef<HTMLDivElement>(null);
   const resultText = state.result?.text ?? '';
   const resultLanguage = state.resultLanguage ?? 'en';
   const allowed =
-    state.context?.supported && state.context.origin === state.consentOrigin;
+    !!state.context?.supported && state.context.permission !== 'required';
+  const unsupportedMessage = unsupportedPageText(props.language, state.context);
+  const askUnavailable = !state.context?.supported
+    ? state.context?.permission === 'required'
+      ? s.askAccess
+      : s.askUnsupported
+    : null;
   const busy = state.phase === 'reading' || state.phase === 'understanding';
-  useLayoutEffect(() => {
-    // Keep the disclosure mounted so a context change preserves summary focus.
-    if (permissionDetails.current) permissionDetails.current.open = !allowed;
-    if (!allowed || !permissionFocus.current) return;
-    permissionFocus.current = false;
-    if (
-      (document.activeElement === document.body ||
-        permissionDetails.current?.contains(document.activeElement)) &&
-      !surface.current?.closest('[hidden]')
-    )
-      surface.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus();
-  }, [allowed]);
   useEffect(() => {
     if (props.autoFocus === false || initialFocus.current || !state.context)
       return;
@@ -209,6 +222,7 @@ function Companion({
     (voice: VoiceController) => {
       questionVoice.current = voice;
       setVoiceReady(true);
+      let wasCapturing = false;
       const update = () => {
         const next = voice.getSnapshot();
         // Reserve before any other state update: only one completed recording
@@ -224,6 +238,8 @@ function Companion({
           'recording',
           'transcribing',
         ].includes(next.phase);
+        if (capturing && !wasCapturing) props.onActivity?.();
+        wasCapturing = capturing;
         if (capturing) {
           setHeldVoiceQuestion(null);
           controller.discardAutomaticSpeech();
@@ -236,24 +252,23 @@ function Companion({
           if (
             !controller.busy &&
             current.context?.supported &&
-            current.context.origin === current.consentOrigin &&
+            current.context.permission !== 'required' &&
             unicodeLength(automaticQuestion) <= GROUNDED_QUESTION_MAX_LENGTH
           ) {
+            props.onActivity?.();
             setReturnStatus('');
             setHeldVoiceQuestion(null);
-            // ask() still rechecks page consent, source context and backend
-            // authentication. Recording never grants any of those permissions.
+            // ask() rechecks browser access, source context and backend
+            // authentication before this deliberate recorded question is sent.
             void controller.ask();
           } else
             setHeldVoiceQuestion(
               !current.context?.supported
                 ? 'page'
-                : current.context.origin !== current.consentOrigin
-                  ? 'permission'
-                  : unicodeLength(automaticQuestion) >
-                      GROUNDED_QUESTION_MAX_LENGTH
-                    ? 'length'
-                    : 'busy',
+                : unicodeLength(automaticQuestion) >
+                    GROUNDED_QUESTION_MAX_LENGTH
+                  ? 'length'
+                  : 'busy',
             );
         }
       };
@@ -265,7 +280,7 @@ function Companion({
         setVoiceReady(false);
       };
     },
-    [controller, speech, questionVoice],
+    [controller, speech, questionVoice, props.onActivity],
   );
 
   useEffect(() => {
@@ -315,8 +330,20 @@ function Companion({
       /* Optional non-sensitive preferences only. */
     }
   }, [audio.speechEnabled]);
+  useEffect(() => {
+    const updated = (event: StorageEvent) => {
+      if (event.key !== ANSWER_PREFERENCES_KEY) return;
+      try {
+        speech.setSpeechEnabled(loadAnswerSpeech(localStorage));
+      } catch {
+        speech.setSpeechEnabled(false);
+      }
+    };
+    window.addEventListener('storage', updated);
+    return () => window.removeEventListener('storage', updated);
+  }, [speech]);
   const status = state.error
-    ? groundedError(props.language, state.error)
+    ? companionError(props.language, state.error, structured)
     : state.phase === 'stale'
       ? t.previous
       : state.phase === 'ready'
@@ -342,6 +369,7 @@ function Companion({
           onChange={(event) => {
             controller.discardAutomaticSpeech();
             speech.setSpeechEnabled(event.target.checked);
+            if (!event.target.checked) props.onSpeechOff?.();
           }}
         />
         {t.speech}
@@ -361,48 +389,6 @@ function Companion({
       )}
     </fieldset>
   );
-  const permissionContent = (
-    <>
-      {allowed ? <p>{t.permissionSaved}</p> : <p>{t.permissionIntro}</p>}
-      <details>
-        <summary>{t.permissionDetail}</summary>
-        <p>{t.notice}</p>
-        <a
-          href="https://www.avis.net/docs/2.%20Avis%20-%20Ch%C3%ADnh%20s%C3%A1ch%20b%E1%BA%A3o%20m%E1%BA%ADt.pdf"
-          target="_blank"
-          rel="noreferrer"
-        >
-          {t.privacy}
-        </a>
-      </details>
-      {!allowed ? (
-        <button
-          type="button"
-          disabled={!state.context?.supported}
-          aria-describedby={
-            !state.context?.supported ? 'page-permission-help' : undefined
-          }
-          onClick={(event) => {
-            permissionFocus.current =
-              document.activeElement === event.currentTarget;
-            void controller.allow();
-          }}
-        >
-          {t.allow}
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={() => {
-            controller.revoke();
-            pageHeading.current?.focus();
-          }}
-        >
-          {t.deny}
-        </button>
-      )}
-    </>
-  );
   return (
     <div className="grounded-panel" ref={surface} lang={props.language}>
       <section aria-labelledby="page-context-heading" className="page-context">
@@ -418,7 +404,11 @@ function Companion({
             {state.context.pathname ?? ''}
           </p>
         )}
-        <p role="status" aria-atomic="true">
+        <p
+          role="status"
+          aria-atomic="true"
+          id={structured ? 'page-permission-help' : undefined}
+        >
           {state.error === 'PAGE_UNAVAILABLE'
             ? t.unavailablePage
             : state.context === null
@@ -426,12 +416,20 @@ function Companion({
               : state.context.reason === 'unavailable'
                 ? t.unavailablePage
                 : !state.context.supported
-                  ? t.unsupported
-                  : allowed
-                    ? t.readyPage
-                    : t.needConsent}
+                  ? structured
+                    ? state.context.permission === 'required'
+                      ? s.activation
+                      : unsupportedMessage
+                    : t.unsupported
+                  : t.readyPage}
         </p>
-        {!state.context?.supported && (
+        {structured &&
+          state.context &&
+          !state.context.supported &&
+          state.context.permission !== 'required' && (
+            <p className="field-help">{s.unsupportedHelp}</p>
+          )}
+        {!state.context?.supported && !structured && (
           <div id="page-permission-help">
             <p>{t.permissionHelp}</p>
             <ul>
@@ -449,19 +447,10 @@ function Companion({
         <button
           type="button"
           disabled={busy}
-          onClick={() => void controller.refreshContext()}
+          onClick={() => void controller.refreshContext(true)}
         >
           {t.recheck}
         </button>
-      </section>
-      <section
-        aria-labelledby="processing-permission-heading"
-        className="processing-consent"
-      >
-        <details ref={permissionDetails}>
-          <summary id="processing-permission-heading">{t.permission}</summary>
-          {permissionContent}
-        </details>
       </section>
       <section
         aria-label={
@@ -469,6 +458,36 @@ function Companion({
         }
         className="question-composer"
       >
+        <p className="field-help">{t.processingNotice}</p>
+        {state.context && !state.context.supported && (
+          <p className="field-help">{s.draftOnly}</p>
+        )}
+        {state.snapshot &&
+          isStructuredSnapshot(state.snapshot) &&
+          !state.stale && (
+            <div className="field">
+              <label htmlFor="structured-section">{s.section}</label>
+              <select
+                id="structured-section"
+                aria-describedby="structured-section-help"
+                value={state.sectionId ?? ''}
+                disabled={busy || voiceBusy}
+                onChange={(event) =>
+                  controller.setSection(event.target.value || null)
+                }
+              >
+                <option value="">{s.allSections}</option>
+                {state.snapshot.sections.map((section) => (
+                  <option key={section.id} value={section.id}>
+                    {section.heading}
+                  </option>
+                ))}
+              </select>
+              <p id="structured-section-help" className="field-help">
+                {s.sectionHelp}
+              </p>
+            </div>
+          )}
         <VoiceTest
           sessionKey={props.sessionKey}
           transport={props.voiceTransport}
@@ -480,6 +499,9 @@ function Companion({
               <button
                 type="button"
                 className="primary"
+                aria-describedby={
+                  askUnavailable ? 'ask-availability' : undefined
+                }
                 disabled={
                   busy ||
                   voiceBusy ||
@@ -488,6 +510,7 @@ function Companion({
                   unicodeLength(state.question) > GROUNDED_QUESTION_MAX_LENGTH
                 }
                 onClick={() => {
+                  props.onActivity?.();
                   setReturnStatus('');
                   setHeldVoiceQuestion(null);
                   void controller.ask();
@@ -514,6 +537,11 @@ function Companion({
             ? { preferencesTarget: props.settingsTarget }
             : {})}
         />
+        {askUnavailable && (
+          <p id="ask-availability" className="field-help">
+            {askUnavailable}
+          </p>
+        )}
         <div className="controls composer-actions">
           <button
             type="button"
@@ -536,13 +564,11 @@ function Companion({
             {t.voiceHeld}
           </p>
           <p>
-            {heldVoiceQuestion === 'permission'
-              ? t.voiceHeldPermission
-              : heldVoiceQuestion === 'page'
-                ? t.voiceHeldPage
-                : heldVoiceQuestion === 'length'
-                  ? t.voiceHeldLength
-                  : t.voiceHeldBusy}
+            {heldVoiceQuestion === 'page'
+              ? t.voiceHeldPage
+              : heldVoiceQuestion === 'length'
+                ? t.voiceHeldLength
+                : t.voiceHeldBusy}
           </p>
         </div>
       )}
@@ -570,21 +596,49 @@ function Companion({
             <p className="answer-text" lang={resultLanguage}>
               {state.result.text}
             </p>
+            {'source_kind' in state.result &&
+              state.snapshot &&
+              isStructuredSnapshot(state.snapshot) && (
+                <p className="field-help">
+                  {props.language === 'vi'
+                    ? 'Nguồn trả lời: '
+                    : 'Answer source: '}
+                  {state.snapshot.title}. {s.included}:{' '}
+                  {state.snapshot.sections
+                    .filter(
+                      (section) =>
+                        state.result &&
+                        'included_section_ids' in state.result &&
+                        state.result.included_section_ids.includes(section.id),
+                    )
+                    .map((section) => section.heading)
+                    .join('; ')}
+                  .{state.result.partial && ` ${s.partial}`}
+                </p>
+              )}
             <div className="controls">
               <button
                 type="button"
                 disabled={
                   !playbackActive &&
-                  (!audio.speechEnabled || busy || voiceBusy || state.stale)
+                  (!allowed ||
+                    !audio.speechEnabled ||
+                    busy ||
+                    voiceBusy ||
+                    state.stale)
                 }
                 onClick={() => {
                   controller.discardAutomaticSpeech();
                   if (playbackActive) speech.stopPlayback();
-                  else if (audio.hasAudio) void speech.play();
+                  else if (!allowed) return;
                   else {
-                    speech.setLanguage(resultLanguage);
-                    speech.editText(resultText);
-                    void speech.readBack();
+                    props.onActivity?.();
+                    if (audio.hasAudio) void speech.play();
+                    else {
+                      speech.setLanguage(resultLanguage);
+                      speech.editText(resultText);
+                      void speech.readBack();
+                    }
                   }
                 }}
               >
@@ -634,7 +688,7 @@ function Companion({
                 operation="speak"
               />
             )}
-            {state.result.status === 'answer' && (
+            {state.result.status === 'answer' && 'evidence' in state.result && (
               <>
                 <p className="field-help">{t.capturedOnly}</p>
                 <details ref={evidenceDetails} className="evidence-disclosure">
@@ -648,7 +702,11 @@ function Companion({
                     rows={state.result.evidence.rows}
                     caption={state.result.evidence.table_title}
                     language={props.language}
-                    sourceLanguage={state.snapshot?.locale ?? 'en-US'}
+                    sourceLanguage={
+                      state.snapshot && !isStructuredSnapshot(state.snapshot)
+                        ? state.snapshot.locale
+                        : 'en-US'
+                    }
                   />
                   <p lang={resultLanguage}>
                     {state.result.evidence.calculation.description}
@@ -686,6 +744,19 @@ function Companion({
                 </details>
               </>
             )}
+            {'evidence_ids' in state.result &&
+              state.result.evidence_ids.length > 0 &&
+              state.snapshot &&
+              isStructuredSnapshot(state.snapshot) && (
+                <details className="evidence-disclosure">
+                  <summary>{s.evidence}</summary>
+                  <StructuredSource
+                    snapshot={state.snapshot}
+                    language={props.language}
+                    evidenceIds={state.result.evidence_ids}
+                  />
+                </details>
+              )}
           </section>
         </>
       )}
@@ -695,11 +766,20 @@ function Companion({
         <button
           type="button"
           disabled={!allowed || busy || voiceBusy}
-          onClick={() => void controller.inspect()}
+          onClick={() => {
+            props.onActivity?.();
+            void controller.inspect();
+          }}
         >
           {state.snapshot ? t.refresh : t.capture}
         </button>
-        {state.snapshot && (
+        {state.snapshot && isStructuredSnapshot(state.snapshot) && (
+          <StructuredSource
+            snapshot={state.snapshot}
+            language={props.language}
+          />
+        )}
+        {state.snapshot && !isStructuredSnapshot(state.snapshot) && (
           <section aria-labelledby="source-table-heading">
             <h3 id="source-table-heading">{t.table}</h3>
             {state.stale && <p className="notice">{t.previous}</p>}

@@ -376,10 +376,11 @@ test('companion preserves evidence, saved opt-out and focus while automatically 
     assert.equal(captures, 0);
     assert.equal(submissions.length, 0);
     assert.equal(spoken.length, 0);
-    assert.equal(button('Allow page processing').disabled, true);
     assert.equal(
-      button('Allow page processing').getAttribute('aria-describedby'),
-      'page-permission-help',
+      [...dom.window.document.querySelectorAll('button')].some(
+        (element) => element.textContent === 'Allow page processing',
+      ),
+      false,
     );
     assert.equal(
       dom.window.document.querySelector<HTMLAnchorElement>(
@@ -388,72 +389,78 @@ test('companion preserves evidence, saved opt-out and focus while automatically 
       'http://127.0.0.1:3000/orders',
     );
     await settle(() => button('Check active page').click());
-    assert.equal(button('Allow page processing').disabled, true);
-    // Manual address recheck recovers without capturing or granting permission.
+    assert.equal(
+      [...dom.window.document.querySelectorAll('button')].some(
+        (element) => element.textContent === 'Allow page processing',
+      ),
+      false,
+    );
+    // Checking browser access does not capture or submit. No manual processing
+    // grant is required before a deliberate question against a supported page.
     tab.url = 'http://127.0.0.1:3000/orders';
     await settle(() => button('Check active page').click());
-    assert.equal(button('Allow page processing').disabled, false);
-    // Same-tab navigation also updates permission availability before any capture.
+    assert.equal(button('Capture source table').disabled, false);
+    assert.equal(
+      dom.window.document.querySelector('.processing-consent'),
+      null,
+    );
+    // Same-tab navigation updates supported-page availability before capture.
     await settle(() => {
       tab.url = 'http://127.0.0.1:3000/voice';
       updatedListeners.forEach((listener) =>
         listener(tab.id, { url: tab.url }),
       );
     });
-    assert.equal(button('Allow page processing').disabled, true);
+    assert.equal(
+      [...dom.window.document.querySelectorAll('button')].some(
+        (element) => element.textContent === 'Allow page processing',
+      ),
+      false,
+    );
     await settle(() => {
       tab.url = 'http://127.0.0.1:3000/orders';
       updatedListeners.forEach((listener) =>
         listener(tab.id, { url: tab.url }),
       );
     });
-    assert.equal(button('Allow page processing').disabled, false);
+    assert.equal(button('Capture source table').disabled, false);
     assert.equal(captures, 0);
     assert.equal(submissions.length, 0);
     assert.equal(spoken.length, 0);
+    const draftInput = dom.window.document.querySelector('textarea')!;
+    draftInput.focus();
     await settle(() => {
-      button('Allow page processing').focus();
-      button('Allow page processing').click();
-    });
-    assert.equal(
-      dom.window.document.activeElement?.tagName,
-      'TEXTAREA',
-      'The removed consent action hands focus to the question',
-    );
-    const permissionSummary = disclosure('Page processing permission');
-    await settle(() => {
-      permissionSummary.focus();
       tab.url = 'http://127.0.0.1:3000/voice';
       updatedListeners.forEach((listener) =>
         listener(tab.id, { url: tab.url }),
       );
     });
-    assert.equal(disclosure('Page processing permission'), permissionSummary);
+    assert.equal(
+      dom.window.document.getElementById('processing-permission-heading'),
+      null,
+    );
     assert.equal(
       dom.window.document.activeElement,
-      permissionSummary,
-      'A page change keeps focus on the stable permission disclosure',
+      draftInput,
+      'A source change does not steal focus from the editable question',
     );
-    assert.equal(
-      (permissionSummary.parentElement as HTMLDetailsElement).open,
-      true,
-      'Losing page access exposes the explanation and next action',
-    );
-    assert.equal(button('Allow page processing').disabled, true);
     await settle(() => {
       tab.url = 'http://127.0.0.1:3000/orders';
       updatedListeners.forEach((listener) =>
         listener(tab.id, { url: tab.url }),
       );
     });
-    await settle(() => {
-      button('Allow page processing').focus();
-      button('Allow page processing').click();
-    });
-    assert.equal(dom.window.document.activeElement?.tagName, 'TEXTAREA');
     assert.equal(
-      (permissionSummary.parentElement as HTMLDetailsElement).open,
+      [...dom.window.document.querySelectorAll('button')].some(
+        (element) => element.textContent === 'Allow page processing',
+      ),
       false,
+      'Returning to a supported site does not introduce a manual processing grant',
+    );
+    assert.equal(
+      dom.window.document.activeElement,
+      draftInput,
+      'Returning to a supported site preserves keyboard focus',
     );
     assert.equal(captures, 0);
     assert.equal(submissions.length, 0);
@@ -818,7 +825,6 @@ test('companion preserves evidence, saved opt-out and focus while automatically 
       true,
       'No stored preference defaults speech ON',
     );
-    await settle(() => button('Allow page processing').click());
     await settle(() => button('Use example question').click());
     const questionWithFocus = dom.window.document.activeElement;
     const playsBeforeAnswer = playback.plays;
@@ -1002,7 +1008,6 @@ test('companion preserves evidence, saved opt-out and focus while automatically 
     // of the interface. The final reviewed draft remains the submitted input.
     holdSpeech = false;
     responseLanguage = 'vi';
-    await settle(() => button('Allow page processing').click());
     await settle(() => renderAutomatic('vi'));
     await settle(() => button('Dùng câu hỏi mẫu').click());
     const reviewedVietnamese =
@@ -1132,7 +1137,6 @@ test('companion preserves evidence, saved opt-out and focus while automatically 
     responseKind = 'comparison';
     responseLanguage = 'en';
     await settle(() => renderAutomatic());
-    await settle(() => button('Allow page processing').click());
     const beforeSilenceAsk = submissions.length;
     const beforeSilenceSpeech = spoken.length;
     const beforeSilencePlay = playback.plays;
@@ -1280,7 +1284,6 @@ test('companion preserves evidence, saved opt-out and focus while automatically 
         listener(tab.id, { url: tab.url }),
       );
     });
-    await settle(() => button('Allow page processing').click());
     await settle(() => button('Record question').click());
     await settle(reportActivity);
     await settle(() => advance(5000));
@@ -1301,9 +1304,8 @@ test('companion preserves evidence, saved opt-out and focus while automatically 
     assert.equal(spoken.length, audioBeforeAccountChange);
     assert.equal(dom.window.document.querySelector('textarea')!.value, '');
     assert.equal(dom.window.document.querySelector('.answer-text'), null);
-    await settle(() => button('Allow page processing').click());
 
-    // Empty recognition and missing page permission never become protected asks.
+    // Empty recognition never becomes a protected ask.
     holdTranscript = false;
     transcriptText = '   ';
     const beforeEmpty = submissions.length;
@@ -1315,21 +1317,6 @@ test('companion preserves evidence, saved opt-out and focus while automatically 
     assert.match(
       dom.window.document.body.textContent ?? '',
       /No speech recognised/,
-    );
-    await settle(() => button('Cancel / withdraw permission').click());
-    transcriptText = 'Compare July and August without page permission.';
-    const beforeNoConsent = submissions.length;
-    const capturesBeforeNoConsent = captures;
-    const speechBeforeNoConsent = spoken.length;
-    await settle(() => button('Record question').click());
-    await settle(reportActivity);
-    await settle(() => advance(5000));
-    assert.equal(submissions.length, beforeNoConsent);
-    assert.equal(captures, capturesBeforeNoConsent);
-    assert.equal(spoken.length, speechBeforeNoConsent);
-    assert.equal(
-      dom.window.document.querySelector('textarea')?.value,
-      transcriptText,
     );
     function heldExplanation(reason: string) {
       const explanation = [...dom.window.document.querySelectorAll('p')].find(
@@ -1348,33 +1335,9 @@ test('companion preserves evidence, saved opt-out and focus while automatically 
       );
       return explanation.textContent ?? '';
     }
-    assert.match(
-      heldExplanation('page-processing permission is missing'),
-      /question was not sent.*Allow page processing, review the transcript, then select Ask VSual.*Granting permission will not send it automatically/,
-    );
-    assert.ok(
-      [...dom.window.document.querySelectorAll('[role="status"]')].some(
-        (element) =>
-          element.textContent ===
-          'Transcript ready. The question was not sent; see the explanation below.',
-      ),
-      'Announce that transcription succeeded but submission did not happen',
-    );
-    await settle(() => renderAutomatic('vi', 'synthetic-other-user'));
-    assert.match(
-      heldExplanation('chưa có quyền xử lý trang'),
-      /chưa gửi câu hỏi.*Cho phép xử lý trang, kiểm tra văn bản rồi chọn Hỏi VSual.*không tự gửi/,
-    );
-    assert.equal(submissions.length, beforeNoConsent);
-    assert.equal(spoken.length, speechBeforeNoConsent);
-    await settle(() => renderAutomatic('en', 'synthetic-other-user'));
-    await settle(() => button('Allow page processing').click());
-    assert.equal(
-      submissions.length,
-      beforeNoConsent,
-      'Later consent cannot revive a blocked automatic ask',
-    );
-    assert.equal(spoken.length, speechBeforeNoConsent);
+    const beforeUnsupported = submissions.length;
+    const capturesBeforeUnsupported = captures;
+    const speechBeforeUnsupported = spoken.length;
 
     // Unsupported-page recordings also retain the transcript and explain the
     // required return to a supported source rather than appearing to submit.
@@ -1388,9 +1351,9 @@ test('companion preserves evidence, saved opt-out and focus while automatically 
     await settle(() => button('Record question').click());
     await settle(reportActivity);
     await settle(() => advance(5000));
-    assert.equal(submissions.length, beforeNoConsent);
-    assert.equal(captures, capturesBeforeNoConsent);
-    assert.equal(spoken.length, speechBeforeNoConsent);
+    assert.equal(submissions.length, beforeUnsupported);
+    assert.equal(captures, capturesBeforeUnsupported);
+    assert.equal(spoken.length, speechBeforeUnsupported);
     assert.equal(
       dom.window.document.querySelector('textarea')?.value,
       transcriptText,
@@ -1406,9 +1369,9 @@ test('companion preserves evidence, saved opt-out and focus while automatically 
         listener(tab.id, { url: tab.url }),
       );
     });
-    await settle(() => button('Allow page processing').click());
-    assert.equal(submissions.length, beforeNoConsent);
-    assert.equal(spoken.length, speechBeforeNoConsent);
+    assert.equal(button('Ask VSual').disabled, false);
+    assert.equal(submissions.length, beforeUnsupported);
+    assert.equal(spoken.length, speechBeforeUnsupported);
 
     // App request budgets are separate from provider credits. The real
     // transport parses server-owned counters and the UI keeps detailed usage

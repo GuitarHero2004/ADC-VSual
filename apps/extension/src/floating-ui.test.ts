@@ -402,9 +402,14 @@ test('floating compact and expanded views keep one session and release all work 
     );
   const expand = () => settle(() => button('Expand companion').click());
   const collapse = () => settle(() => button('Collapse companion').click());
-  const permitAndFill = async () => {
+  const expandAndFill = async () => {
     await expand();
-    await settle(() => button('Allow page processing', '#expanded').click());
+    assert.equal(
+      [...document.querySelectorAll('button')].some(
+        (control) => control.textContent === 'Allow page processing',
+      ),
+      false,
+    );
     await settle(() => button('Use example question', '#expanded').click());
   };
   try {
@@ -433,7 +438,7 @@ test('floating compact and expanded views keep one session and release all work 
       'expansion and collapse retain the same draft, answer, evidence and audio session',
       async () => {
         const firstControls = controls();
-        await permitAndFill();
+        await expandAndFill();
         const textarea =
           document.querySelector<HTMLTextAreaElement>('textarea')!;
         const draft = textarea.value;
@@ -603,7 +608,7 @@ test('floating compact and expanded views keep one session and release all work 
       async () => {
         transcription = deferred<TranscriptResponse>();
         await mount('third-session');
-        await permitAndFill();
+        await expandAndFill();
         await collapse();
         await settle(() => button('Start recording', '#compact').click());
         await settle(() => (onAudioActivity as () => void)());
@@ -630,7 +635,7 @@ test('floating compact and expanded views keep one session and release all work 
       async () => {
         answer = deferred<Response>();
         await mount('fourth-session');
-        await permitAndFill();
+        await expandAndFill();
         await settle(() => button('Ask VSual', '#expanded').click());
         const old = controls();
         const pendingRequest = questions.at(-1)!;
@@ -644,7 +649,7 @@ test('floating compact and expanded views keep one session and release all work 
         assert.equal(controls().controller.getSnapshot().result, null);
         assert.equal(document.querySelector('.answer-text'), null);
         assert.equal(speech.length, generated);
-        assert.equal(controls().controller.getSnapshot().consentOrigin, null);
+        assert.equal(controls().speech.getSnapshot().hasAudio, false);
       },
     );
   } finally {

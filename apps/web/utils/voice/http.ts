@@ -94,6 +94,7 @@ export function applicationLimitDetails(
     '/api/voice/transcribe',
     '/api/voice/speak',
     '/api/grounded-read',
+    '/api/structured-read',
   ].includes(pathname)
     ? pathname
     : 'unknown';
