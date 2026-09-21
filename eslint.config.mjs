@@ -23,7 +23,7 @@ export default tseslint.config(
   {
     files: [
       'apps/extension/src/GroundedPanel.tsx',
-      'apps/web/app/orders/page.tsx',
+      'apps/web/app/orders/orders-demo.tsx',
     ],
     rules: {
       // Named overflow regions need keyboard focus for scrolling their tables.

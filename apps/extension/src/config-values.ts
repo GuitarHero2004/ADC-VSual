@@ -19,6 +19,25 @@ export function publicOrigin(value: string | undefined): string | null {
   }
 }
 
+/** UI availability is deliberately broader than permission to read a page. */
+export function floatingPageUrl(value: string, authOrigin?: string | null) {
+  try {
+    const url = new URL(value);
+    if (
+      !['http:', 'https:'].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      // Authentication callbacks/windows stay focused on the provider flow.
+      (url.origin === authOrigin &&
+        (url.pathname === '/auth' || url.pathname.startsWith('/auth/')))
+    )
+      return null;
+    return url;
+  } catch {
+    return null;
+  }
+}
+
 export function extensionHosts(
   environment: Record<string, string | undefined>,
 ) {

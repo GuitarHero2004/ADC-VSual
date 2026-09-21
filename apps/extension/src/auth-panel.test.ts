@@ -99,7 +99,10 @@ test('panel restores account without login, keeps identity separate from access,
               expiresAt: Date.now() + 300_000,
             },
           });
-        if (message.type === 'auth:cancel')
+        if (
+          message.type === 'auth:cancel' ||
+          message.type === 'auth:inline-cancel'
+        )
           publish({
             ...status,
             phase: 'signed_out',
@@ -141,13 +144,13 @@ test('panel restores account without login, keeps identity separate from access,
     );
     return createElement('p', { id: 'sensitive' }, `Private draft ${id}`);
   }
-  function Surface() {
+  function Surface({ inline = false }: { inline?: boolean }) {
     const session = useExtensionSession(true, clear);
     const signInRef = useRef<HTMLButtonElement>(null);
     return createElement(
       'main',
       null,
-      createElement(AuthPanel, { session, language: 'en', signInRef }),
+      createElement(AuthPanel, { session, language: 'en', signInRef, inline }),
       session.allowed && session.status?.account
         ? createElement(Companion, {
             key: session.status.epoch,
@@ -249,6 +252,78 @@ test('panel restores account without login, keeps identity separate from access,
     assert.equal(document.getElementById('sensitive'), null);
     assert.ok(button('Sign in on the VSual website'));
     assert.equal(document.body.textContent?.includes(accountB.email), false);
+
+    pauseValidation = false;
+    await act(async () =>
+      root.render(createElement(Surface, { inline: true })),
+    );
+    await act(async () => {
+      button('Sign in to VSual').click();
+      button('Sign in to VSual')?.click();
+    });
+    assert.deepEqual(messages.at(-1), {
+      type: 'auth:start',
+      language: 'en',
+      inline: true,
+    });
+    const form = document.querySelector('form')!;
+    const email = form.querySelector<HTMLInputElement>('input[name=email]')!;
+    const password = form.querySelector<HTMLInputElement>(
+      'input[name=password]',
+    )!;
+    assert.equal(document.activeElement, email);
+    assert.equal(email.autocomplete, 'username');
+    assert.equal(password.autocomplete, 'current-password');
+    assert.ok(button('Continue with Google'));
+    assert.equal(button('Sign in on the VSual website'), undefined);
+    const before = messages.length;
+    await act(async () =>
+      form.dispatchEvent(
+        new dom.window.Event('submit', { bubbles: true, cancelable: true }),
+      ),
+    );
+    assert.equal(
+      messages.length,
+      before,
+      'empty inline fields do not contact authentication',
+    );
+    assert.equal(email.getAttribute('aria-invalid'), 'true');
+
+    const otherHost = document.createElement('div');
+    document.body.append(otherHost);
+    const otherRoot = createRoot(otherHost);
+    await act(async () =>
+      otherRoot.render(createElement(Surface, { inline: true })),
+    );
+    assert.equal(
+      otherHost.querySelector('form'),
+      null,
+      'another tab does not own the active sign-in form',
+    );
+    assert.match(otherHost.textContent!, /another VSual panel/);
+    const cancelledBefore = messages.filter(
+      (m) => m.type === 'auth:inline-cancel',
+    ).length;
+    await act(async () => otherRoot.unmount());
+    assert.equal(
+      messages.filter((m) => m.type === 'auth:inline-cancel').length,
+      cancelledBefore,
+      'closing an unrelated panel must not cancel this login',
+    );
+    otherHost.remove();
+
+    await act(async () => button('Cancel sign-in').click());
+    assert.equal(document.querySelector('form'), null);
+    assert.equal(document.activeElement, button('Sign in to VSual'));
+    await act(async () => button('Sign in to VSual').click());
+    const ownedEpoch = status.epoch;
+    await act(async () =>
+      dom.window.dispatchEvent(new dom.window.Event('pagehide')),
+    );
+    assert.deepEqual(messages.at(-1), {
+      type: 'auth:inline-cancel',
+      epoch: ownedEpoch,
+    });
   } finally {
     await act(async () => root.unmount());
     hook.deregister();

@@ -6,7 +6,6 @@ import {
   authFailureCodeSchema,
   type AuthFailureCode,
   type AuthStatus,
-  type UiLanguage,
 } from '@adc/contracts';
 import {
   authCopy,
@@ -16,6 +15,7 @@ import {
 } from '@adc/voice-ui';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { createClient } from '../../../utils/supabase/client';
+import { useWebsiteLanguage } from '../../site-shell';
 import { webOAuthCookie } from '../../../utils/auth/web-oauth';
 import { webVerificationFailure } from '../../../utils/auth/web-config';
 import {
@@ -44,7 +44,7 @@ export default function SignIn({
   googleEnabled: boolean;
   siteUrl: string | null;
 }) {
-  const [language, setLanguage] = useState<UiLanguage>('en');
+  const { language, setLanguage } = useWebsiteLanguage();
   const [extension, setExtension] = useState(false);
   const [state, setState] = useState<State>('checking');
   const [google, setGoogle] = useState(false);
@@ -125,7 +125,7 @@ export default function SignIn({
   useEffect(() => {
     const version = ++generation.current;
     const params = new URLSearchParams(window.location.search);
-    setLanguage(authLanguage(params.get('lang')));
+    if (params.has('lang')) setLanguage(authLanguage(params.get('lang')));
     let connection: WebExtensionBridge | null = null;
     let unsubscribe: (() => void) | undefined;
     let active = true;
@@ -347,20 +347,11 @@ export default function SignIn({
 
   const notice = error ? authFailureText(error, language) : null;
   return (
-    <main lang={language}>
+    <main id="main-content" tabIndex={-1} lang={language}>
       <p className="eyebrow">VSual</p>
       <h1 ref={heading} tabIndex={-1}>
         {copy.title}
       </h1>
-      <label htmlFor="auth-language">{copy.language}</label>
-      <select
-        id="auth-language"
-        value={language}
-        onChange={(event) => setLanguage(event.target.value as UiLanguage)}
-      >
-        <option value="en">English</option>
-        <option value="vi">Tiếng Việt</option>
-      </select>
       <p>{extension ? copy.extensionIntro : copy.webIntro}</p>
       {extension && (
         <>

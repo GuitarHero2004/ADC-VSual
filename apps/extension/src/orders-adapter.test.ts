@@ -32,6 +32,40 @@ function fixture() {
 const capture = (document: Document) =>
   captureOrdersDocument(document, { url, origins, documentKey });
 
+test('floating extension UI is outside captured evidence and does not invalidate an orders snapshot', async () => {
+  const dom = fixture();
+  const before = await capture(dom.window.document);
+  let changes = 0;
+  const stop = observeOrdersDocument(
+    dom.window.document,
+    () => {
+      changes += 1;
+    },
+    0,
+  );
+  try {
+    const host = dom.window.document.createElement('div');
+    host.dataset.vsualFloatingHost = '';
+    const shadow = host.attachShadow({ mode: 'closed' });
+    const frame = dom.window.document.createElement('iframe');
+    frame.title = 'VSual floating companion';
+    frame.src =
+      'chrome-extension://abcdefghijklmnopabcdefghijklmnop/floating.html';
+    shadow.append(frame);
+    dom.window.document.documentElement.append(host);
+    const after = await capture(dom.window.document);
+    assert.equal(after.fingerprint, before.fingerprint);
+    assert.ok(!JSON.stringify(after).includes(frame.title));
+    host.style.height = '600px';
+    host.remove();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(changes, 0);
+  } finally {
+    stop();
+    dom.window.close();
+  }
+});
+
 test('captures displayed rows and context, then recaptures a changed rendered DOM', async () => {
   const dom = fixture();
   try {
@@ -53,11 +87,11 @@ test('captures displayed rows and context, then recaptures a changed rendered DO
           request_id: crypto.randomUUID(),
           question:
             'Compare completed orders for August and July in the South.',
-          language: 'en',
           consent: true,
           snapshot,
         },
         {
+          answer_language: 'en',
           decision: 'comparison',
           operation: 'compare',
           metric: 'completed_orders',

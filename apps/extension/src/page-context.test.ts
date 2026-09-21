@@ -1,7 +1,7 @@
 ﻿import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { GroundedSnapshot } from '@adc/contracts';
-import { OrdersPageContext } from './page-context.ts';
+import type { GroundedSnapshot, StructuredSnapshot } from '@adc/contracts';
+import { OrdersPageContext, type OrdersContext } from './page-context.ts';
 import type {
   OrdersPageRequest,
   OrdersPageResponse,
@@ -132,6 +132,7 @@ function fakeBrowser(origins = ['https://demo.example.test']) {
   } as unknown as Pick<typeof chrome, 'tabs' | 'windows'>;
   const page = new OrdersPageContext(origins, api);
   return {
+    api,
     page,
     state,
     ports,
@@ -143,6 +144,134 @@ function fakeBrowser(origins = ['https://demo.example.test']) {
     removed,
   };
 }
+
+test('side-panel fallback shares browser grant and observes structured changes before capture', async () => {
+  const fake = fakeBrowser();
+  fake.page.dispose();
+  fake.state.tab.url = 'https://article.example.test/guide';
+  const documentId = crypto.randomUUID();
+  let granted = false;
+  const context = (): OrdersContext => ({
+    supported: granted,
+    tabId: 1,
+    windowId: 10,
+    origin: 'https://article.example.test',
+    pathname: '/guide',
+    sourceKind: 'structured_page',
+    permission: granted ? 'granted' : 'required',
+    capability: granted ? 'supported' : 'unchecked',
+    reason: granted ? null : 'permission_required',
+    ...(granted ? { documentId } : {}),
+  });
+  const posted: Record<string, unknown>[] = [];
+  const messages = new Events<[unknown]>();
+  const disconnects = new Events<[]>();
+  const runtimeMessages = new Events<[unknown, chrome.runtime.MessageSender]>();
+  const contextRequests: unknown[] = [];
+  const runtime = {
+    id: 'a'.repeat(32),
+    onMessage: runtimeMessages,
+    sendMessage: async (message: unknown) => {
+      contextRequests.push(message);
+      return context();
+    },
+  } as unknown as typeof chrome.runtime;
+  const snapshot: StructuredSnapshot = {
+    source_kind: 'structured_page',
+    snapshot_id: crypto.randomUUID(),
+    captured_at: new Date().toISOString(),
+    origin: 'https://article.example.test',
+    pathname: '/guide',
+    title: 'Guide',
+    document_key: crypto.randomUUID(),
+    window_id: 10,
+    tab_id: 1,
+    fingerprint: 'a'.repeat(64),
+    sections: [{ id: 's1', heading: 'Guide' }],
+    blocks: [
+      {
+        id: 'b1',
+        section_id: 's1',
+        kind: 'paragraph',
+        text: 'The library opens on Monday.',
+      },
+    ],
+    coverage: { partial: false, limitations: [], included_sections: ['s1'] },
+  };
+  const browser = {
+    ...fake.api,
+    runtime,
+    tabs: {
+      ...fake.api.tabs,
+      connect: (id: number, options: unknown) => {
+        assert.equal(id, 1);
+        assert.deepEqual(options, {
+          name: 'structured-page',
+          frameId: 0,
+          documentId,
+        });
+        return {
+          onMessage: messages,
+          onDisconnect: disconnects,
+          disconnect: () => disconnects.emit(),
+          postMessage: (message: Record<string, unknown>) => {
+            posted.push(message);
+            if (message.type === 'structured:capture')
+              queueMicrotask(() =>
+                messages.emit({
+                  type: 'structured:result',
+                  id: message.id,
+                  snapshot,
+                }),
+              );
+          },
+        } as unknown as chrome.runtime.Port;
+      },
+    },
+  };
+  const page = new OrdersPageContext([], browser);
+  const reasons: string[] = [];
+  page.subscribe((reason) => reasons.push(reason));
+  try {
+    assert.equal((await page.getContext()).permission, 'required');
+    assert.equal(posted.length, 0);
+    assert.deepEqual(contextRequests.at(-1), {
+      type: 'structured:context',
+      tabId: 1,
+    });
+    assert.equal((await page.prepareContext()).permission, 'required');
+    assert.deepEqual(contextRequests.at(-1), {
+      type: 'structured:prepare',
+      tabId: 1,
+    });
+    assert.equal(posted.length, 0);
+    granted = true;
+    runtimeMessages.emit(
+      { type: 'structured:permission-updated', tabId: 1 },
+      { id: runtime.id },
+    );
+    assert.equal((await page.getContext()).supported, true);
+    assert.deepEqual(reasons, ['page']);
+    assert.deepEqual(
+      posted.map((message) => message.type),
+      ['structured:probe'],
+    );
+    messages.emit({
+      type: 'structured:changed',
+      document_key: snapshot.document_key,
+    });
+    assert.deepEqual(reasons, ['page', 'page']);
+    const result = await page.capture(
+      new AbortController().signal,
+      snapshot.origin,
+      1,
+    );
+    assert.deepEqual(result, snapshot);
+    assert.equal(posted.at(-1)?.type, 'structured:capture');
+  } finally {
+    page.dispose();
+  }
+});
 
 test('navigation from an unsupported active page enables context before any capture', async () => {
   const fake = fakeBrowser();

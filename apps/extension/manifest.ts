@@ -15,10 +15,10 @@ export function createManifest(
     manifest_version: 3,
     name: 'VSual - Accessible browser companion',
     description:
-      'Ask about the supported orders dashboard and inspect captured evidence. Optional recorded speech and read-aloud.',
+      'Ask about supported HTML articles or the orders demo and inspect supporting evidence. Optional recorded speech and read-aloud.',
     version: '0.1.0',
     minimum_chrome_version: '116',
-    permissions: ['sidePanel', 'storage', 'identity'],
+    permissions: ['sidePanel', 'storage', 'identity', 'activeTab', 'scripting'],
     ...(authUrl
       ? {
           externally_connectable: {
@@ -30,16 +30,30 @@ export function createManifest(
     action: { default_title: 'Open VSual companion' },
     background: { service_worker: 'background.js', type: 'module' },
     side_panel: { default_path: 'index.html' },
-    content_scripts: ordersMatches(environment).length
-      ? [
-          {
-            matches: ordersMatches(environment),
-            js: ['orders-content.js'],
-            run_at: 'document_idle',
-            all_frames: false,
-          },
-        ]
-      : [],
+    content_scripts: [
+      {
+        matches: ['http://*/*', 'https://*/*'],
+        js: ['floating-content.js'],
+        run_at: 'document_idle',
+        all_frames: false,
+      },
+      ...(ordersMatches(environment).length
+        ? [
+            {
+              matches: ordersMatches(environment),
+              js: ['orders-content.js'],
+              run_at: 'document_idle',
+              all_frames: false,
+            },
+          ]
+        : []),
+    ],
+    web_accessible_resources: [
+      {
+        resources: ['floating.html', 'assets/*'],
+        matches: ['http://*/*', 'https://*/*'],
+      },
+    ],
     commands: {
       'toggle-voice': {
         suggested_key: { default: 'Alt+Shift+A' },

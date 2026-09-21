@@ -35,9 +35,11 @@ const vietnameseMonth = 'thang\\s+(1[0-2]|[1-9])(?:\\s+nam\\s+([1-9]\\d{3}))?';
 function refuse(
   decision: 'clarification' | 'unsupported',
   reason: ComparisonInterpretation['reason'],
+  answerLanguage: ComparisonInterpretation['answer_language'],
 ): ComparisonInterpretation {
   return {
     decision,
+    answer_language: answerLanguage,
     operation: null,
     metric: null,
     region: null,
@@ -76,20 +78,24 @@ export function enforceQuestionScope(
   interpretation: ComparisonInterpretation,
 ): ComparisonInterpretation {
   if (interpretation.decision !== 'comparison') return interpretation;
+  const reject = (
+    decision: 'clarification' | 'unsupported',
+    reason: ComparisonInterpretation['reason'],
+  ) => refuse(decision, reason, interpretation.answer_language);
   const text = normalise(question);
   if (
     /\b(?:revenue|sales|profit|income|currency|dollars?|usd|vnd|money|turnover|doanh thu|loi nhuan|chi phi|gia tri|doanh so)\b/.test(
       text,
     )
   ) {
-    return refuse('unsupported', 'unsupported_metric');
+    return reject('unsupported', 'unsupported_metric');
   }
   if (
     /\b(?:why|causes?|reasons?|forecast|predict|projection|future|next month|tai sao|vi sao|nguyen nhan|ly do|du bao|du doan|tuong lai|thang toi|click|submit|delete|filter|sort|select|navigate|download|bam|loc|sap xep|xoa)\b/.test(
       text,
     )
   ) {
-    return refuse('unsupported', 'unsupported_operation');
+    return reject('unsupported', 'unsupported_operation');
   }
   const explicitRegions = regions
     .filter(([, pattern]) => pattern.test(text))
@@ -99,7 +105,7 @@ export function enforceQuestionScope(
     (explicitRegions[0] &&
       normalise(interpretation.region ?? '') !== normalise(explicitRegions[0]))
   ) {
-    return refuse('clarification', 'ambiguous_scope');
+    return reject('clarification', 'ambiguous_scope');
   }
   const years = [...new Set(text.match(/\b[1-9]\d{3}\b/g) ?? [])];
   if (
@@ -108,7 +114,7 @@ export function enforceQuestionScope(
       (!interpretation.baseline_period?.startsWith(`${years[0]}-`) ||
         !interpretation.comparison_period?.startsWith(`${years[0]}-`)))
   ) {
-    return refuse('clarification', 'ambiguous_scope');
+    return reject('clarification', 'ambiguous_scope');
   }
 
   // An explicitly named baseline takes precedence over a neutral "A and B".
@@ -157,7 +163,7 @@ export function enforceQuestionScope(
             `${namedBaseline.year}-`,
           ))))
   )
-    return refuse('clarification', 'ambiguous_scope');
+    return reject('clarification', 'ambiguous_scope');
 
   for (const [locale, month] of [
     ['en', englishMonth],
@@ -192,7 +198,7 @@ export function enforceQuestionScope(
         firstIsBaseline ? match[4] : match[2],
       )
     ) {
-      return refuse('clarification', 'ambiguous_scope');
+      return reject('clarification', 'ambiguous_scope');
     }
     break;
   }

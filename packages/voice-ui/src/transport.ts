@@ -1,15 +1,18 @@
 import {
   transcriptResponseSchema,
   voiceErrorResponseSchema,
+  type UsageLimit,
 } from '@adc/contracts';
 import type { VoiceTransport } from './controller.ts';
 
 export class VoiceTransportError extends Error {
   readonly code: string;
-  constructor(code: string, message: string) {
+  readonly usage: UsageLimit | undefined;
+  constructor(code: string, message: string, usage?: UsageLimit) {
     super(message);
     this.name = 'VoiceTransportError';
     this.code = code;
+    this.usage = usage;
   }
 }
 
@@ -62,6 +65,7 @@ export function createVoiceTransport(options: {
         throw new VoiceTransportError(
           parsed.data.error.code,
           parsed.data.error.message,
+          parsed.data.error.usage,
         );
       }
       // Deployment protection is outside application auth; don't discard a valid session for HTML.

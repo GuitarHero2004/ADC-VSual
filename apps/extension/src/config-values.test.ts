@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   extensionHosts,
+  floatingPageUrl,
   ordersMatches,
   ordersOrigins,
   publicOrigin,
@@ -24,7 +25,7 @@ test('backend origins reject credentials, paths, unsafe schemes and remote HTTP'
   assert.equal(publicOrigin('http://localhost:3000'), 'http://localhost:3000');
 });
 
-test('manifest limits permissions to configured hosts without secret settings', () => {
+test('manifest separates broad UI injection from configured extraction and backend hosts', () => {
   const environment = {
     VITE_API_BASE_URL: 'https://backend.example.test',
     VITE_SUPABASE_URL: 'https://project.supabase.co',
@@ -35,11 +36,22 @@ test('manifest limits permissions to configured hosts without secret settings', 
     'https://backend.example.test/*',
     'https://project.supabase.co/*',
   ]);
-  assert.deepEqual(manifest.permissions, ['sidePanel', 'storage', 'identity']);
+  assert.deepEqual(manifest.permissions, [
+    'sidePanel',
+    'storage',
+    'identity',
+    'activeTab',
+    'scripting',
+  ]);
   assert.deepEqual(manifest.externally_connectable, {
     matches: ['https://backend.example.test/auth/sign-in*'],
   });
   assert.deepEqual(manifest.content_scripts[0]?.matches, [
+    'http://*/*',
+    'https://*/*',
+  ]);
+  assert.deepEqual(manifest.content_scripts[0]?.js, ['floating-content.js']);
+  assert.deepEqual(manifest.content_scripts[1]?.matches, [
     'https://backend.example.test/orders*',
   ]);
   assert.ok(!JSON.stringify(manifest).includes('private-sentinel'));
@@ -75,9 +87,41 @@ test('orders allowlist accepts exact origins, fails closed on malformed entries 
     [],
   );
   const manifest = createManifest(environment);
-  assert.ok(!JSON.stringify(manifest).includes('web_accessible_resources'));
+  assert.deepEqual(manifest.web_accessible_resources, [
+    {
+      resources: ['floating.html', 'assets/*'],
+      matches: ['http://*/*', 'https://*/*'],
+    },
+  ]);
+  assert.ok(
+    !manifest.web_accessible_resources.some((entry) =>
+      entry.resources.includes('index.html'),
+    ),
+  );
+  assert.equal(
+    createManifest({ VITE_ORDERS_ORIGINS: 'https://*.vercel.app' })
+      .content_scripts.length,
+    1,
+  );
   assert.equal(manifest.content_scripts[0]?.all_frames, false);
-  assert.deepEqual(manifest.content_scripts[0]?.js, ['orders-content.js']);
+  assert.deepEqual(manifest.content_scripts[1]?.js, ['orders-content.js']);
+});
+
+test('floating UI permits ordinary web pages but excludes privileged schemes and own auth routes', () => {
+  const auth = 'https://vsual.example.test';
+  for (const url of [
+    'chrome://settings/',
+    'edge://settings/',
+    'file:///private.html',
+    'data:text/html,hello',
+    'https://user:example@example.test/',
+    `${auth}/auth/sign-in`,
+    `${auth}/auth/callback?code=opaque`,
+  ])
+    assert.equal(floatingPageUrl(url, auth), null);
+  assert.ok(floatingPageUrl('https://example.test/anything', auth));
+  assert.ok(floatingPageUrl('http://example.test/anything', auth));
+  assert.ok(floatingPageUrl(`${auth}/orders`, auth));
 });
 
 test('credential-free builds use only the development backend host', () => {

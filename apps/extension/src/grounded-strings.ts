@@ -2,24 +2,48 @@ import type { UiLanguage } from '@adc/contracts';
 
 export const groundedText = {
   en: {
+    readyPage: 'Ready on this page.',
+    processingNotice:
+      'Asking reads this orders table and sends it with your question to VSual. Avis interprets the question; VSual calculates from the captured rows.',
+    unavailablePage:
+      'The current page could not be checked. Check browser site access for VSual, then try again.',
+    askAnother: 'Ask another question',
+    goAnswer: 'Go to answer',
+    answerReady: 'Answer ready.',
+    clarification: 'Review this clarification and edit your question.',
+    tableReady: 'Source table ready.',
+    inspect: 'Inspect the source table without AI',
+    closeEvidence: 'Close evidence',
+    playback: 'Answer speech',
+    speechOff:
+      'App speech is off. Enable it in Settings or use your screen reader.',
+    readAgain: 'Read again',
+    speechStopped: 'Speech stopped.',
+    answerSpeechFailed:
+      'The text answer is available, but its audio could not be generated or played.',
+    voiceHeld:
+      'Transcript ready. The question was not sent; see the explanation below.',
+    voiceHeldBusy:
+      'Your recording was transcribed, but another question is still being processed. Wait for it to finish or cancel it, then select Ask VSual to send this transcript.',
+    voiceHeldPage:
+      'Your recording was transcribed, but the question was not sent because a supported orders page could not be confirmed. Open the configured orders dashboard, check the active page and its permission, then select Ask VSual.',
+    voiceHeldLength:
+      'Your recording was transcribed, but the question was not sent because it exceeds 1,000 characters. Shorten it, then select Ask VSual.',
+    speechPlaying: 'Reading the answer.',
+    typingHelp:
+      'Type a question to read this page. Microphone setup is optional and available in Settings.',
     page: 'Current page',
     supported: 'Supported orders dashboard',
-    unsupported:
-      'Open the configured /orders demo page to compare completed orders. Other pages are not supported.',
+    unsupported: 'This page is not supported. Open the orders demo.',
     checking: 'Checking the active tab…',
     scope:
       'Compare completed-order counts for one region and two months. VSual does not change the page.',
-    permission: 'Page processing permission',
-    permissionHelp:
-      'Page permission is unavailable on this tab. Open one of these supported dashboard pages:',
+    permissionHelp: 'Supported demo:',
     recheck: 'Check active page',
     recheckHelp:
-      'Keep the dashboard tab selected, then choose Check active page. This checks the page address only; it does not read or send page content.',
+      'Select the demo tab, then check again. Checking does not read page content.',
     notice:
       'Allow VSual to read the displayed orders table and its region/year context on this origin. When you ask, our backend processes the question and captured rows. Only your question and necessary scope context go through Avis to the configured model provider; our application calculates from the row counts. We save no page content or answers in our database. Inspecting the table alone makes no AI request. Avis and the model provider may retain submitted data under their own policies.',
-    allow: 'Allow page processing',
-    deny: 'Cancel / withdraw permission',
-    allowed: 'Page processing allowed for this signed-in session and origin.',
     ask: 'Ask VSual',
     sample: 'Use example question',
     sampleText: 'Compare completed orders in the South for August and July.',
@@ -38,10 +62,12 @@ export const groundedText = {
     read: 'Read answer',
     stop: 'Stop speech',
     repeat: 'Play / Repeat',
-    speech: 'Enable app speech',
+    speech: 'Speech on',
     speechHelp:
-      'Off by default. Your screen reader can read the full answer and evidence. Speech generation is optional and AI-generated.',
-    speed: 'Playback speed',
+      'New answers are read automatically using AI-generated speech. Turn off to use your screen reader. This does not control NVDA.',
+    playAnswer: 'Play answer',
+    retrySpeech: 'Retry speech',
+    playbackBlocked: 'Automatic playback was blocked. Select Play answer.',
     return: 'Return to page',
     returned: 'Returned to the source page.',
     fallback:
@@ -54,9 +80,8 @@ export const groundedText = {
     region: 'Region',
     year: 'Year',
     unit: 'Unit: orders',
-    capturedOnly:
-      'This answer describes captured synthetic page data, not independently verified business records.',
-    idle: 'Ready. Review your question before asking.',
+    capturedOnly: 'Based on captured synthetic orders.',
+    idle: 'Review your question before asking.',
     reading: 'Reading the dashboard…',
     understanding: 'Understanding your question…',
     ready: 'Answer or source table ready.',
@@ -65,27 +90,50 @@ export const groundedText = {
       'Your answer will appear here after you ask. You can inspect the source table without AI.',
     privacy: 'Avis privacy policy (PDF)',
     speechPending:
-      'Speech is being prepared. Stop speech cancels playback preparation.',
+      'Preparing audio. You can stop speech or inspect the answer.',
   },
   vi: {
+    processingNotice:
+      'Khi hỏi, bảng đơn hàng và câu hỏi được gửi đến VSual. Avis hiểu câu hỏi; VSual tính toán từ các dòng đã đọc.',
+    readyPage: 'Sẵn sàng trên trang này.',
+    unavailablePage:
+      'Chưa kiểm tra được trang hiện tại. Kiểm tra quyền truy cập trang của VSual trong trình duyệt rồi thử lại.',
+    askAnother: 'Hỏi câu khác',
+    goAnswer: 'Đến câu trả lời',
+    answerReady: 'Câu trả lời đã sẵn sàng.',
+    clarification: 'Xem hướng dẫn làm rõ và chỉnh sửa câu hỏi.',
+    tableReady: 'Bảng nguồn đã sẵn sàng.',
+    inspect: 'Xem bảng nguồn không dùng AI',
+    closeEvidence: 'Đóng dữ liệu đối chiếu',
+    playback: 'Giọng đọc câu trả lời',
+    speechOff:
+      'Giọng đọc đang tắt. Bật trong Cài đặt hoặc dùng trình đọc màn hình.',
+    readAgain: 'Đọc lại',
+    speechStopped: 'Đã dừng giọng đọc.',
+    answerSpeechFailed:
+      'Câu trả lời dạng chữ vẫn còn, nhưng chưa thể tạo hoặc phát âm thanh.',
+    voiceHeld: 'Đã có văn bản. Câu hỏi chưa được gửi; xem giải thích bên dưới.',
+    voiceHeldBusy:
+      'Đã chép lời, nhưng câu hỏi khác vẫn đang được xử lý. Chờ hoàn tất hoặc hủy rồi chọn Hỏi VSual để gửi văn bản này.',
+    voiceHeldPage:
+      'Đã chép lời, nhưng chưa gửi câu hỏi vì chưa xác nhận được trang đơn hàng hỗ trợ. Mở bảng đơn hàng đã cấu hình, kiểm tra thẻ và quyền xử lý rồi chọn Hỏi VSual.',
+    voiceHeldLength:
+      'Đã chép lời, nhưng chưa gửi câu hỏi vì dài hơn 1.000 ký tự. Rút ngắn rồi chọn Hỏi VSual.',
+    speechPlaying: 'Đang đọc câu trả lời.',
+    typingHelp:
+      'Nhập câu hỏi để đọc trang này. Micro là tùy chọn và có thể thiết lập trong Cài đặt.',
     page: 'Trang hiện tại',
     supported: 'Bảng đơn hàng được hỗ trợ',
-    unsupported:
-      'Mở trang /orders đã cấu hình để so sánh số đơn hoàn thành. Chưa hỗ trợ các trang khác.',
+    unsupported: 'Trang này chưa được hỗ trợ. Hãy mở bản mẫu đơn hàng.',
     checking: 'Đang kiểm tra thẻ đang mở…',
     scope:
       'So sánh số đơn hoàn thành của một khu vực trong hai tháng. VSual không thay đổi trang.',
-    permission: 'Quyền xử lý nội dung trang',
-    permissionHelp:
-      'Chưa thể cho phép xử lý trên thẻ này. Mở một trong các trang bảng đơn hàng được hỗ trợ:',
+    permissionHelp: 'Bản mẫu được hỗ trợ:',
     recheck: 'Kiểm tra thẻ đang mở',
     recheckHelp:
-      'Chọn thẻ bảng đơn hàng, rồi chọn Kiểm tra thẻ đang mở. Thao tác này chỉ kiểm tra địa chỉ, không đọc hay gửi nội dung trang.',
+      'Chọn thẻ bản mẫu rồi kiểm tra lại. Kiểm tra không đọc nội dung trang.',
     notice:
       'Cho phép VSual đọc bảng đơn hàng và ngữ cảnh khu vực/năm đang hiển thị trên nguồn này. Khi bạn hỏi, máy chủ xử lý câu hỏi và các dòng đã đọc. Chỉ câu hỏi và phạm vi cần thiết đi qua Avis đến nhà cung cấp mô hình đã cấu hình; ứng dụng tự tính từ số đơn. Chúng tôi không lưu nội dung trang hoặc câu trả lời vào cơ sở dữ liệu của ứng dụng. Chỉ xem bảng nguồn không gọi AI. Avis và nhà cung cấp mô hình có thể lưu dữ liệu đã gửi theo chính sách riêng.',
-    allow: 'Cho phép xử lý trang',
-    deny: 'Hủy / thu hồi quyền',
-    allowed: 'Đã cho phép xử lý trang cho phiên đăng nhập và nguồn này.',
     ask: 'Hỏi VSual',
     sample: 'Dùng câu hỏi mẫu',
     sampleText:
@@ -105,10 +153,12 @@ export const groundedText = {
     read: 'Đọc câu trả lời',
     stop: 'Dừng giọng đọc',
     repeat: 'Phát / Phát lại',
-    speech: 'Bật giọng đọc ứng dụng',
+    speech: 'Bật giọng đọc',
     speechHelp:
-      'Mặc định tắt. Trình đọc màn hình có thể đọc đầy đủ câu trả lời và dữ liệu. Giọng đọc AI là tùy chọn.',
-    speed: 'Tốc độ phát',
+      'Tự động đọc câu trả lời mới bằng giọng AI. Tắt để dùng trình đọc màn hình. Cài đặt này không điều khiển NVDA.',
+    playAnswer: 'Phát câu trả lời',
+    retrySpeech: 'Thử lại giọng đọc',
+    playbackBlocked: 'Trình duyệt đã chặn tự phát. Chọn Phát câu trả lời.',
     return: 'Quay lại trang',
     returned: 'Đã quay lại trang nguồn.',
     fallback: 'Không tìm thấy vị trí trỏ trước đó. Đã quay lại tiêu đề trang.',
@@ -120,9 +170,8 @@ export const groundedText = {
     region: 'Khu vực',
     year: 'Năm',
     unit: 'Đơn vị: đơn hàng',
-    capturedOnly:
-      'Câu trả lời mô tả dữ liệu mẫu đã đọc trên trang, không phải hồ sơ kinh doanh được xác minh độc lập.',
-    idle: 'Sẵn sàng. Xem lại câu hỏi trước khi gửi.',
+    capturedOnly: 'Dựa trên dữ liệu đơn hàng giả lập đã đọc.',
+    idle: 'Xem lại câu hỏi trước khi gửi.',
     reading: 'Đang đọc bảng…',
     understanding: 'Đang hiểu câu hỏi…',
     ready: 'Câu trả lời hoặc bảng nguồn đã sẵn sàng.',
@@ -141,8 +190,8 @@ const errors: Record<string, [string, string]> = {
     'Chưa thể kiểm tra phiên. Kiểm tra kết nối rồi thử lại. Bạn chưa bị đăng xuất.',
   ],
   CONSENT_REQUIRED: [
-    'Allow page processing before capturing this page.',
-    'Cho phép xử lý trang trước khi đọc.',
+    'This request was not authorised for processing. Review the question and ask again.',
+    'Yêu cầu chưa được cho phép xử lý. Xem lại câu hỏi rồi hỏi lại.',
   ],
   UNSUPPORTED_PAGE: [
     'This page is not supported. Open the configured orders dashboard.',
@@ -173,13 +222,21 @@ const errors: Record<string, [string, string]> = {
     'Your account or this extension does not have access. Check workspace and allowed-origin setup.',
     'Tài khoản hoặc tiện ích chưa có quyền. Kiểm tra không gian làm việc và nguồn được phép.',
   ],
+  APP_RATE_LIMITED: [
+    'VSual blocked this answer request because your application usage limit was reached. Your question is preserved. See the usage counts and estimated retry time below.',
+    'VSual đã chặn yêu cầu trả lời vì tài khoản đạt giới hạn sử dụng ứng dụng. Câu hỏi vẫn còn. Xem số lượt và thời điểm dự kiến thử lại bên dưới.',
+  ],
+  PROVIDER_RATE_LIMITED: [
+    'The answer provider reached through Avis is limiting requests. Your question is preserved. VSual has no confirmed reset time; retry manually later. Increasing VSual’s own limit does not change the provider’s limit.',
+    'Nhà cung cấp trả lời qua Avis đang giới hạn yêu cầu. Câu hỏi vẫn còn. VSual chưa có thời điểm khôi phục xác nhận; hãy tự thử lại sau. Tăng giới hạn VSual không thay đổi giới hạn nhà cung cấp.',
+  ],
   RATE_LIMITED: [
-    'The request limit was reached. Your question is preserved; try later.',
-    'Đã đạt giới hạn yêu cầu. Câu hỏi vẫn được giữ; hãy thử sau.',
+    'The request was rate limited, but this backend response did not identify whether VSual or the provider imposed it. Your question is preserved; no reset time is confirmed.',
+    'Yêu cầu bị giới hạn nhưng phản hồi máy chủ chưa xác định do VSual hay nhà cung cấp. Câu hỏi vẫn còn; chưa có thời điểm khôi phục xác nhận.',
   ],
   QUOTA_EXHAUSTED: [
-    'Provider quota is unavailable. Your question and source table are preserved.',
-    'Hết hạn mức nhà cung cấp. Câu hỏi và bảng nguồn vẫn được giữ.',
+    'The answer provider reported a credit or spending limit. Your question and source table are preserved. VSual has no confirmed remaining balance or reset time; ask the maintainer to check the provider account.',
+    'Nhà cung cấp trả lời báo giới hạn tín dụng hoặc chi tiêu. Câu hỏi và bảng nguồn vẫn còn. VSual chưa có số dư hoặc thời điểm khôi phục xác nhận; nhờ người quản lý kiểm tra tài khoản nhà cung cấp.',
   ],
   PROVIDER_ACCESS_REQUIRED: [
     'The configured AI model is unavailable to this account. Ask the project maintainer.',

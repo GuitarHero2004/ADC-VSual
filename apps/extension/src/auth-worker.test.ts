@@ -22,7 +22,12 @@ type Listener = (
   sender: AuthSender,
   respond: (reply: unknown) => void,
 ) => boolean;
-function worker(configured = true, launchError?: string) {
+function worker(
+  configured = true,
+  launchError?: string,
+  trustedFloating: (sender: chrome.runtime.MessageSender) => boolean = () =>
+    false,
+) {
   let internal!: Listener;
   let external!: Listener;
   let authUrl = '';
@@ -88,7 +93,7 @@ function worker(configured = true, launchError?: string) {
       windows: { async update() {} },
     },
   });
-  installAuthWorker(
+  const installed = installAuthWorker(
     configured
       ? {
           backend,
@@ -97,8 +102,10 @@ function worker(configured = true, launchError?: string) {
           ordersOrigins: [backend],
         }
       : null,
+    trustedFloating,
   );
   return {
+    cancelInlineDocument: installed.cancelInlineDocument,
     writes,
     get opened() {
       return opened;
@@ -161,6 +168,38 @@ test('auth listener ignores unrelated messages and rejects content-script sender
     error: 'SETUP_REQUIRED',
   });
   assert.equal(app.opened, 0);
+});
+
+test('floating authentication requires a live binding and rechecks it before returning async replies', async () => {
+  let bound = true;
+  const floating = {
+    id: extensionId,
+    url: `chrome-extension://${extensionId}/floating.html#${crypto.randomUUID()}`,
+    frameId: 3,
+    documentId: crypto.randomUUID(),
+    tab: { id: 2 },
+  };
+  const app = worker(
+    false,
+    undefined,
+    (sender) => bound && sender === floating,
+  );
+  assert.equal(trustedAuthPanel(floating, extensionId), false);
+  assert.deepEqual(await app.dispatch({ type: 'auth:status' }, floating), {
+    ok: false,
+    error: 'SETUP_REQUIRED',
+  });
+  const pending = app.dispatch({ type: 'auth:status' }, floating);
+  bound = false;
+  assert.deepEqual(await pending, { ok: false, error: 'UNAVAILABLE' });
+  assert.equal(
+    await app.dispatch({ type: 'auth:status' }, floating),
+    undefined,
+  );
+  assert.deepEqual(await app.dispatch({ type: 'auth:status' }, panel), {
+    ok: false,
+    error: 'SETUP_REQUIRED',
+  });
 });
 
 test('worker stores owned tab before navigation and only that exact website may handshake', async () => {
@@ -286,5 +325,99 @@ test('closing the browser Google window produces a recoverable cancellation', as
   assert.equal(
     (app.writes.get(AUTH_RECORD_KEY) as AuthRecord).attempt?.stage,
     'ready',
+  );
+});
+
+test('inline worker accepts only the initiating floating document and disposal invalidates pending credentials', async () => {
+  const floating = {
+    id: extensionId,
+    url: `chrome-extension://${extensionId}/floating.html#${crypto.randomUUID()}`,
+    frameId: 3,
+    documentId: crypto.randomUUID(),
+    tab: { id: 2 },
+  };
+  const second = {
+    ...floating,
+    documentId: crypto.randomUUID(),
+    tab: { id: 3 },
+  };
+  let live = true;
+  const app = worker(
+    true,
+    undefined,
+    (sender) => sender === second || (live && sender === floating),
+  );
+  let requests = 0;
+  let enter!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const user = {
+    id: crypto.randomUUID(),
+    email: 'reader@example.test',
+    aud: 'authenticated',
+    created_at: new Date().toISOString(),
+    app_metadata: {},
+    user_metadata: {},
+  };
+  globalThis.fetch = async (input) => {
+    requests++;
+    const url = new URL(String(input));
+    if (url.pathname === '/auth/v1/logout')
+      return new Response(null, { status: 204 });
+    assert.equal(url.pathname, '/auth/v1/token');
+    enter();
+    await pending;
+    return Response.json({
+      access_token: crypto.randomUUID(),
+      refresh_token: crypto.randomUUID(),
+      expires_in: 3600,
+      token_type: 'bearer',
+      user,
+    });
+  };
+  const started = authReplySchema.parse(
+    await app.dispatch(
+      { type: 'auth:start', language: 'en', inline: true },
+      floating,
+    ),
+  );
+  assert.ok(started.ok);
+  const message = {
+    type: 'auth:inline-password',
+    epoch: started.status.epoch,
+    email: user.email,
+    password: crypto.randomUUID(),
+  };
+  assert.deepEqual(await app.dispatch(message, second), {
+    ok: false,
+    error: 'INVALID_ATTEMPT',
+  });
+  assert.deepEqual(
+    await app.dispatch(
+      { type: 'auth:inline-cancel', epoch: started.status.epoch },
+      second,
+    ),
+    { ok: false, error: 'INVALID_ATTEMPT' },
+  );
+  assert.equal(requests, 0);
+  const loggingIn = app.dispatch(message, floating);
+  await entered;
+  live = false;
+  await app.cancelInlineDocument(floating);
+  release();
+  assert.deepEqual(await loggingIn, { ok: false, error: 'UNAVAILABLE' });
+  const saved = app.writes.get(AUTH_RECORD_KEY) as AuthRecord;
+  assert.equal(saved.session, null);
+  assert.equal(saved.status.phase, 'signed_out');
+  assert.equal(app.opened, 0);
+  assert.equal(
+    requests,
+    2,
+    'one token request, followed only by revocation of the discarded candidate',
   );
 });
