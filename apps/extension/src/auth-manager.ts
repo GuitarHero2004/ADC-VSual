@@ -20,6 +20,9 @@ export interface AuthAttempt {
   returnTabId: number | null;
   returnWindowId: number | null;
   stage: 'opening' | 'ready' | 'password' | 'google' | 'complete';
+  inline?: boolean;
+  inlineOwner?: string;
+  inlineConnected?: boolean;
   flowId: string | null;
 }
 export interface AuthRecord {
@@ -52,7 +55,12 @@ export interface AuthSender {
   id?: string | undefined;
   url?: string | undefined;
   frameId?: number | undefined;
+  documentId?: string | undefined;
   tab?: { id?: number | undefined } | undefined;
+}
+export interface AuthPanelContext {
+  owner: string;
+  current(): boolean;
 }
 
 const failure = (error: AuthFailureCode): AuthReply => ({ ok: false, error });
@@ -136,11 +144,22 @@ export class ExtensionAuthManager {
     return { ok: true, status };
   }
 
-  async start(language: 'en' | 'vi'): Promise<AuthReply> {
+  async start(
+    language: 'en' | 'vi',
+    inline = false,
+    context?: AuthPanelContext,
+  ): Promise<AuthReply> {
+    if (inline && (!context?.current() || !context.owner))
+      throw new AuthFlowError('INVALID_ATTEMPT');
     let reused = false;
     const record = await this.atomic(async (current) => {
       if (current.session) throw new AuthFlowError('ACCOUNT_CHANGE_REQUIRED');
       if (current.attempt && current.attempt.expiresAt > this.now()) {
+        if (
+          Boolean(current.attempt.inline) !== inline ||
+          (inline && current.attempt.inlineOwner !== context?.owner)
+        )
+          throw new AuthFlowError('INVALID_ATTEMPT');
         reused = true;
         return current;
       }
@@ -157,7 +176,9 @@ export class ExtensionAuthManager {
         windowId: null,
         returnTabId: null,
         returnWindowId: null,
-        stage: 'opening',
+        stage: inline ? 'ready' : 'opening',
+        inline,
+        ...(inline && context ? { inlineOwner: context.owner } : {}),
         flowId: null,
       };
       const next = emptyRecord();
@@ -170,6 +191,7 @@ export class ExtensionAuthManager {
       await this.save(next);
       return next;
     });
+    if (inline) return this.reply(record.status);
     if (reused) {
       if (record.attempt?.tabId !== null && record.attempt?.tabId !== undefined)
         await this.deps.focus(record.attempt.tabId).catch(() => undefined);
@@ -262,6 +284,7 @@ export class ExtensionAuthManager {
       url.searchParams.get('attempt') !== message.attemptId ||
       message.recipient !== this.deps.extensionId ||
       !attempt ||
+      attempt.inline ||
       attempt.id !== message.attemptId ||
       sender.tab?.id !== attempt.tabId
     )
@@ -285,21 +308,39 @@ export class ExtensionAuthManager {
       };
     });
   }
-  private async accept(record: AuthRecord, session: Session) {
-    if (record.attempt!.expiresAt <= this.now())
-      throw new AuthFlowError('ATTEMPT_EXPIRED');
-    await this.replace(record.status.epoch, (current) => ({
-      ...current,
-      session,
-      attempt: { ...current.attempt!, stage: 'complete', flowId: null },
-      status: {
-        ...current.status,
-        phase: 'unverified',
-        error: null,
-        account: null,
-        workspace: 'unknown',
-      },
-    }));
+  private async accept(
+    record: AuthRecord,
+    session: Session,
+    context?: AuthPanelContext,
+  ) {
+    try {
+      if (context && !context.current()) {
+        await this.cancel('CANCELLED', record.status.epoch);
+        throw new AuthFlowError('CANCELLED');
+      }
+      if (record.attempt!.expiresAt <= this.now())
+        throw new AuthFlowError('ATTEMPT_EXPIRED');
+      await this.replace(record.status.epoch, (current) => {
+        if (context && !context.current()) throw new AuthFlowError('CANCELLED');
+        return {
+          ...current,
+          session,
+          attempt: { ...current.attempt!, stage: 'complete', flowId: null },
+          status: {
+            ...current.status,
+            phase: 'unverified',
+            error: null,
+            account: null,
+            workspace: 'unknown',
+          },
+        };
+      });
+    } catch (error) {
+      // A cancelled password/OAuth request can still produce a server session.
+      // Never publish that candidate, and revoke it on a best-effort basis.
+      await this.deps.gateway.logout(session).catch(() => false);
+      throw error;
+    }
     await this.deps.gateway.clearAttempt(record.attempt!.id);
     return this.reply(await this.verify());
   }
@@ -308,7 +349,6 @@ export class ExtensionAuthManager {
     if (!parsed.success) return failure('INVALID_ATTEMPT');
     const message = parsed.data;
     let record: AuthRecord | undefined;
-    let claimed = false;
     try {
       record = await this.prove(message, sender);
       const attempt = record.attempt!;
@@ -346,16 +386,34 @@ export class ExtensionAuthManager {
         await this.deps.returnToPage(attempt);
         return this.reply(record.status);
       }
+      return await this.authenticate(record, message);
+    } catch (error) {
+      return failure(errorCode(error));
+    }
+  }
+  private async authenticate(
+    record: AuthRecord,
+    message:
+      | { type: 'auth:password'; email: string; password: string }
+      | { type: 'auth:google' },
+    context?: AuthPanelContext,
+  ): Promise<AuthReply> {
+    let claimed = false;
+    const attempt = record.attempt!;
+    try {
+      if (context && !context.current()) throw new AuthFlowError('CANCELLED');
       if (message.type === 'auth:password') {
         await this.claim(record, 'password');
         claimed = true;
         return await this.accept(
           record,
           await this.deps.gateway.password(message.email, message.password),
+          context,
         );
       }
       if (!(await this.deps.googleEnabled()))
         throw new AuthFlowError('GOOGLE_UNAVAILABLE');
+      if (context && !context.current()) throw new AuthFlowError('CANCELLED');
       await this.claim(record, 'google');
       claimed = true;
       const started = await this.deps.gateway.startGoogle(
@@ -366,8 +424,10 @@ export class ExtensionAuthManager {
         ...current,
         attempt: { ...current.attempt!, flowId: started.flowId },
       }));
+      if (context && !context.current()) throw new AuthFlowError('CANCELLED');
       const callback = await this.deps.launchGoogle(started.url);
       if (!callback) throw new AuthFlowError('CANCELLED');
+      if (context && !context.current()) throw new AuthFlowError('CANCELLED');
       // Browser returned URLs are still untrusted. The verifier never leaves the worker.
       const returned = parseUrl(callback);
       const expected = new URL(this.deps.googleRedirect);
@@ -420,10 +480,11 @@ export class ExtensionAuthManager {
       return await this.accept(
         record,
         await this.deps.gateway.finishGoogle(attempt.id, code, started.flowId),
+        context,
       );
     } catch (error) {
       const code = errorCode(error);
-      if (record && claimed) {
+      if (claimed) {
         // Cleanup must finish before publishing a retryable attempt. Otherwise
         // an immediate retry could create a verifier that the old cleanup removes.
         if (message.type === 'auth:google') {
@@ -497,6 +558,9 @@ export class ExtensionAuthManager {
         throw new AuthFlowError('SESSION_EXPIRED');
       const saved = await this.replace(epoch, (current) => ({
         ...current,
+        attempt: current.attempt?.inline
+          ? { ...current.attempt, inlineConnected: true }
+          : current.attempt,
         status: {
           ...current.status,
           phase: 'signed_in',
@@ -547,17 +611,59 @@ export class ExtensionAuthManager {
     })).catch(() => null);
     return saved?.status ?? (await this.snapshot()).status;
   }
-  async panel(value: unknown): Promise<AuthReply> {
+  async cancelInlineOwner(owner: string) {
+    const record = await this.snapshot();
+    if (
+      record.attempt?.inlineOwner === owner &&
+      !record.attempt.inlineConnected
+    )
+      await this.cancel('CANCELLED', record.status.epoch, true);
+  }
+  async panel(value: unknown, context?: AuthPanelContext): Promise<AuthReply> {
     const parsed = authPanelMessageSchema.safeParse(value);
     if (!parsed.success) return failure('INVALID_ATTEMPT');
     const message = parsed.data;
     try {
       if (message.type === 'auth:start')
-        return await this.start(message.language);
+        return await this.start(message.language, message.inline, context);
       if (message.type === 'auth:cancel')
         return this.reply(await this.cancel('CANCELLED', message.epoch, true));
       if (message.type === 'auth:logout')
         return this.reply(await this.logout());
+      if (
+        message.type === 'auth:inline-password' ||
+        message.type === 'auth:inline-google' ||
+        message.type === 'auth:inline-cancel'
+      ) {
+        const record = await this.snapshot();
+        if (
+          record.status.epoch !== message.epoch ||
+          !record.attempt?.inline ||
+          !context?.current() ||
+          context.owner !== record.attempt.inlineOwner
+        )
+          throw new AuthFlowError('INVALID_ATTEMPT');
+        if (message.type === 'auth:inline-cancel')
+          return this.reply(
+            await this.cancel('CANCELLED', record.status.epoch, true),
+          );
+        if (record.attempt.expiresAt <= this.now()) {
+          await this.cancel('ATTEMPT_EXPIRED', record.status.epoch);
+          throw new AuthFlowError('ATTEMPT_EXPIRED');
+        }
+        return this.authenticate(
+          record,
+          message.type === 'auth:inline-password'
+            ? {
+                type: 'auth:password',
+                email: message.email,
+                password: message.password,
+              }
+            : { type: 'auth:google' },
+          context,
+        );
+      }
+
       const status = await this.verify();
       if (message.type === 'auth:status') return this.reply(status);
       return await this.atomic(async (record) => {

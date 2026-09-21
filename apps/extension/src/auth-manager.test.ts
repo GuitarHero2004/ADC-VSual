@@ -1157,3 +1157,211 @@ test('backend identity mismatch never exposes the mismatched session as signed i
   assert.equal(attempted.connected.status.phase, 'signed_out');
   assert.equal(h.stored?.session, null);
 });
+
+const inlineContext = () => ({
+  owner: crypto.randomUUID(),
+  current: () => true,
+});
+async function beginInline(h: Harness, context = inlineContext()) {
+  const reply = success(
+    await h.manager.panel(
+      { type: 'auth:start', language: 'en', inline: true },
+      context,
+    ),
+  );
+  return { context, epoch: reply.status.epoch };
+}
+
+test('inline password connects the verified account without a website tab or returning credentials', async () => {
+  const h = harness();
+  const { context, epoch } = await beginInline(h);
+  const repeated = success(
+    await h.manager.panel(
+      { type: 'auth:start', language: 'en', inline: true },
+      context,
+    ),
+  );
+  assert.equal(repeated.status.epoch, epoch);
+  assert.equal(h.calls.open, 0);
+  assert.equal(h.calls.password, 0);
+  const reply = success(
+    await h.manager.panel(
+      {
+        type: 'auth:inline-password',
+        epoch,
+        email: h.accountA.user.email!,
+        password: crypto.randomUUID(),
+      },
+      context,
+    ),
+  );
+  assert.equal(reply.status.account?.id, h.accountA.user.id);
+  assert.equal(reply.status.workspace, 'allowed');
+  assert.equal(h.calls.password, 1);
+  assert.equal(h.calls.open, 0);
+  assert.ok(!JSON.stringify(reply).includes(h.accountA.access_token));
+  await h.manager.cancelInlineOwner(context.owner);
+  assert.equal(
+    h.stored?.status.phase,
+    'signed_in',
+    'closing a completed login preserves the session',
+  );
+});
+
+test('inline requests require the initiating live document, valid credentials and an unexpired attempt', async () => {
+  const h = harness();
+  const { context, epoch } = await beginInline(h);
+  const message = {
+    type: 'auth:inline-password',
+    epoch,
+    email: h.accountA.user.email!,
+    password: crypto.randomUUID(),
+  };
+  rejected(await h.manager.panel(message, inlineContext()), 'INVALID_ATTEMPT');
+  rejected(
+    await h.manager.panel({ ...message, email: '' }, context),
+    'INVALID_ATTEMPT',
+  );
+  rejected(
+    await h.manager.panel(message, { ...context, current: () => false }),
+    'INVALID_ATTEMPT',
+  );
+  assert.equal(h.calls.password, 0);
+  h.advance(AUTH_ATTEMPT_MS + 1);
+  rejected(await h.manager.panel(message, context), 'ATTEMPT_EXPIRED');
+  assert.equal(h.calls.password, 0);
+});
+
+test('inline invalid credentials remain retryable and successful replay is rejected', async () => {
+  const h = harness();
+  const { context, epoch } = await beginInline(h);
+  const message = {
+    type: 'auth:inline-password',
+    epoch,
+    email: h.accountA.user.email!,
+    password: crypto.randomUUID(),
+  };
+  h.hooks.password = async () => {
+    throw new AuthFlowError('INVALID_CREDENTIALS');
+  };
+  rejected(await h.manager.panel(message, context), 'INVALID_CREDENTIALS');
+  assert.equal(h.stored?.attempt?.stage, 'ready');
+  delete h.hooks.password;
+  assert.equal(
+    success(await h.manager.panel(message, context)).status.phase,
+    'signed_in',
+  );
+  rejected(await h.manager.panel(message, context), 'INVALID_ATTEMPT');
+  assert.equal(h.calls.password, 2);
+});
+
+test('closing inline login while a password request is pending discards and revokes a late candidate', async () => {
+  const h = harness();
+  const { context, epoch } = await beginInline(h);
+  const entered = deferred<void>();
+  const pending = deferred<Session>();
+  h.hooks.password = () => {
+    entered.resolve();
+    return pending.promise;
+  };
+  const request = h.manager.panel(
+    {
+      type: 'auth:inline-password',
+      epoch,
+      email: h.accountA.user.email!,
+      password: crypto.randomUUID(),
+    },
+    context,
+  );
+  await entered.promise;
+  await h.manager.cancelInlineOwner(context.owner);
+  pending.resolve(h.accountA);
+  rejected(await request, 'CANCELLED');
+  assert.equal(h.stored?.session, null);
+  assert.equal(h.calls.logout, 1);
+});
+
+test('removing inline host during candidate verification cancels it before late verification returns', async () => {
+  const h = harness();
+  const { context, epoch } = await beginInline(h);
+  const entered = deferred<void>();
+  const pending = deferred<Session['user']>();
+  h.hooks.verify = () => {
+    entered.resolve();
+    return pending.promise;
+  };
+  const request = h.manager.panel(
+    {
+      type: 'auth:inline-password',
+      epoch,
+      email: h.accountA.user.email!,
+      password: crypto.randomUUID(),
+    },
+    context,
+  );
+  await entered.promise;
+  assert.ok(h.stored?.session);
+  await h.manager.cancelInlineOwner(context.owner);
+  assert.equal(h.stored?.session, null);
+  pending.resolve(h.accountA.user);
+  rejected(await request, 'CANCELLED');
+  assert.equal(h.stored?.status.phase, 'signed_out');
+});
+
+test('inline Google uses existing worker PKCE flow with no website tab and cannot exchange a cancelled callback', async () => {
+  const h = harness();
+  const { context, epoch } = await beginInline(h);
+  const entered = deferred<void>();
+  const callbackResult = deferred<string>();
+  h.setLaunch(() => {
+    entered.resolve();
+    return callbackResult.promise;
+  });
+  const pending = h.manager.panel(
+    { type: 'auth:inline-google', epoch },
+    context,
+  );
+  await entered.promise;
+  assert.equal(h.calls.startGoogle, 1);
+  assert.equal(h.calls.open, 0);
+  await h.manager.cancelInlineOwner(context.owner);
+  callbackResult.resolve(`${callback}?code=${crypto.randomUUID()}`);
+  rejected(await pending, 'CANCELLED');
+  assert.equal(h.calls.finishGoogle, 0);
+  assert.equal(h.stored?.session, null);
+  h.setLaunch(undefined);
+  const retry = await beginInline(h, context);
+  const reply = success(
+    await h.manager.panel(
+      { type: 'auth:inline-google', epoch: retry.epoch },
+      context,
+    ),
+  );
+  assert.equal(reply.status.account?.id, h.accountA.user.id);
+  assert.equal(h.calls.finishGoogle, 1);
+  assert.equal(h.calls.open, 0);
+});
+
+test('inline Google unavailable keeps email fallback and does not launch a provider window', async () => {
+  const h = harness();
+  h.setGoogle(false);
+  const { context, epoch } = await beginInline(h);
+  rejected(
+    await h.manager.panel({ type: 'auth:inline-google', epoch }, context),
+    'GOOGLE_UNAVAILABLE',
+  );
+  assert.equal(h.calls.launch, 0);
+  assert.equal(h.stored?.attempt?.stage, 'ready');
+  const reply = success(
+    await h.manager.panel(
+      {
+        type: 'auth:inline-password',
+        epoch,
+        email: h.accountA.user.email!,
+        password: crypto.randomUUID(),
+      },
+      context,
+    ),
+  );
+  assert.equal(reply.status.phase, 'signed_in');
+});
