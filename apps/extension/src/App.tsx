@@ -1,16 +1,30 @@
-import { createVoiceTransport, VoiceTest } from '@adc/voice-ui';
+import { createVoiceTransport, voiceLabels, VoiceTest } from '@adc/voice-ui';
 import '@adc/voice-ui/styles.css';
 import type { UiLanguage } from '@adc/contracts';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { getAuthHeaders } from './auth-client.ts';
 import { AuthPanel, useExtensionSession } from './auth-panel.tsx';
 import { getExtensionConfig } from './config.ts';
 import { usePanelActivation } from './use-activation.ts';
 import { text } from './i18n.ts';
-import { GroundedPanel } from './GroundedPanel.tsx';
+import { GroundedPanel, type CompanionControls } from './GroundedPanel.tsx';
+import {
+  FloatingToolbar,
+  floatingText,
+  useFloatingStatus,
+} from './FloatingToolbar.tsx';
+import type { FloatingClient } from './floating-client.ts';
 
 const configuration = getExtensionConfig();
 const setupTab = new URLSearchParams(location.search).has('microphone-setup');
+const logoUrl = new URL('./assets/vsual-logo.png', import.meta.url).href;
 
 function initialLanguage(): UiLanguage {
   try {
@@ -30,6 +44,8 @@ function SignedInVoice({
   onExpired,
   onActivity,
   settingsTarget,
+  floating,
+  onControls,
 }: {
   userId: string;
   epoch: string;
@@ -38,6 +54,8 @@ function SignedInVoice({
   onExpired: () => void;
   onActivity: () => void;
   settingsTarget: HTMLElement | null;
+  floating?: FloatingClient;
+  onControls: (controls: CompanionControls | null) => void;
 }) {
   const alive = useRef(true);
   useEffect(() => {
@@ -88,14 +106,61 @@ function SignedInVoice({
           onExpired={onExpired}
           onReady={onReady}
           settingsTarget={settingsTarget}
+          onControls={onControls}
+          {...(floating
+            ? { createPage: () => floating.createPage(), autoFocus: false }
+            : {})}
         />
       )}
     </div>
   );
 }
 
-export function App() {
+export function App({
+  floating,
+  onEnd,
+}: { floating?: FloatingClient; onEnd?: () => void } = {}) {
   const [language, setLanguage] = useState<UiLanguage>(initialLanguage);
+  const [expanded, setExpanded] = useState(!floating);
+  const [controls, setControls] = useState<CompanionControls | null>(null);
+  const floatingStatus = useFloatingStatus(floating ? controls : null);
+  const launcher = !!floating && !expanded && floatingStatus !== 'active';
+  const [opening, setOpening] = useState(0);
+  const [fallbackFailed, setFallbackFailed] = useState(false);
+  const panel = useRef<HTMLDivElement>(null);
+  const expandButton = useRef<HTMLButtonElement>(null);
+  const launcherButton = useRef<HTMLButtonElement>(null);
+  const collapseFocus = useRef(false);
+  const shortcutFocus = useRef(false);
+  const previousLauncher = useRef(launcher);
+  useLayoutEffect(() => {
+    const becameLauncher = !previousLauncher.current && launcher;
+    previousLauncher.current = launcher;
+    if (collapseFocus.current) {
+      collapseFocus.current = false;
+      (launcher ? launcherButton : expandButton).current?.focus();
+    } else if (
+      becameLauncher &&
+      document.hasFocus() &&
+      (document.activeElement === document.body ||
+        document.activeElement?.closest('[hidden]'))
+    ) {
+      launcherButton.current?.focus();
+    }
+    if (shortcutFocus.current && !expanded && !launcher) {
+      shortcutFocus.current = false;
+      document
+        .querySelector<HTMLElement>(
+          '[data-floating-record]:not(:disabled), [data-floating-cancel]:not(:disabled)',
+        )
+        ?.focus();
+    }
+  }, [launcher, expanded]);
+  const openCompanion = useCallback(() => {
+    setExpanded(true);
+    setSettingsOpen(false);
+    setOpening((value) => value + 1);
+  }, []);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTarget, setSettingsTarget] = useState<HTMLDivElement | null>(
     null,
@@ -189,7 +254,8 @@ export function App() {
   const activate = useRef<() => void>(() => guestActivation.current());
   const claimVoiceSurface = useCallback(() => {
     activityChannel.current?.postMessage('claim');
-  }, []);
+    floating?.claim();
+  }, [floating]);
   const onReady = useCallback((handler: () => void, cancel: () => void) => {
     activate.current = () => {
       activationFocus.current = !!document.activeElement?.closest(
@@ -218,8 +284,65 @@ export function App() {
   usePanelActivation(
     activate,
     !session.loading && (!session.allowed || voiceReady),
-    !setupTab,
+    !setupTab && !floating,
   );
+  const floatingReady = !session.loading && (!session.allowed || voiceReady);
+  const allowedRef = useRef(session.allowed);
+  allowedRef.current = session.allowed;
+  useEffect(() => {
+    if (!floating || !floatingReady) return;
+    const stop = floating.subscribe((event) => {
+      if (event.type === 'cancel') cancelVoice.current();
+      if (event.type !== 'activate') return;
+      if (!event.record || !allowedRef.current) openCompanion();
+      if (event.record) {
+        shortcutFocus.current = true;
+        activate.current();
+      }
+    });
+    floating.ready();
+    return stop;
+  }, [floating, floatingReady, openCompanion]);
+  useEffect(() => {
+    if (!floating || !panel.current) return;
+    const resize = () => {
+      const launcherSize = Math.max(
+        64,
+        Math.ceil(
+          parseFloat(getComputedStyle(document.documentElement).fontSize) * 4,
+        ),
+      );
+      floating.layout(
+        expanded,
+        launcher
+          ? launcherSize
+          : Math.ceil((panel.current?.getBoundingClientRect().height ?? 0) + 4),
+        launcher,
+        // Use the same dimension for both axes, including browser pixel rounding.
+        launcher ? launcherSize : undefined,
+      );
+    };
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(panel.current);
+    return () => observer.disconnect();
+  }, [floating, expanded, launcher]);
+  const lastOpening = useRef(0);
+  useEffect(() => {
+    if (
+      !floating ||
+      !expanded ||
+      !opening ||
+      !floatingReady ||
+      lastOpening.current === opening
+    )
+      return;
+    lastOpening.current = opening;
+    const target = session.allowed
+      ? document.querySelector<HTMLElement>('#companion-content textarea')
+      : signInButton.current;
+    (target ?? expandButton.current)?.focus();
+  }, [floating, expanded, opening, floatingReady, session.allowed]);
   useEffect(() => {
     if (session.status?.phase !== 'signing_in') return;
     const cancel = (event: KeyboardEvent) => {
@@ -314,15 +437,94 @@ export function App() {
           stop: 'Cancel current operation',
           demo: 'Open sample orders',
         };
+  const f = floatingText[language];
+  const launcherState =
+    session.loading || (session.allowed && !controls)
+      ? f.checking
+      : !session.allowed
+        ? session.status?.account
+          ? f.access
+          : f.signIn
+        : floatingStatus === 'active'
+          ? f.ready
+          : f[floatingStatus];
   return (
-    <div className="panel">
-      <header className="panel-header">
-        <div>
-          <h1>VSual</h1>
-          <p className="eyebrow">{setupTab ? t.label : ui.companion}</p>
+    <div
+      ref={panel}
+      className={`panel${floating ? ' floating-panel' : ''}${launcher ? ' floating-launcher-panel' : ''}`}
+    >
+      {floating && (
+        <div className="floating-launcher" hidden={!launcher}>
+          <button
+            id="floating-launcher"
+            ref={launcherButton}
+            type="button"
+            aria-label={f.open}
+            aria-expanded={false}
+            aria-controls="floating-expanded"
+            aria-describedby="floating-launcher-state"
+            title={`${f.open} — ${launcherState}`}
+            onClick={openCompanion}
+          >
+            <img src={logoUrl} alt="" className="vsual-logo" />
+            <span id="floating-launcher-state" className="voice-sr-only">
+              {launcherState}
+            </span>
+          </button>
+          <span className="voice-sr-only" role="status" aria-atomic="true">
+            {launcherState}
+          </span>
         </div>
+      )}
+      <header className="panel-header" hidden={launcher}>
+        <div className="companion-brand">
+          {floating && (
+            <span className="companion-mark" aria-hidden="true">
+              <img src={logoUrl} alt="" className="vsual-logo" />
+            </span>
+          )}
+          <div>
+            <h1>VSual</h1>
+            {(!floating || expanded) && (
+              <p className="eyebrow">{setupTab ? t.label : ui.companion}</p>
+            )}
+          </div>
+        </div>
+        {floating && (
+          <div className="controls floating-window-controls">
+            <button
+              ref={expandButton}
+              type="button"
+              aria-expanded={expanded}
+              aria-label={expanded ? f.collapse : f.expand}
+              aria-controls="floating-expanded"
+              onClick={() => {
+                if (!expanded) openCompanion();
+                else {
+                  collapseFocus.current = true;
+                  setExpanded(false);
+                  setSettingsOpen(false);
+                }
+              }}
+            >
+              {expanded ? f.collapseShort : f.expandShort}
+            </button>
+            <button
+              type="button"
+              aria-label={f.end}
+              onClick={() => {
+                cancelVoice.current();
+                onEnd?.();
+              }}
+            >
+              {f.endShort}
+            </button>
+          </div>
+        )}
         <button
+          hidden={!!floating && !expanded}
           ref={settingsButton}
+          className="companion-settings-button"
           type="button"
           aria-expanded={settingsOpen}
           aria-controls="companion-settings"
@@ -331,7 +533,31 @@ export function App() {
           {ui.settings}
         </button>
       </header>
-      <main>
+      {floating && (
+        <div hidden={expanded || launcher}>
+          {session.allowed && controls ? (
+            <FloatingToolbar
+              controls={controls}
+              language={language}
+              onExpand={openCompanion}
+              onActivity={claimVoiceSurface}
+            />
+          ) : (
+            <div className="floating-toolbar">
+              <p role="status" aria-atomic="true">
+                {session.loading ? f.checking : f.unavailable}
+              </p>
+              <button type="button" onClick={openCompanion}>
+                {f.ask}
+              </button>
+              <button type="button" disabled>
+                {voiceLabels(language).start}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      <main id="floating-expanded" hidden={!!floating && !expanded}>
         <section
           id="companion-settings"
           hidden={!settingsOpen}
@@ -406,6 +632,23 @@ export function App() {
                 {t.openSetup}
               </button>
             )}
+            {floating && (
+              <>
+                <p>{f.fallback}</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    cancelVoice.current();
+                    void floating
+                      .openSidePanel()
+                      .then((opened) => setFallbackFailed(!opened));
+                  }}
+                >
+                  {f.sidePanel}
+                </button>
+                <p role="status">{fallbackFailed ? f.sidePanelFailed : ''}</p>
+              </>
+            )}
           </section>
         </section>
         <div hidden={settingsOpen} id="companion-content">
@@ -415,6 +658,7 @@ export function App() {
               language={language}
               signInRef={signInButton}
               compact={session.allowed}
+              inline={!!floating}
             />
           ) : (
             <p role="alert">{t.setup}</p>
@@ -447,6 +691,8 @@ export function App() {
               onExpired={expireSession}
               onActivity={claimVoiceSurface}
               settingsTarget={settingsTarget}
+              onControls={setControls}
+              {...(floating ? { floating } : {})}
             />
           ) : null}
         </div>

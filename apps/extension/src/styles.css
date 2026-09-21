@@ -121,9 +121,203 @@ td {
 [hidden] {
   display: none !important;
 }
+.floating-panel {
+  margin: 0;
+  padding: 1rem;
+  max-width: none;
+}
+.floating-document {
+  --color-page: #ffffff;
+  --color-text: #202838;
+  --color-muted: #526073;
+  --color-accent: #304bbd;
+  --color-accent-hover: #243b9b;
+  --color-link: #304bbd;
+  --color-subtle: #eef1fb;
+  --color-border: #7b879e;
+  --color-focus: #304bbd;
+  --color-selection: #304bbd;
+  --radius: 0.65rem;
+  background: var(--color-page);
+  scrollbar-color: #7b879e #f3f5f8;
+}
+.floating-document:has(.floating-launcher-panel) {
+  background: var(--color-accent);
+  overflow: hidden;
+}
+.floating-panel .panel-header {
+  gap: 0.75rem 0.5rem;
+  padding-bottom: 0.875rem;
+  border-color: #dce1eb;
+}
+.floating-panel .companion-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.companion-brand > div {
+  min-width: 0;
+}
+.companion-mark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 2.5rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  color: var(--color-accent);
+  background: var(--color-subtle);
+}
+.vsual-logo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 50%;
+}
+.floating-panel .panel-header h1 {
+  font-size: 1.4rem;
+  letter-spacing: -0.025em;
+}
+.floating-panel .eyebrow {
+  font-size: 0.9em;
+  line-height: 1.45;
+}
+.floating-panel .panel-header button {
+  padding: 0.375rem 0.625rem;
+  font-size: 0.9em;
+  background: #f6f7fa;
+}
+.floating-panel button:not(:disabled):hover {
+  border-color: var(--color-accent);
+  background: var(--color-subtle);
+}
+.floating-panel button.primary:not(:disabled),
+.floating-panel .account-setup > button:first-of-type:not(:disabled) {
+  color: var(--color-on-accent);
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+.floating-panel button.primary:not(:disabled):hover,
+.floating-panel .account-setup > button:first-of-type:not(:disabled):hover {
+  background: var(--color-accent-hover);
+}
+.floating-panel :is(.page-context, .account-setup, .answer-section),
+.floating-panel #companion-content > section:not(.account-summary) {
+  padding: 0.875rem;
+  border: 1px solid #dce1eb;
+  border-radius: 0.8rem;
+  background: #f6f7fa;
+  margin-block: 1rem;
+}
+.floating-panel :is(.page-context, .account-setup, .answer-section) > h2,
+.floating-panel #companion-content > section > h2:not(.sr-only) {
+  margin-top: 0;
+}
+.floating-panel .page-context .page-title {
+  margin-top: 0.375rem;
+}
+.floating-panel .page-context .field-help {
+  font-size: 0.9em;
+}
+.floating-panel .account-summary {
+  margin-block: 0.75rem;
+  padding-inline: 0.625rem;
+  border-radius: 0.65rem;
+  background: #f6f7fa;
+}
+.floating-panel .status:empty {
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+}
+.floating-panel .processing-consent {
+  padding: 0.25rem 0.75rem;
+  border: 1px solid #dce1eb;
+  border-radius: 0.65rem;
+  background: #f6f7fa;
+}
+.floating-panel .question-composer {
+  margin-top: 1.25rem;
+}
+.floating-panel textarea {
+  padding: 0.75rem;
+  background: #fafbfe;
+}
+.floating-panel .answer-section {
+  border-top: 3px solid var(--color-accent);
+  background: #f1f4fd;
+}
+.floating-panel .evidence-disclosure {
+  border-color: #c9d2e6;
+}
+.floating-panel #companion-settings fieldset {
+  background: #f6f7fa;
+  border-color: #dce1eb;
+}
+.floating-window-controls {
+  flex: 1 1 auto;
+  gap: 0.375rem;
+}
+.floating-window-controls button {
+  flex: 1 1 auto;
+}
+.floating-toolbar p {
+  margin-block: 0.5rem;
+}
+.floating-toolbar > p:first-child {
+  margin-block: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid #dce1eb;
+  border-radius: 0.65rem;
+  background: #f6f7fa;
+  font-weight: 600;
+}
+.floating-toolbar .controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
+  gap: 0.375rem;
+}
+.floating-toolbar button {
+  overflow-wrap: anywhere;
+}
+.floating-panel main {
+  padding-bottom: 0.5rem;
+}
+.floating-launcher-panel {
+  padding: 0.375rem;
+  background: var(--color-accent);
+  height: 100dvh;
+}
+.floating-launcher {
+  height: 100%;
+}
+.floating-launcher button {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  border-color: var(--color-accent);
+}
+.floating-panel .floating-launcher button:not(:disabled):hover {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+.floating-launcher button:focus-visible {
+  outline-color: #ffffff;
+}
 @media (max-width: 360px) {
   .panel {
     padding: 0.75rem;
+  }
+  .floating-launcher-panel {
+    padding: 0.375rem;
   }
   .controls > button,
   .voice-controls > button {

@@ -1,5 +1,7 @@
 import { ActivationBroker } from './activation.ts';
 import { installAuthWorker } from './auth-worker.ts';
+import { ordersOrigins, publicOrigin } from './config-values.ts';
+import { installFloatingWorker } from './floating-worker.ts';
 
 const storageKey = (windowId: number) => `voice-activation:${windowId}`;
 const broker = new ActivationBroker({
@@ -24,7 +26,15 @@ const broker = new ActivationBroker({
 });
 
 void chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
-installAuthWorker();
+const floating = installFloatingWorker(
+  ordersOrigins(import.meta.env),
+  chrome,
+  publicOrigin(import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:3000'),
+  (sender) => {
+    void auth.cancelInlineDocument(sender).catch(() => undefined);
+  },
+);
+const auth = installAuthWorker(undefined, floating.trusted);
 
 function openPanel(tab: chrome.tabs.Tab, activate: boolean) {
   if (!Number.isInteger(tab.windowId) || tab.windowId < 0) return;
@@ -45,9 +55,12 @@ function openPanel(tab: chrome.tabs.Tab, activate: boolean) {
   });
 }
 
-chrome.action.onClicked.addListener((tab) => openPanel(tab, false));
+chrome.action.onClicked.addListener((tab) => {
+  if (!floating.activate(tab, false)) openPanel(tab, false);
+});
 chrome.commands.onCommand.addListener((command, tab) => {
-  if (command === 'toggle-voice' && tab) openPanel(tab, true);
+  if (command === 'toggle-voice' && tab && !floating.activate(tab, true))
+    openPanel(tab, true);
 });
 
 chrome.runtime.onConnect.addListener((port) => {
