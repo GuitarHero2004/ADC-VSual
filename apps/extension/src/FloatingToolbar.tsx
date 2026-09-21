@@ -2,7 +2,11 @@ import type { UiLanguage } from '@adc/contracts';
 import { questionNoticeText, voiceErrorText, voiceLabels } from '@adc/voice-ui';
 import { useCallback, useSyncExternalStore } from 'react';
 import type { CompanionControls } from './GroundedPanel.tsx';
-import { groundedError, groundedText } from './grounded-strings.ts';
+import {
+  companionError,
+  companionText,
+  structuredText,
+} from './structured-strings.ts';
 
 export const floatingText = {
   en: {
@@ -24,8 +28,6 @@ export const floatingText = {
     ready: 'Ready',
     checking: 'Checking access…',
     unavailable: 'Sign in or check access to use VSual.',
-    permission:
-      'Allow page processing in the expanded companion before asking.',
     sidePanel: 'Open side panel',
     fallback:
       'If microphone access is blocked here, use Microphone setup, then try again or use the side panel. Switching surfaces stops current work; drafts are not transferred.',
@@ -54,7 +56,6 @@ export const floatingText = {
     ready: 'Sẵn sàng',
     checking: 'Đang kiểm tra quyền truy cập…',
     unavailable: 'Đăng nhập hoặc kiểm tra quyền truy cập để dùng VSual.',
-    permission: 'Cho phép xử lý trang trong trợ lý mở rộng trước khi hỏi.',
     sidePanel: 'Mở bảng bên',
     fallback:
       'Nếu micrô bị chặn ở đây, dùng Thiết lập micrô rồi thử lại hoặc dùng bảng bên. Chuyển giao diện sẽ dừng thao tác hiện tại; bản nháp không được chuyển theo.',
@@ -93,9 +94,9 @@ export function useFloatingStatus(controls: CompanionControls | null) {
     )
       return 'active';
     if (question.errorCode || speech.errorCode || page.error) return 'error';
+    if (page.context?.permission === 'required') return 'setup';
     if (page.context && !page.context.supported) return 'unsupported';
-    if (!page.context?.supported || page.context.origin !== page.consentOrigin)
-      return 'setup';
+    if (!page.context?.supported) return 'setup';
     if (page.result && !page.stale) return 'answer';
     if (question.text.trim()) return 'review';
     return 'ready';
@@ -123,19 +124,18 @@ export function FloatingToolbar({
   const audio = useSyncExternalStore(speech.subscribe, speech.getSnapshot);
   const t = floatingText[language];
   const v = voiceLabels(language);
-  const g = groundedText[language];
+  const structured = page.context?.sourceKind === 'structured_page';
+  const g = companionText(language, structured);
   const recording = voice.phase === 'recording';
   const voiceBusy = ['requesting_permission', 'transcribing'].includes(
     voice.phase,
   );
   const answering = page.phase === 'reading' || page.phase === 'understanding';
   const speaking = ['generating', 'speaking'].includes(audio.phase);
-  const permission =
-    page.context?.supported && page.consentOrigin === page.context.origin;
   const status = voice.errorCode
     ? voiceErrorText(language, voice.errorCode)
     : page.error
-      ? groundedError(language, page.error)
+      ? companionError(language, page.error, structured)
       : recording || voiceBusy
         ? questionNoticeText(language, voice.notice)
         : speaking
@@ -145,14 +145,16 @@ export function FloatingToolbar({
           : answering
             ? g[page.phase === 'reading' ? 'reading' : 'understanding']
             : !page.context?.supported
-              ? g.unavailablePage
-              : !permission
-                ? t.permission
-                : page.result
-                  ? g.answer
-                  : voice.text
-                    ? questionNoticeText(language, voice.notice)
-                    : t.ready;
+              ? structured
+                ? page.context?.permission === 'required'
+                  ? structuredText[language].activation
+                  : structuredText[language].unsupported
+                : g.unavailablePage
+              : page.result
+                ? g.answer
+                : voice.text
+                  ? questionNoticeText(language, voice.notice)
+                  : t.ready;
   return (
     <div className="floating-toolbar">
       <p role="status" aria-atomic="true">

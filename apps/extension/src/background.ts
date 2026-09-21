@@ -2,6 +2,11 @@ import { ActivationBroker } from './activation.ts';
 import { installAuthWorker } from './auth-worker.ts';
 import { ordersOrigins, publicOrigin } from './config-values.ts';
 import { installFloatingWorker } from './floating-worker.ts';
+import {
+  StructuredPageAccess,
+  installStructuredContextMessages,
+} from './structured-access.ts';
+import { supportedOrdersUrl } from './orders-adapter.ts';
 
 const storageKey = (windowId: number) => `voice-activation:${windowId}`;
 const broker = new ActivationBroker({
@@ -26,6 +31,8 @@ const broker = new ActivationBroker({
 });
 
 void chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+const structured = new StructuredPageAccess();
+installStructuredContextMessages(structured);
 const floating = installFloatingWorker(
   ordersOrigins(import.meta.env),
   chrome,
@@ -33,20 +40,42 @@ const floating = installFloatingWorker(
   (sender) => {
     void auth.cancelInlineDocument(sender).catch(() => undefined);
   },
+  structured,
 );
 const auth = installAuthWorker(undefined, floating.trusted);
+const panelEpochs = new Map<number, number>();
 
 function openPanel(tab: chrome.tabs.Tab, activate: boolean) {
   if (!Number.isInteger(tab.windowId) || tab.windowId < 0) return;
   // Call before any await: sidePanel.open requires this browser-event user gesture.
   const opening = chrome.sidePanel.open({ windowId: tab.windowId });
   const activationId = crypto.randomUUID();
+  const panelEpoch = panelEpochs.get(tab.windowId) ?? 0;
+  const permission =
+    tab.url && supportedOrdersUrl(tab.url, ordersOrigins(import.meta.env))
+      ? Promise.resolve()
+      : structured.activate(tab);
   if (activate)
-    void broker.activate(tab.windowId, activationId).catch(() => {
-      console.warn(
-        'Voice activation could not be queued. Wait for the panel, then try the shortcut again.',
-      );
-    });
+    void Promise.all([permission, opening])
+      .then(async () => {
+        if (panelEpoch !== (panelEpochs.get(tab.windowId) ?? 0)) return;
+        if (tab.id !== undefined) {
+          const current = await chrome.tabs.get(tab.id);
+          if (
+            !current.active ||
+            current.url !== tab.url ||
+            current.windowId !== tab.windowId
+          )
+            return;
+        }
+        if (panelEpoch === (panelEpochs.get(tab.windowId) ?? 0))
+          await broker.activate(tab.windowId, activationId);
+      })
+      .catch(() => {
+        console.warn(
+          'Voice activation could not be queued. Wait for the panel, then try the shortcut again.',
+        );
+      });
   void opening.catch(() => {
     void broker.discard(tab.windowId, activationId).catch(() => undefined);
     console.warn(
@@ -112,11 +141,14 @@ chrome.runtime.onConnect.addListener((port) => {
     }
   });
   port.onDisconnect.addListener(() => {
-    if (windowId !== null)
+    if (windowId !== null) {
+      panelEpochs.set(windowId, (panelEpochs.get(windowId) ?? 0) + 1);
       void broker.disconnect(windowId, key).catch(() => undefined);
+    }
   });
 });
 
 chrome.windows.onRemoved.addListener((windowId) => {
+  panelEpochs.delete(windowId);
   void chrome.storage.session.remove(storageKey(windowId));
 });

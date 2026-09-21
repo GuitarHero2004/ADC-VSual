@@ -36,7 +36,13 @@ test('manifest separates broad UI injection from configured extraction and backe
     'https://backend.example.test/*',
     'https://project.supabase.co/*',
   ]);
-  assert.deepEqual(manifest.permissions, ['sidePanel', 'storage', 'identity']);
+  assert.deepEqual(manifest.permissions, [
+    'sidePanel',
+    'storage',
+    'identity',
+    'activeTab',
+    'scripting',
+  ]);
   assert.deepEqual(manifest.externally_connectable, {
     matches: ['https://backend.example.test/auth/sign-in*'],
   });

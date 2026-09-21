@@ -175,6 +175,10 @@ export class FloatingHost {
     return element === this.element || !!this.element?.contains(element);
   }
 
+  isDismissed() {
+    return this.dismissed;
+  }
+
   private current() {
     if (this.disposed) return false;
     if (this.document.defaultView!.location.href !== this.url) {
@@ -436,7 +440,7 @@ export function installFloatingHost(
     view.clearTimeout(retryTimer);
     retryTimer = undefined;
     retries = 0;
-    dismissed = false;
+    dismissed = host?.isDismissed() ?? dismissed;
     host?.dispose();
     host = null;
     connect();

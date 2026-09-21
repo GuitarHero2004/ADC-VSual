@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type {
-  GroundedRequest,
-  GroundedResponse,
-  GroundedSnapshot,
-} from '@adc/contracts';
+import type { GroundedResponse, GroundedSnapshot } from '@adc/contracts';
 import {
   GroundedController,
   type GroundedTransport,
+  type CompanionRequest,
+  type CompanionSnapshot,
 } from './grounded-controller.ts';
-import type { OrdersPageContext, PageContextInfo } from './page-context.ts';
+import type {
+  OrdersPageContext,
+  PageContextInfo,
+  OrdersInvalidation,
+} from './page-context.ts';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -19,10 +21,6 @@ function deferred<T>() {
   return { promise, resolve };
 }
 const flush = () => new Promise<void>((done) => setImmediate(done));
-async function permit(controller: GroundedController) {
-  await controller.refreshContext();
-  await controller.allow();
-}
 
 function source(): GroundedSnapshot {
   return {
@@ -60,7 +58,7 @@ function source(): GroundedSnapshot {
   };
 }
 function resultFor(
-  input: GroundedRequest,
+  input: CompanionRequest,
 ): Extract<GroundedResponse, { status: 'clarification' }> {
   return {
     answer_language: 'en',
@@ -72,12 +70,13 @@ function resultFor(
     text: 'Please specify two months.',
   };
 }
-function setup() {
+function setup(options: { continueAnswerAcrossTabs?: boolean } = {}) {
   const calls = {
     capture: 0,
     provider: 0,
     verify: 0,
     stopMedia: 0,
+    preserveSpeech: 0,
     reset: 0,
     dispose: 0,
     returnToPage: 0,
@@ -90,11 +89,11 @@ function setup() {
     windowId: 20,
     reason: null,
   };
-  const events = new Set<() => void>();
+  const events = new Set<(reason: OrdersInvalidation) => void>();
   const hooks: {
     getContext(): Promise<PageContextInfo>;
     capture(signal: AbortSignal): Promise<GroundedSnapshot>;
-    verify(snapshot: GroundedSnapshot, signal: AbortSignal): Promise<boolean>;
+    verify(snapshot: CompanionSnapshot, signal: AbortSignal): Promise<boolean>;
     transport: GroundedTransport;
   } = {
     getContext: async () => context,
@@ -122,7 +121,7 @@ function setup() {
       return hooks.verify(snapshot, signal);
     },
     subscribe(listener) {
-      const invoke = () => listener('page');
+      const invoke = (reason: OrdersInvalidation) => listener(reason);
       events.add(invoke);
       return () => {
         events.delete(invoke);
@@ -146,9 +145,11 @@ function setup() {
       calls.provider++;
       return hooks.transport(input, signal);
     },
-    () => {
-      calls.stopMedia++;
+    (preserveAnswerSpeech) => {
+      if (preserveAnswerSpeech) calls.preserveSpeech++;
+      else calls.stopMedia++;
     },
+    options,
   );
   controller.setQuestion(
     'Compare completed orders in the South for August and July.',
@@ -160,21 +161,19 @@ function setup() {
     changeContext(next: Partial<PageContextInfo>) {
       context = { ...context, ...next };
     },
-    invalidate() {
-      for (const event of events) event();
+    invalidate(reason: OrdersInvalidation = 'page') {
+      for (const event of events) event(reason);
     },
   };
 }
 
-test('opening, subscription and denied consent never capture or upload content', async () => {
+test('opening, subscription, context checks and a draft never capture or upload content', async () => {
   const { controller, calls } = setup();
   await controller.refreshContext();
   const unsubscribe = controller.subscribe(() => {});
   controller.getSnapshot();
   controller.getSnapshot();
-  await controller.ask();
-  assert.equal(controller.getSnapshot().error, 'CONSENT_REQUIRED');
-  await controller.inspect();
+  await controller.refreshContext();
   assert.equal(calls.capture, 0);
   assert.equal(calls.provider, 0);
   assert.equal(calls.verify, 0);
@@ -182,15 +181,16 @@ test('opening, subscription and denied consent never capture or upload content',
   controller.dispose();
 });
 
-test('unsupported pages cannot capture even after consent to an earlier supported origin', async () => {
+test('unsupported pages cannot capture after an earlier supported origin', async () => {
   const { controller, calls, changeContext } = setup();
-  await permit(controller);
+  await controller.refreshContext();
   changeContext({
     supported: false,
     origin: null,
     pathname: null,
     reason: 'unsupported',
   });
+  await controller.refreshContext();
   await controller.ask();
   assert.equal(controller.getSnapshot().error, 'UNSUPPORTED_PAGE');
   assert.equal(calls.capture, 0);
@@ -199,10 +199,12 @@ test('unsupported pages cannot capture even after consent to an earlier supporte
 
 test('explicit source inspection works independently of an AI request', async () => {
   const { controller, calls } = setup();
-  await permit(controller);
+  await controller.refreshContext();
   await controller.inspect();
   assert.equal(controller.getSnapshot().phase, 'ready');
-  assert.equal(controller.getSnapshot().snapshot?.rows[0]?.raw_value, '1,200');
+  const captured = controller.getSnapshot().snapshot;
+  assert.ok(captured && 'rows' in captured);
+  assert.equal(captured.rows[0]?.raw_value, '1,200');
   assert.equal(controller.getSnapshot().result, null);
   assert.equal(calls.capture, 1);
   assert.equal(calls.provider, 0);
@@ -211,9 +213,9 @@ test('explicit source inspection works independently of an AI request', async ()
 
 test('duplicate Ask and panel subscriptions do not create extra captures or requests', async () => {
   const { controller, calls, hooks } = setup();
-  await permit(controller);
+  await controller.refreshContext();
   const pending = deferred<GroundedResponse>();
-  let submitted!: GroundedRequest;
+  let submitted!: CompanionRequest;
   hooks.transport = (input) => {
     submitted = input;
     return pending.promise;
@@ -234,12 +236,12 @@ test('duplicate Ask and panel subscriptions do not create extra captures or requ
 
 test('only a fresh accepted answer can reserve automatic speech, once across subscribers', async () => {
   const { controller, hooks } = setup();
-  await permit(controller);
+  await controller.refreshContext();
   assert.equal(controller.claimAutomaticSpeech(), null);
   await controller.inspect();
   assert.equal(controller.claimAutomaticSpeech(), null);
   for (const status of ['clarification', 'unsupported'] as const) {
-    hooks.transport = async (input) => ({
+    hooks.transport = async (input): Promise<GroundedResponse> => ({
       ...resultFor(input),
       status,
       answer_language: 'vi',
@@ -260,7 +262,7 @@ test('only a fresh accepted answer can reserve automatic speech, once across sub
 test('cancellation, invalidation and disposal consume an unclaimed automatic answer', async () => {
   for (const reason of ['cancel', 'page', 'dispose', 'speech-off'] as const) {
     const { controller, invalidate } = setup();
-    await permit(controller);
+    await controller.refreshContext();
     await controller.ask();
     if (reason === 'cancel') controller.cancel();
     if (reason === 'page') invalidate();
@@ -272,7 +274,7 @@ test('cancellation, invalidation and disposal consume an unclaimed automatic ans
 
 test('the final edited question reaches the backend without an interface-language preference', async () => {
   const { controller, hooks } = setup();
-  await permit(controller);
+  await controller.refreshContext();
   controller.setQuestion('So sánh tháng 8 với tháng 7.');
   controller.setQuestion('Compare August with July. Answer in English.');
   hooks.transport = async (input) => {
@@ -289,9 +291,9 @@ test('the final edited question reaches the backend without an interface-languag
 
 test('cancel during model work aborts locally and ignores a late provider success', async () => {
   const { controller, calls, hooks } = setup();
-  await permit(controller);
+  await controller.refreshContext();
   const pending = deferred<GroundedResponse>();
-  let submitted!: GroundedRequest;
+  let submitted!: CompanionRequest;
   let providerSignal!: AbortSignal;
   hooks.transport = (input, signal) => {
     submitted = input;
@@ -313,9 +315,9 @@ test('cancel during model work aborts locally and ignores a late provider succes
 
 test('editing a question cancels pending work and a new answer cannot be overwritten by the old response', async () => {
   const { controller, hooks } = setup();
-  await permit(controller);
+  await controller.refreshContext();
   const pending = deferred<GroundedResponse>();
-  let oldInput!: GroundedRequest;
+  let oldInput!: CompanionRequest;
   hooks.transport = (input) => {
     oldInput = input;
     return pending.promise;
@@ -337,11 +339,11 @@ test('editing a question cancels pending work and a new answer cannot be overwri
 test('context invalidation during capture, interpretation or verification withholds late results and never resubmits', async () => {
   for (const stage of ['capture', 'model', 'verify'] as const) {
     const { controller, calls, hooks, invalidate } = setup();
-    await permit(controller);
+    await controller.refreshContext();
     const capture = deferred<GroundedSnapshot>();
     const model = deferred<GroundedResponse>();
     const verification = deferred<boolean>();
-    let input!: GroundedRequest;
+    let input!: CompanionRequest;
     if (stage === 'capture') hooks.capture = () => capture.promise;
     if (stage === 'model')
       hooks.transport = (value) => {
@@ -362,7 +364,7 @@ test('context invalidation during capture, interpretation or verification withho
     assert.equal(calls.capture, 1, stage);
     assert.equal(calls.provider, stage === 'capture' ? 0 : 1, stage);
     assert.equal(
-      controller.getSnapshot().consentOrigin,
+      controller.getSnapshot().context?.origin,
       'https://dashboard.example.test',
     );
   }
@@ -370,7 +372,7 @@ test('context invalidation during capture, interpretation or verification withho
 
 test('a failed final freshness check cannot label a response current', async () => {
   const { controller, hooks } = setup();
-  await permit(controller);
+  await controller.refreshContext();
   hooks.verify = async () => false;
   await controller.ask();
   assert.equal(controller.getSnapshot().phase, 'stale');
@@ -381,7 +383,7 @@ test('a failed final freshness check cannot label a response current', async () 
 test('responses with different request, snapshot or fingerprint are withheld before freshness verification', async () => {
   for (const field of ['request_id', 'snapshot_id', 'fingerprint'] as const) {
     const { controller, calls, hooks } = setup();
-    await permit(controller);
+    await controller.refreshContext();
     hooks.transport = async (input) => ({
       ...resultFor(input),
       [field]: field === 'fingerprint' ? 'b'.repeat(64) : crypto.randomUUID(),
@@ -393,9 +395,9 @@ test('responses with different request, snapshot or fingerprint are withheld bef
   }
 });
 
-test('origin changes clear consent and captured data; same-origin table changes preserve consent but mark old evidence stale', async () => {
+test('origin changes clear captured data; same-origin table changes mark old evidence stale', async () => {
   const { controller, calls, changeContext, invalidate } = setup();
-  await permit(controller);
+  await controller.refreshContext();
   await controller.ask();
   const previous = controller.getSnapshot().result;
   invalidate();
@@ -403,13 +405,12 @@ test('origin changes clear consent and captured data; same-origin table changes 
   assert.equal(controller.getSnapshot().phase, 'stale');
   assert.equal(controller.getSnapshot().result, previous);
   assert.equal(
-    controller.getSnapshot().consentOrigin,
+    controller.getSnapshot().context?.origin,
     'https://dashboard.example.test',
   );
   changeContext({ origin: 'https://other.example.test' });
   invalidate();
   await flush();
-  assert.equal(controller.getSnapshot().consentOrigin, null);
   assert.equal(controller.getSnapshot().snapshot, null);
   assert.equal(controller.getSnapshot().result, null);
   assert.equal(calls.provider, 1);
@@ -418,7 +419,7 @@ test('origin changes clear consent and captured data; same-origin table changes 
 
 test('Cancel cannot relabel previous stale evidence current; explicit fresh inspection clears stale status', async () => {
   const { controller, calls, invalidate } = setup();
-  await permit(controller);
+  await controller.refreshContext();
   await controller.ask();
   const previousResult = controller.getSnapshot().result;
   const previousSnapshot = controller.getSnapshot().snapshot;
@@ -445,9 +446,9 @@ test('Cancel cannot relabel previous stale evidence current; explicit fresh insp
 
 test('logout disposal clears pending work, question, source evidence and media and ignores late work', async () => {
   const { controller, calls, hooks, invalidate } = setup();
-  await permit(controller);
+  await controller.refreshContext();
   const pending = deferred<GroundedResponse>();
-  let input!: GroundedRequest;
+  let input!: CompanionRequest;
   hooks.transport = (value) => {
     input = value;
     return pending.promise;
@@ -458,7 +459,6 @@ test('logout disposal clears pending work, question, source evidence and media a
   assert.equal(controller.getSnapshot().question, '');
   assert.equal(controller.getSnapshot().snapshot, null);
   assert.equal(controller.getSnapshot().result, null);
-  assert.equal(controller.getSnapshot().consentOrigin, null);
   pending.resolve(resultFor(input));
   invalidate();
   await work;
@@ -472,7 +472,7 @@ test('logout disposal clears pending work, question, source evidence and media a
 test('provider quota and timeout errors preserve the question and allow an explicit retry', async () => {
   for (const code of ['RATE_LIMITED', 'TIMEOUT', 'SETUP_REQUIRED']) {
     const { controller, hooks, calls } = setup();
-    await permit(controller);
+    await controller.refreshContext();
     const question = controller.getSnapshot().question;
     hooks.transport = async () => {
       throw Object.assign(new Error('Recoverable'), { code });
@@ -491,7 +491,7 @@ test('provider quota and timeout errors preserve the question and allow an expli
 
 test('grounded application-limit details are validated, preserved with the question and cleared on recovery or logout', async () => {
   const { controller, hooks, calls } = setup();
-  await permit(controller);
+  await controller.refreshContext();
   const question = controller.getSnapshot().question;
   const usage = {
     minute_count: 30,
@@ -513,7 +513,7 @@ test('grounded application-limit details are validated, preserved with the quest
   assert.equal(controller.getSnapshot().question, question);
   assert.equal(calls.provider, 1);
   const pending = deferred<GroundedResponse>();
-  let nextInput!: GroundedRequest;
+  let nextInput!: CompanionRequest;
   hooks.transport = async (input) => {
     nextInput = input;
     return pending.promise;
@@ -539,17 +539,19 @@ test('grounded application-limit details are validated, preserved with the quest
   assert.equal(controller.getSnapshot().errorUsage, null);
 });
 
-test('revoking while Allow waits for a page lookup cannot grant consent afterwards', async () => {
-  const { controller, hooks } = setup();
+test('cancelling while an explicit Ask waits for a page lookup prevents capture and provider work', async () => {
+  const { controller, hooks, calls } = setup();
   await controller.refreshContext();
   const original = await hooks.getContext();
   const pending = deferred<PageContextInfo>();
   hooks.getContext = () => pending.promise;
-  const allow = controller.allow();
-  controller.revoke();
+  const asking = controller.ask();
+  controller.cancel();
   pending.resolve(original);
-  await allow;
-  assert.equal(controller.getSnapshot().consentOrigin, null);
+  await asking;
+  assert.equal(calls.capture, 0);
+  assert.equal(calls.provider, 0);
+  assert.ok(controller.getSnapshot().question);
 });
 
 test('an older context lookup cannot overwrite a newer lookup result', async () => {
@@ -570,4 +572,153 @@ test('an older context lookup cannot overwrite a newer lookup result', async () 
     controller.getSnapshot().context?.origin,
     'https://new.example.test',
   );
+});
+
+test('first deliberate Ask authorizes only its captured request without a separate grant or stored preference', async () => {
+  const { controller, hooks, calls } = setup();
+  hooks.transport = async (input) => {
+    assert.equal(input.consent, true);
+    assert.equal(input.snapshot.origin, 'https://dashboard.example.test');
+    return resultFor(input);
+  };
+  assert.equal(calls.capture, 0);
+  assert.equal(calls.provider, 0);
+  await controller.ask();
+  assert.equal(calls.capture, 1);
+  assert.equal(calls.provider, 1);
+  assert.equal(controller.getSnapshot().phase, 'ready');
+  controller.clearTransient();
+  await controller.refreshContext();
+  assert.equal(
+    calls.provider,
+    1,
+    'Restoring the source cannot submit an old question',
+  );
+  controller.setQuestion('Compare completed orders from July to August.');
+  await controller.ask();
+  assert.equal(calls.provider, 2);
+  controller.dispose();
+});
+
+test('accepted floating answer keeps its own source and speech across tab switches without capture or replay', async () => {
+  const { controller, calls, invalidate, changeContext } = setup({
+    continueAnswerAcrossTabs: true,
+  });
+  await controller.refreshContext();
+  await controller.ask();
+  const accepted = controller.getSnapshot().result;
+  const snapshot = controller.getSnapshot().snapshot;
+  const currentSource = controller.getSnapshot().context;
+  const fullStops = calls.stopMedia;
+  changeContext({ origin: 'https://another.example.test', tabId: 21 });
+  invalidate('tab');
+  await flush();
+  assert.equal(controller.getSnapshot().result, accepted);
+  assert.equal(controller.getSnapshot().snapshot, snapshot);
+  assert.equal(
+    controller.getSnapshot().context,
+    currentSource,
+    'The retained answer is never rebound to the newly active source',
+  );
+  assert.equal(controller.getSnapshot().stale, false);
+  assert.equal(calls.stopMedia, fullStops);
+  assert.equal(calls.preserveSpeech, 1);
+  assert.equal(controller.claimAutomaticSpeech(), null);
+  assert.equal(calls.provider, 1);
+  assert.equal(calls.capture, 1);
+  assert.equal(controller.pauseForTab(), true);
+  assert.equal(calls.preserveSpeech, 2);
+  assert.equal(controller.claimAutomaticSpeech(), null);
+  controller.dispose();
+});
+
+test('pending floating question is cancelled on a tab change and its late answer never becomes current', async () => {
+  const { controller, hooks, calls, invalidate } = setup({
+    continueAnswerAcrossTabs: true,
+  });
+  await controller.refreshContext();
+  const pending = deferred<GroundedResponse>();
+  let submitted!: CompanionRequest;
+  let signal!: AbortSignal;
+  hooks.transport = (input, requestSignal) => {
+    submitted = input;
+    signal = requestSignal;
+    return pending.promise;
+  };
+  const work = controller.ask();
+  await flush();
+  invalidate('tab');
+  assert.equal(signal.aborted, true);
+  assert.equal(calls.preserveSpeech, 0);
+  pending.resolve(resultFor(submitted));
+  await work;
+  assert.equal(controller.getSnapshot().result, null);
+  assert.equal(controller.claimAutomaticSpeech(), null);
+  assert.equal(calls.provider, 1);
+  controller.dispose();
+});
+
+test('floating tab continuity never overrides cancellation, source changes, End or logout', async () => {
+  for (const action of [
+    'cancel',
+    'page',
+    'unavailable',
+    'clear',
+    'dispose',
+  ] as const) {
+    const { controller, calls, invalidate } = setup({
+      continueAnswerAcrossTabs: true,
+    });
+    await controller.ask();
+    assert.equal(controller.pauseForTab(), true);
+    const stopped = calls.stopMedia;
+    if (action === 'cancel') controller.cancel();
+    if (action === 'page' || action === 'unavailable') invalidate(action);
+    if (action === 'clear') controller.clearTransient();
+    if (action === 'dispose') controller.dispose();
+    assert.ok(calls.stopMedia > stopped, action);
+    assert.equal(controller.claimAutomaticSpeech(), null, action);
+    if (action === 'page' || action === 'unavailable')
+      assert.equal(controller.getSnapshot().stale, true);
+    if (action === 'clear' || action === 'dispose') {
+      assert.equal(controller.getSnapshot().result, null);
+      assert.equal(controller.getSnapshot().snapshot, null);
+      assert.equal(controller.getSnapshot().question, '');
+    }
+    controller.dispose();
+  }
+});
+
+test('side-panel defaults and floating surfaces without an accepted answer stop media when hidden', async () => {
+  for (const floating of [false, true]) {
+    const { controller, calls } = setup({ continueAnswerAcrossTabs: floating });
+    await controller.refreshContext();
+    if (!floating) await controller.ask();
+    const stopped = calls.stopMedia;
+    assert.equal(controller.pauseForTab(), false);
+    assert.ok(calls.stopMedia > stopped);
+    assert.equal(calls.preserveSpeech, 0);
+    assert.equal(controller.claimAutomaticSpeech(), null);
+    controller.dispose();
+  }
+});
+
+test('a source switch during initial lookup cannot send a previous question to a different page', async () => {
+  const { controller, hooks, calls } = setup();
+  await controller.refreshContext();
+  const original = await hooks.getContext();
+  const pending = deferred<PageContextInfo>();
+  hooks.getContext = () => pending.promise;
+  const asking = controller.ask();
+  pending.resolve({
+    ...original,
+    origin: 'https://another.example.test',
+    tabId: 21,
+  });
+  await asking;
+  assert.equal(controller.getSnapshot().error, 'STALE_CONTEXT');
+  assert.equal(calls.capture, 0);
+  assert.equal(calls.provider, 0);
+  assert.ok(controller.getSnapshot().question);
+  controller.dispose();
 });

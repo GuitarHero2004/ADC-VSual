@@ -10,12 +10,15 @@ export default defineConfig(({ mode }) => ({
       buildStart() {
         for (const file of [
           './src/orders-content.ts',
+          './src/structured-content.ts',
+          './src/structured-adapter.ts',
           './src/floating-content.ts',
           './src/orders-adapter.ts',
           './src/floating-host.ts',
           './src/floating-protocol.ts',
           './src/config-values.ts',
           '../../packages/contracts/src/grounded.ts',
+          '../../packages/contracts/src/structured.ts',
           '../../packages/contracts/src/index.ts',
         ])
           this.addWatchFile(fileURLToPath(new URL(file, import.meta.url)));
@@ -40,7 +43,11 @@ export default defineConfig(({ mode }) => ({
         );
         // Chromium content scripts are classic scripts. Keep broad UI mounting
         // separate from the configured, narrowly scoped orders extractor.
-        for (const entry of ['orders-content', 'floating-content'])
+        for (const entry of [
+          'orders-content',
+          'structured-content',
+          'floating-content',
+        ])
           await build({
             configFile: false,
             publicDir: false,
@@ -61,7 +68,11 @@ export default defineConfig(({ mode }) => ({
                   new URL(`./src/${entry}.ts`, import.meta.url),
                 ),
                 name:
-                  entry === 'orders-content' ? 'VSualOrders' : 'VSualFloating',
+                  entry === 'orders-content'
+                    ? 'VSualOrders'
+                    : entry === 'structured-content'
+                      ? 'VSualStructured'
+                      : 'VSualFloating',
                 formats: ['iife'],
                 fileName: () => `${entry}.js`,
               },

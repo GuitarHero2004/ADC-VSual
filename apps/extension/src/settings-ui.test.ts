@@ -65,7 +65,10 @@ test('actual extension Settings preserves drafts, exposes session recovery on ac
   expose('IS_REACT_ACT_ENVIRONMENT', true);
   const noEvents = { addListener() {}, removeListener() {} };
   const changed = new Set<
-    (changes: Record<string, { newValue: unknown }>, area: string) => void
+    (
+      changes: Record<string, { newValue?: unknown; oldValue?: unknown }>,
+      area: string,
+    ) => void
   >();
   let status: AuthStatus = {
     phase: 'signed_in',
@@ -159,7 +162,7 @@ test('actual extension Settings preserves drafts, exposes session recovery on ac
       onChanged: {
         addListener(
           listener: (
-            changes: Record<string, { newValue: unknown }>,
+            changes: Record<string, { newValue?: unknown; oldValue?: unknown }>,
             area: string,
           ) => void,
         ) {
@@ -167,7 +170,7 @@ test('actual extension Settings preserves drafts, exposes session recovery on ac
         },
         removeListener(
           listener: (
-            changes: Record<string, { newValue: unknown }>,
+            changes: Record<string, { newValue?: unknown; oldValue?: unknown }>,
             area: string,
           ) => void,
         ) {
@@ -253,7 +256,12 @@ test('actual extension Settings preserves drafts, exposes session recovery on ac
           message.type === 'ready',
       ),
     );
-    await settle(() => button('Allow page processing').click());
+    assert.equal(
+      [...document.querySelectorAll('button')].some(
+        (control) => control.textContent === 'Allow page processing',
+      ),
+      false,
+    );
     await settle(() => button('Use example question').click());
     const textarea = document.querySelector('textarea')!;
     assert.ok(textarea.value);

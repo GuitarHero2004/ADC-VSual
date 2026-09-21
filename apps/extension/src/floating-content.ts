@@ -1,8 +1,8 @@
 import { publicOrigin } from './config-values.ts';
 import { installFloatingHost } from './floating-host.ts';
 
-// This entry mounts an extension-owned interface only. The separate orders
-// script and worker allowlist remain the sole page-extraction boundary.
+// This entry mounts an extension-owned interface only. Separate orders and
+// structured readers extract content through worker-validated source access.
 installFloatingHost(document, {
   connect: () => chrome.runtime.connect({ name: 'floating-host' }),
   authOrigin: publicOrigin(

@@ -3,14 +3,10 @@ import type { UiLanguage } from '@adc/contracts';
 export const groundedText = {
   en: {
     readyPage: 'Ready on this page.',
-    needConsent: 'Allow page processing to use this page.',
+    processingNotice:
+      'Asking reads this orders table and sends it with your question to VSual. Avis interprets the question; VSual calculates from the captured rows.',
     unavailablePage:
       'The current page could not be checked. Check browser site access for VSual, then try again.',
-    permissionDetail: 'What you allow',
-    permissionIntro:
-      'Asking sends your question and the displayed orders table to our backend. You choose when to send.',
-    permissionSaved:
-      'Allowed for this session. Reading starts only when you ask or inspect the table.',
     askAnother: 'Ask another question',
     goAnswer: 'Go to answer',
     answerReady: 'Answer ready.',
@@ -29,31 +25,25 @@ export const groundedText = {
       'Transcript ready. The question was not sent; see the explanation below.',
     voiceHeldBusy:
       'Your recording was transcribed, but another question is still being processed. Wait for it to finish or cancel it, then select Ask VSual to send this transcript.',
-    voiceHeldPermission:
-      'Your recording was transcribed, but the question was not sent because page-processing permission is missing. Allow page processing, review the transcript, then select Ask VSual. Granting permission will not send it automatically.',
     voiceHeldPage:
       'Your recording was transcribed, but the question was not sent because a supported orders page could not be confirmed. Open the configured orders dashboard, check the active page and its permission, then select Ask VSual.',
     voiceHeldLength:
       'Your recording was transcribed, but the question was not sent because it exceeds 1,000 characters. Shorten it, then select Ask VSual.',
     speechPlaying: 'Reading the answer.',
     typingHelp:
-      'Allow page processing, then type a question. Microphone setup is optional and available in Settings.',
+      'Type a question to read this page. Microphone setup is optional and available in Settings.',
     page: 'Current page',
     supported: 'Supported orders dashboard',
     unsupported: 'This page is not supported. Open the orders demo.',
     checking: 'Checking the active tab…',
     scope:
       'Compare completed-order counts for one region and two months. VSual does not change the page.',
-    permission: 'Page processing permission',
     permissionHelp: 'Supported demo:',
     recheck: 'Check active page',
     recheckHelp:
       'Select the demo tab, then check again. Checking does not read page content.',
     notice:
       'Allow VSual to read the displayed orders table and its region/year context on this origin. When you ask, our backend processes the question and captured rows. Only your question and necessary scope context go through Avis to the configured model provider; our application calculates from the row counts. We save no page content or answers in our database. Inspecting the table alone makes no AI request. Avis and the model provider may retain submitted data under their own policies.',
-    allow: 'Allow page processing',
-    deny: 'Cancel / withdraw permission',
-    allowed: 'Page processing allowed for this signed-in session and origin.',
     ask: 'Ask VSual',
     sample: 'Use example question',
     sampleText: 'Compare completed orders in the South for August and July.',
@@ -103,15 +93,11 @@ export const groundedText = {
       'Preparing audio. You can stop speech or inspect the answer.',
   },
   vi: {
+    processingNotice:
+      'Khi hỏi, bảng đơn hàng và câu hỏi được gửi đến VSual. Avis hiểu câu hỏi; VSual tính toán từ các dòng đã đọc.',
     readyPage: 'Sẵn sàng trên trang này.',
-    needConsent: 'Cho phép xử lý để sử dụng trang này.',
     unavailablePage:
       'Chưa kiểm tra được trang hiện tại. Kiểm tra quyền truy cập trang của VSual trong trình duyệt rồi thử lại.',
-    permissionDetail: 'Nội dung bạn cho phép',
-    permissionIntro:
-      'Khi hỏi, câu hỏi và bảng đơn hàng đang hiển thị được gửi đến máy chủ của chúng tôi. Bạn chọn lúc gửi.',
-    permissionSaved:
-      'Đã cho phép trong phiên này. Chỉ đọc khi bạn hỏi hoặc xem bảng nguồn.',
     askAnother: 'Hỏi câu khác',
     goAnswer: 'Đến câu trả lời',
     answerReady: 'Câu trả lời đã sẵn sàng.',
@@ -129,31 +115,25 @@ export const groundedText = {
     voiceHeld: 'Đã có văn bản. Câu hỏi chưa được gửi; xem giải thích bên dưới.',
     voiceHeldBusy:
       'Đã chép lời, nhưng câu hỏi khác vẫn đang được xử lý. Chờ hoàn tất hoặc hủy rồi chọn Hỏi VSual để gửi văn bản này.',
-    voiceHeldPermission:
-      'Đã chép lời, nhưng chưa gửi câu hỏi vì chưa có quyền xử lý trang. Cho phép xử lý trang, kiểm tra văn bản rồi chọn Hỏi VSual. Cấp quyền sẽ không tự gửi câu hỏi này.',
     voiceHeldPage:
       'Đã chép lời, nhưng chưa gửi câu hỏi vì chưa xác nhận được trang đơn hàng hỗ trợ. Mở bảng đơn hàng đã cấu hình, kiểm tra thẻ và quyền xử lý rồi chọn Hỏi VSual.',
     voiceHeldLength:
       'Đã chép lời, nhưng chưa gửi câu hỏi vì dài hơn 1.000 ký tự. Rút ngắn rồi chọn Hỏi VSual.',
     speechPlaying: 'Đang đọc câu trả lời.',
     typingHelp:
-      'Cho phép xử lý trang rồi nhập câu hỏi. Micro là tùy chọn và có thể thiết lập trong Cài đặt.',
+      'Nhập câu hỏi để đọc trang này. Micro là tùy chọn và có thể thiết lập trong Cài đặt.',
     page: 'Trang hiện tại',
     supported: 'Bảng đơn hàng được hỗ trợ',
     unsupported: 'Trang này chưa được hỗ trợ. Hãy mở bản mẫu đơn hàng.',
     checking: 'Đang kiểm tra thẻ đang mở…',
     scope:
       'So sánh số đơn hoàn thành của một khu vực trong hai tháng. VSual không thay đổi trang.',
-    permission: 'Quyền xử lý nội dung trang',
     permissionHelp: 'Bản mẫu được hỗ trợ:',
     recheck: 'Kiểm tra thẻ đang mở',
     recheckHelp:
       'Chọn thẻ bản mẫu rồi kiểm tra lại. Kiểm tra không đọc nội dung trang.',
     notice:
       'Cho phép VSual đọc bảng đơn hàng và ngữ cảnh khu vực/năm đang hiển thị trên nguồn này. Khi bạn hỏi, máy chủ xử lý câu hỏi và các dòng đã đọc. Chỉ câu hỏi và phạm vi cần thiết đi qua Avis đến nhà cung cấp mô hình đã cấu hình; ứng dụng tự tính từ số đơn. Chúng tôi không lưu nội dung trang hoặc câu trả lời vào cơ sở dữ liệu của ứng dụng. Chỉ xem bảng nguồn không gọi AI. Avis và nhà cung cấp mô hình có thể lưu dữ liệu đã gửi theo chính sách riêng.',
-    allow: 'Cho phép xử lý trang',
-    deny: 'Hủy / thu hồi quyền',
-    allowed: 'Đã cho phép xử lý trang cho phiên đăng nhập và nguồn này.',
     ask: 'Hỏi VSual',
     sample: 'Dùng câu hỏi mẫu',
     sampleText:
@@ -210,8 +190,8 @@ const errors: Record<string, [string, string]> = {
     'Chưa thể kiểm tra phiên. Kiểm tra kết nối rồi thử lại. Bạn chưa bị đăng xuất.',
   ],
   CONSENT_REQUIRED: [
-    'Allow page processing before capturing this page.',
-    'Cho phép xử lý trang trước khi đọc.',
+    'This request was not authorised for processing. Review the question and ask again.',
+    'Yêu cầu chưa được cho phép xử lý. Xem lại câu hỏi rồi hỏi lại.',
   ],
   UNSUPPORTED_PAGE: [
     'This page is not supported. Open the configured orders dashboard.',
