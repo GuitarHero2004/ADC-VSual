@@ -43,6 +43,15 @@ interface Props {
   onExpired(): void;
   onReady(activate: () => void, cancel: () => void): () => void;
   settingsTarget?: HTMLElement | null;
+  createPage?: () => ConstructorParameters<typeof GroundedController>[0];
+  onControls?: (controls: CompanionControls | null) => void;
+  autoFocus?: boolean;
+}
+/** The two presentations share these exact session-owned controllers. */
+export interface CompanionControls {
+  controller: GroundedController;
+  question: VoiceController;
+  speech: VoiceController;
 }
 interface Mounted {
   controller: GroundedController;
@@ -70,7 +79,7 @@ export function GroundedPanel(props: Props) {
       // Accessing localStorage itself may fail; remain OFF until chosen explicitly.
     }
     const controller = new GroundedController(
-      new OrdersPageContext(supportedOrigins),
+      latest.current.createPage?.() ?? new OrdersPageContext(supportedOrigins),
       createGroundedTransport({
         baseUrl: latest.current.backend,
         getHeaders: () => latest.current.getHeaders(),
@@ -168,7 +177,8 @@ function Companion({
       surface.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus();
   }, [allowed]);
   useEffect(() => {
-    if (initialFocus.current || !state.context) return;
+    if (props.autoFocus === false || initialFocus.current || !state.context)
+      return;
     initialFocus.current = true;
     // Never move focus after the user has begun interacting or opened Settings.
     if (
@@ -179,7 +189,7 @@ function Companion({
     if (allowed)
       surface.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus();
     else pageHeading.current?.focus();
-  }, [state.context, allowed]);
+  }, [state.context, allowed, props.autoFocus]);
 
   useEffect(() => {
     const element = surface.current;
@@ -276,6 +286,13 @@ function Companion({
       },
     );
   }, [controller, speech, questionVoice, props.onReady, voiceReady]);
+
+  useEffect(() => {
+    const question = questionVoice.current;
+    if (!voiceReady || !question) return;
+    props.onControls?.({ controller, question, speech });
+    return () => props.onControls?.(null);
+  }, [controller, speech, questionVoice, props.onControls, voiceReady]);
 
   useEffect(() => {
     // Runs after the accepted text is rendered. The controller reserves the
@@ -397,7 +414,8 @@ function Companion({
         )}
         {state.context?.origin && (
           <p className="field-help">
-            {new URL(state.context.origin).host}/orders
+            {new URL(state.context.origin).host}
+            {state.context.pathname ?? ''}
           </p>
         )}
         <p role="status" aria-atomic="true">

@@ -5,28 +5,26 @@ import {
   parseOrdersPageRequest,
   supportedOrdersUrl,
   trustedPanelSender,
-  visibleOrdersElement,
   type OrdersPageResponse,
 } from './orders-adapter.ts';
 import { ordersOrigins } from './config-values.ts';
+import { PageFocusMemory, trustedOrdersWorkerSender } from './floating-host.ts';
 
 const origins = ordersOrigins({
   VITE_API_BASE_URL: import.meta.env.VITE_API_BASE_URL,
   VITE_ORDERS_ORIGINS: import.meta.env.VITE_ORDERS_ORIGINS,
 });
 const documentKey = crypto.randomUUID();
-let previousFocus: HTMLElement | null = null;
-
-// Store only an element reference for an explicit Return to page action, never its value.
-document.addEventListener('focusin', (event) => {
-  if (event.target instanceof HTMLElement && event.target !== document.body)
-    previousFocus = event.target;
-});
+const pageFocus = new PageFocusMemory(document, (element) =>
+  element.hasAttribute('data-vsual-floating-host'),
+);
+window.addEventListener('pagehide', () => pageFocus.dispose(), { once: true });
 
 chrome.runtime.onConnect.addListener((port) => {
   if (
     port.name !== 'orders-page' ||
-    !trustedPanelSender(port.sender, chrome.runtime.id) ||
+    (!trustedPanelSender(port.sender, chrome.runtime.id) &&
+      !trustedOrdersWorkerSender(port.sender, chrome.runtime.id)) ||
     !supportedOrdersUrl(location.href, origins)
   )
     return;
@@ -57,32 +55,11 @@ chrome.runtime.onConnect.addListener((port) => {
       if (!supportedOrdersUrl(location.href, origins))
         throw new OrdersPageError('UNSUPPORTED_PAGE');
       if (message.type === 'orders:focus') {
-        const original = previousFocus;
-        const usable =
-          original?.isConnected &&
-          visibleOrdersElement(original) &&
-          !original.closest('[inert]') &&
-          !('disabled' in original && original.disabled);
-        const target = usable
-          ? original
-          : document.querySelector<HTMLElement>('main[data-vsual-orders] h1');
-        if (!target) throw new OrdersPageError('UNAVAILABLE');
-        const oldTabIndex = target.getAttribute('tabindex');
-        if (!usable) target.setAttribute('tabindex', '-1');
         window.focus();
-        target.focus();
-        if (!usable)
-          target.addEventListener(
-            'blur',
-            () => {
-              if (oldTabIndex === null) target.removeAttribute('tabindex');
-              else target.setAttribute('tabindex', oldTabIndex);
-            },
-            { once: true },
-          );
-        if (document.activeElement !== target || !document.hasFocus())
+        const { focused, restored } = pageFocus.restore();
+        if (!focused || !document.hasFocus())
           throw new OrdersPageError('UNAVAILABLE');
-        reply({ type: 'orders:focused', id: message.id, restored: !!usable });
+        reply({ type: 'orders:focused', id: message.id, restored });
         return;
       }
       // Recheck in the destination document: navigation can happen after the panel's tab query.

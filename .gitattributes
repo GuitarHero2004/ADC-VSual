@@ -11,3 +11,6 @@
 /.npmrc text eol=lf
 /.nvmrc text eol=lf
 /.prettierignore text eol=lf
+
+# Preserve image bytes when staging on Windows.
+*.png binary

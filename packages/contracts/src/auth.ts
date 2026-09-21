@@ -71,7 +71,16 @@ export const authPanelMessageSchema = z.discriminatedUnion('type', [
   z.strictObject({
     type: z.literal('auth:start'),
     language: z.enum(['en', 'vi']),
+    inline: z.boolean().optional(),
   }),
+  z.strictObject({
+    type: z.literal('auth:inline-password'),
+    epoch: z.uuid(),
+    email: z.email().max(320),
+    password: z.string().min(1).max(1024),
+  }),
+  z.strictObject({ type: z.literal('auth:inline-google'), epoch: z.uuid() }),
+  z.strictObject({ type: z.literal('auth:inline-cancel'), epoch: z.uuid() }),
   z.strictObject({ type: z.literal('auth:cancel'), epoch: z.uuid() }),
   z.strictObject({ type: z.literal('auth:logout') }),
   z.strictObject({

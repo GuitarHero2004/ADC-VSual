@@ -4,7 +4,7 @@ import {
   type AuthStatus,
   type UiLanguage,
 } from '@adc/contracts';
-import { authCopy, authFailureText } from '@adc/voice-ui';
+import { authCopy, authFailureText, SignInForm } from '@adc/voice-ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { authCommand } from './auth-client.ts';
 
@@ -26,6 +26,13 @@ const copy = {
     change: 'Sign out and change account',
     working: 'Updating sign-in…',
     ready: 'Workspace access available.',
+    inlineOpen: 'Sign in to VSual',
+    inlineIntro:
+      'Sign in here with your email and password. Google opens its secure sign-in window, then returns you to VSual.',
+    inlinePending:
+      'Enter your sign-in details below. No recording starts automatically.',
+    otherPanel:
+      'Sign-in is open in another VSual panel. Finish there, or cancel it and sign in here.',
   },
   vi: {
     open: 'Đăng nhập trên trang web VSual',
@@ -44,6 +51,13 @@ const copy = {
     change: 'Đăng xuất và đổi tài khoản',
     working: 'Đang cập nhật đăng nhập…',
     ready: 'Có quyền truy cập không gian làm việc.',
+    inlineOpen: 'Đăng nhập VSual',
+    inlineIntro:
+      'Đăng nhập tại đây bằng email và mật khẩu. Google mở cửa sổ đăng nhập bảo mật, sau đó đưa bạn về VSual.',
+    inlinePending:
+      'Nhập thông tin đăng nhập bên dưới. Ghi âm không tự bắt đầu.',
+    otherPanel:
+      'Đăng nhập đang mở trong bảng VSual khác. Hoàn tất tại đó, hoặc hủy để đăng nhập tại đây.',
   },
 } as const;
 
@@ -56,6 +70,7 @@ export function useExtensionSession(
   const [busy, setBusy] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [failure, setFailure] = useState<AuthStatus['error']>(null);
+  const [inlineAttempt, setInlineAttempt] = useState<string | null>(null);
   const inFlight = useRef<{
     id: number;
     type: AuthPanelMessage['type'];
@@ -143,6 +158,13 @@ export function useExtensionSession(
         if (
           mounted.current &&
           operation.current === id &&
+          message.type === 'auth:start' &&
+          message.inline
+        )
+          setInlineAttempt(next.epoch);
+        if (
+          mounted.current &&
+          operation.current === id &&
           revision.current === version
         )
           setStatus(next);
@@ -182,6 +204,7 @@ export function useExtensionSession(
     busy,
     failure,
     run,
+    inlineAttempt,
     allowed:
       !clearing &&
       status?.phase === 'signed_in' &&
@@ -194,11 +217,13 @@ export function AuthPanel({
   language,
   signInRef,
   compact = false,
+  inline = false,
 }: {
   session: ReturnType<typeof useExtensionSession>;
   language: UiLanguage;
   signInRef: React.RefObject<HTMLButtonElement | null>;
   compact?: boolean;
+  inline?: boolean;
 }) {
   const { status, loading, busy, failure, run } = session;
   const a = authCopy[language];
@@ -210,6 +235,39 @@ export function AuthPanel({
   const identity = status?.account?.id ?? null;
   const hasSession = Boolean(identity || status?.phase === 'unverified');
   const pending = status?.phase === 'signing_in';
+  const ownsInlineAttempt = inline && session.inlineAttempt === status?.epoch;
+  const inlineEpoch = useRef<string | null>(null);
+  const formContainer = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    inlineEpoch.current =
+      ownsInlineAttempt && pending ? (status?.epoch ?? null) : null;
+  }, [ownsInlineAttempt, pending, status?.epoch]);
+  useEffect(() => {
+    if (!inline) return;
+    const cancelPending = () => {
+      const epoch = inlineEpoch.current;
+      inlineEpoch.current = null;
+      if (epoch)
+        void authCommand({ type: 'auth:inline-cancel', epoch }).catch(
+          () => undefined,
+        );
+    };
+    window.addEventListener('pagehide', cancelPending);
+    return () => {
+      window.removeEventListener('pagehide', cancelPending);
+      cancelPending();
+    };
+  }, [inline]);
+  useEffect(() => {
+    if (
+      ownsInlineAttempt &&
+      pending &&
+      !formContainer.current?.closest('[hidden]')
+    )
+      formContainer.current
+        ?.querySelector<HTMLInputElement>('input[name="email"]')
+        ?.focus();
+  }, [ownsInlineAttempt, pending]);
   useEffect(() => {
     if (
       identity &&
@@ -233,7 +291,11 @@ export function AuthPanel({
       : busy
         ? t.working
         : pending
-          ? t.pending
+          ? inline
+            ? ownsInlineAttempt
+              ? t.inlinePending
+              : t.otherPanel
+            : t.pending
           : status?.logoutConfirmed === false
             ? t.logoutOffline
             : status?.logoutConfirmed === true
@@ -276,7 +338,13 @@ export function AuthPanel({
               disabled={busy}
               onClick={() =>
                 void run({ type: 'auth:logout' }).then(
-                  (done) => done && run({ type: 'auth:start', language }),
+                  (done) =>
+                    done &&
+                    run({
+                      type: 'auth:start',
+                      language,
+                      ...(inline ? { inline: true } : {}),
+                    }),
                 )
               }
             >
@@ -286,15 +354,47 @@ export function AuthPanel({
         </>
       ) : pending ? (
         <>
-          <p>{t.pending}</p>
+          <p>
+            {inline
+              ? ownsInlineAttempt
+                ? t.inlineIntro
+                : t.otherPanel
+              : t.pending}
+          </p>
+          {ownsInlineAttempt && status && (
+            <div ref={formContainer}>
+              <SignInForm
+                key={status.epoch}
+                language={language}
+                busy={busy}
+                error={error ? authFailureText(error, language) : null}
+                onSubmit={async (email, password) => {
+                  await run({
+                    type: 'auth:inline-password',
+                    epoch: status.epoch,
+                    email,
+                    password,
+                  });
+                }}
+                onGoogle={async () => {
+                  await run({
+                    type: 'auth:inline-google',
+                    epoch: status.epoch,
+                  });
+                }}
+              />
+            </div>
+          )}
           <div className="controls">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void run({ type: 'auth:start', language })}
-            >
-              {t.resume}
-            </button>
+            {!inline && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void run({ type: 'auth:start', language })}
+              >
+                {t.resume}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -311,9 +411,21 @@ export function AuthPanel({
           ref={signInRef}
           type="button"
           disabled={busy || loading}
-          onClick={() => void run({ type: 'auth:start', language })}
+          onClick={() =>
+            void run({
+              type: 'auth:start',
+              language,
+              ...(inline ? { inline: true } : {}),
+            })
+          }
         >
-          {busy ? t.opening : t.open}
+          {inline
+            ? busy
+              ? t.working
+              : t.inlineOpen
+            : busy
+              ? t.opening
+              : t.open}
         </button>
       )}
       {!hasSession && !pending && failure && (

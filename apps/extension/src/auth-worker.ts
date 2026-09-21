@@ -36,7 +36,18 @@ export function trustedAuthPanel(sender: AuthSender, extensionId: string) {
   );
 }
 
-export function installAuthWorker(config = getExtensionConfig()) {
+function inlineOwner(sender: AuthSender) {
+  // Browser-provided document identity, never a page-supplied request field.
+  return sender.documentId
+    ? `${sender.tab?.id ?? 'extension'}:${sender.frameId ?? 0}:${sender.documentId}`
+    : null;
+}
+
+export function installAuthWorker(
+  config = getExtensionConfig(),
+  trustedFloating: (sender: chrome.runtime.MessageSender) => boolean = () =>
+    false,
+) {
   const unavailable: AuthReply = { ok: false, error: 'SETUP_REQUIRED' };
   const gateway = config ? createExtensionAuthGateway(config) : null;
   async function getJson(path: string, token?: string) {
@@ -166,11 +177,30 @@ export function installAuthWorker(config = getExtensionConfig()) {
   chrome.runtime.onMessage.addListener((value: unknown, sender, respond) => {
     if (
       !authPanelMessageSchema.safeParse(value).success ||
-      !trustedAuthPanel(sender, chrome.runtime.id)
+      !(trustedAuthPanel(sender, chrome.runtime.id) || trustedFloating(sender))
     )
       return false;
-    void (manager ? manager.panel(value) : Promise.resolve(unavailable))
-      .then(respond)
+    const owner = inlineOwner(sender);
+    void (
+      manager
+        ? manager.panel(
+            value,
+            owner
+              ? {
+                  owner,
+                  current: () => trustedFloating(sender),
+                }
+              : undefined,
+          )
+        : Promise.resolve(unavailable)
+    )
+      .then((reply) =>
+        respond(
+          trustedAuthPanel(sender, chrome.runtime.id) || trustedFloating(sender)
+            ? reply
+            : ({ ok: false, error: 'UNAVAILABLE' } satisfies AuthReply),
+        ),
+      )
       .catch(() =>
         respond({ ok: false, error: 'UNAVAILABLE' } satisfies AuthReply),
       );
@@ -192,4 +222,10 @@ export function installAuthWorker(config = getExtensionConfig()) {
   chrome.tabs.onRemoved.addListener((id) => {
     void manager?.tabClosed(id).catch(() => undefined);
   });
+  return {
+    async cancelInlineDocument(sender: AuthSender) {
+      const owner = inlineOwner(sender);
+      if (owner) await manager?.cancelInlineOwner(owner);
+    },
+  };
 }

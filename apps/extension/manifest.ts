@@ -30,16 +30,30 @@ export function createManifest(
     action: { default_title: 'Open VSual companion' },
     background: { service_worker: 'background.js', type: 'module' },
     side_panel: { default_path: 'index.html' },
-    content_scripts: ordersMatches(environment).length
-      ? [
-          {
-            matches: ordersMatches(environment),
-            js: ['orders-content.js'],
-            run_at: 'document_idle',
-            all_frames: false,
-          },
-        ]
-      : [],
+    content_scripts: [
+      {
+        matches: ['http://*/*', 'https://*/*'],
+        js: ['floating-content.js'],
+        run_at: 'document_idle',
+        all_frames: false,
+      },
+      ...(ordersMatches(environment).length
+        ? [
+            {
+              matches: ordersMatches(environment),
+              js: ['orders-content.js'],
+              run_at: 'document_idle',
+              all_frames: false,
+            },
+          ]
+        : []),
+    ],
+    web_accessible_resources: [
+      {
+        resources: ['floating.html', 'assets/*'],
+        matches: ['http://*/*', 'https://*/*'],
+      },
+    ],
     commands: {
       'toggle-voice': {
         suggested_key: { default: 'Alt+Shift+A' },
