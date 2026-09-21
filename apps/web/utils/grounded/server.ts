@@ -89,7 +89,7 @@ function isAvisGatewayError(
   );
 }
 
-function providerError(error: unknown, signal: AbortSignal): VoiceError {
+export function providerError(error: unknown, signal: AbortSignal): VoiceError {
   if (signal.aborted || error instanceof OpenAI.APIUserAbortError) {
     return new VoiceError(
       'CANCELLED',
