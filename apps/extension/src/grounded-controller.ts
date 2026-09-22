@@ -3,18 +3,30 @@ import {
   groundedResponseSchema,
   structuredRequestSchema,
   structuredResponseSchema,
+  visualRequestSchema,
+  visualResponseSchema,
+  VISUAL_LIMITS,
   STRUCTURED_LIMITS,
   usageLimitSchema,
+  voiceErrorResponseSchema,
   type GroundedRequest,
   type GroundedResponse,
   type GroundedSnapshot,
   type StructuredRequest,
   type StructuredResponse,
   type StructuredSnapshot,
+  type VisualRequest,
+  type VisualResponse,
+  type VisualSnapshot,
   type UiLanguage,
   type UsageLimit,
 } from '@adc/contracts';
 import type { OrdersPageContext } from './page-context.ts';
+import {
+  chooseReadingMethod,
+  type ReadingMethod,
+  type VisualScope,
+} from './reading-method.ts';
 
 type Page = Pick<
   OrdersPageContext,
@@ -25,7 +37,20 @@ type Page = Pick<
   | 'returnToPage'
   | 'reset'
   | 'dispose'
-> & { prepareContext?(): ReturnType<OrdersPageContext['getContext']> };
+> & {
+  prepareContext?(): ReturnType<OrdersPageContext['getContext']>;
+  captureVisual?(
+    scope: VisualScope,
+    signal: AbortSignal,
+    expectedOrigin: string,
+    expectedTabId?: number,
+  ): Promise<{ snapshot: VisualSnapshot; images: VisualRequest['images'] }>;
+  verifyVisual?(
+    snapshot: VisualSnapshot,
+    signal: AbortSignal,
+  ): Promise<boolean>;
+  setTaskState?(state: { capturing: boolean; recovering: boolean }): void;
+};
 type Context = Awaited<ReturnType<Page['getContext']>>;
 export type GroundedPhase =
   | 'idle'
@@ -44,12 +69,23 @@ export interface GroundedState {
   sectionId: string | null;
   resultLanguage: UiLanguage | null;
   error: string | null;
+  errorRequestId: string | null;
   errorUsage: UsageLimit | null;
   stale: boolean;
+  reader: ReadingMethod | null;
+  scopeRecovery: boolean;
 }
-export type CompanionSnapshot = GroundedSnapshot | StructuredSnapshot;
-export type CompanionRequest = GroundedRequest | StructuredRequest;
-export type CompanionResponse = GroundedResponse | StructuredResponse;
+export type CompanionSnapshot =
+  GroundedSnapshot | StructuredSnapshot | VisualSnapshot;
+export type CompanionRequest =
+  GroundedRequest | StructuredRequest | VisualRequest;
+export type CompanionResponse =
+  GroundedResponse | StructuredResponse | VisualResponse;
+export function isVisualSnapshot(
+  snapshot: CompanionSnapshot,
+): snapshot is VisualSnapshot {
+  return 'source_kind' in snapshot && snapshot.source_kind === 'visual_page';
+}
 export function isStructuredSnapshot(
   snapshot: CompanionSnapshot,
 ): snapshot is StructuredSnapshot {
@@ -73,8 +109,11 @@ export class GroundedController {
     sectionId: null,
     resultLanguage: null,
     error: null,
+    errorRequestId: null,
     errorUsage: null,
     stale: false,
+    reader: null,
+    scopeRecovery: false,
   };
   private listeners = new Set<() => void>();
   private generation = 0;
@@ -83,6 +122,9 @@ export class GroundedController {
   private deadline: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
   private automaticSpeechRequest: string | null = null;
+  private scopeRecoveryKey: string | null = null;
+  private visualScope: VisualScope = 'current_view';
+  private speechDeadlineAt: number | null = null;
   private unsubscribe: () => void;
   private page: Page;
   private transport: GroundedTransport;
@@ -119,12 +161,25 @@ export class GroundedController {
     if (this.disposed) return;
     this.state = {
       ...this.state,
+      ...('error' in patch ? { errorRequestId: null } : {}),
       ...('error' in patch && patch.error !== 'APP_RATE_LIMITED'
         ? { errorUsage: null }
         : {}),
       ...patch,
     };
     this.listeners.forEach((listener) => listener());
+    this.page.setTaskState?.({
+      capturing:
+        this.state.reader === 'visual_page' && this.state.phase === 'reading',
+      recovering:
+        !!this.state.question.trim() &&
+        (this.state.error === 'PAGE_PERMISSION_REQUIRED' ||
+          (this.state.context?.permission === 'required' &&
+            this.state.context.visual?.permission !== 'granted')),
+    });
+  }
+  getSpeechDeadline() {
+    return this.speechDeadlineAt;
   }
   private current(id: number) {
     return !this.disposed && id === this.generation;
@@ -173,7 +228,12 @@ export class GroundedController {
       this.update({ context });
     } catch {
       if (lookup === this.contextGeneration)
-        this.update({ context: null, error: 'PAGE_UNAVAILABLE' });
+        this.update({
+          context: null,
+          ...(this.state.phase === 'error' && this.state.error
+            ? {}
+            : { error: 'PAGE_UNAVAILABLE' }),
+        });
     }
   }
   /** Tab hiding/navigation clears private content without changing browser access. */
@@ -190,6 +250,7 @@ export class GroundedController {
       error: null,
       errorUsage: null,
       stale: false,
+      scopeRecovery: false,
     });
   }
   /** An accepted floating answer stays with its owning source while another tab is active. */
@@ -210,7 +271,9 @@ export class GroundedController {
     this.deadline = undefined;
     this.request?.abort();
     this.request = undefined;
-    this.discardAutomaticSpeech();
+    // Preserve an accepted answer's single reserved read-back even when hiding
+    // beats the React effect that claims it. Repeated tab events cannot reserve
+    // another attempt; cancellation and source changes still discard it.
     // The owning document keeps its accepted answer/audio. Recording and any
     // armed silence submission still stop; a tab switch never starts new work.
     this.stopMedia(true);
@@ -219,23 +282,25 @@ export class GroundedController {
   setQuestion(question: string) {
     if (question === this.state.question) return;
     if (this.busy) this.cancel();
-    this.update({ question });
+    this.scopeRecoveryKey = null;
+    this.update({ question, scopeRecovery: false });
   }
   setSection(sectionId: string | null) {
     if (this.busy) this.cancel();
     this.update({ sectionId });
   }
-  cancel = () => {
+  cancel = (stopMedia = true) => {
     clearTimeout(this.deadline);
     this.deadline = undefined;
     this.discardAutomaticSpeech();
     ++this.generation;
     this.request?.abort();
     this.request = undefined;
-    this.stopMedia();
+    if (stopMedia) this.stopMedia();
     this.update({
       phase: this.state.stale ? 'stale' : 'cancelled',
       error: this.state.stale ? 'STALE_CONTEXT' : null,
+      scopeRecovery: false,
     });
   };
   private invalidate() {
@@ -243,15 +308,23 @@ export class GroundedController {
     this.deadline = undefined;
     this.discardAutomaticSpeech();
     const hadWork = this.busy || this.state.snapshot !== null;
+    // A later focus/source event must not rewrite a completed backend failure
+    // as the cause of that failure. Its snapshot still becomes unusable.
+    const failed = this.state.phase === 'error' && this.state.error !== null;
+    const failure = failed
+      ? { error: this.state.error, errorRequestId: this.state.errorRequestId }
+      : {};
     ++this.generation;
     this.request?.abort();
     this.request = undefined;
     this.stopMedia();
     this.update({
-      phase: hadWork ? 'stale' : 'idle',
+      phase: failed ? 'error' : hadWork ? 'stale' : 'idle',
       error: hadWork ? 'STALE_CONTEXT' : null,
+      ...failure,
       stale: hadWork,
       sectionId: null,
+      scopeRecovery: false,
     });
   }
   private fail(error: unknown, id: number) {
@@ -270,7 +343,13 @@ export class GroundedController {
           ? 'INVALID_INPUT'
           : rawCode === 'UNAVAILABLE'
             ? 'PAGE_UNAVAILABLE'
-            : rawCode;
+            : rawCode === 'PERMISSION_REQUIRED'
+              ? 'PAGE_PERMISSION_REQUIRED'
+              : rawCode === 'VISUAL_TOO_LARGE' ||
+                  (rawCode === 'INPUT_TOO_LARGE' &&
+                    this.state.reader === 'visual_page')
+                ? 'VISUAL_SCOPE_TOO_LARGE'
+                : rawCode;
     const usage = usageLimitSchema.safeParse(
       code === 'APP_RATE_LIMITED' &&
         typeof error === 'object' &&
@@ -279,13 +358,50 @@ export class GroundedController {
         ? error.usage
         : undefined,
     );
+    const recoverScope =
+      code === 'VISUAL_SCOPE_TOO_LARGE' ||
+      (code === 'VISUAL_UNSUPPORTED' && this.visualScope !== 'current_view');
+    const requestReference =
+      voiceErrorResponseSchema.shape.request_id.safeParse(
+        typeof error === 'object' && error !== null && 'requestId' in error
+          ? error.requestId
+          : undefined,
+      );
     this.update({
-      phase: code === 'STALE_CONTEXT' ? 'stale' : 'error',
+      phase:
+        code === 'STALE_CONTEXT'
+          ? 'stale'
+          : code === 'CANCELLED'
+            ? 'cancelled'
+            : 'error',
       error: code,
+      errorRequestId: requestReference.success ? requestReference.data : null,
       errorUsage: usage.success ? usage.data : null,
       stale: this.state.stale || code === 'STALE_CONTEXT',
+      scopeRecovery: recoverScope,
       ...(code === 'STALE_CONTEXT' ? { sectionId: null } : {}),
     });
+    if (recoverScope) this.scopeRecoveryKey = this.recoveryKey();
+  }
+  private recoveryKey() {
+    const c = this.state.context;
+    return JSON.stringify([
+      this.state.question,
+      c?.origin,
+      c?.pathname,
+      c?.tabId,
+      c?.windowId,
+      c?.documentId,
+      c?.resourceKey,
+    ]);
+  }
+  async askNarrower(scope: 'current_view' | 'first_portion') {
+    if (
+      !this.state.scopeRecovery ||
+      this.scopeRecoveryKey !== this.recoveryKey()
+    )
+      return;
+    await this.ask(scope);
   }
   private async capture(id: number, signal: AbortSignal) {
     const requestedContext = this.state.context;
@@ -348,7 +464,15 @@ export class GroundedController {
     const id = this.generation;
     const request = new AbortController();
     this.request = request;
-    this.update({ phase: 'reading', error: null, result: null });
+    this.update({
+      phase: 'reading',
+      error: null,
+      result: null,
+      reader:
+        this.state.context?.sourceKind === 'structured_page'
+          ? 'structured_page'
+          : 'orders',
+    });
     try {
       const snapshot = await this.capture(id, request.signal);
       if (snapshot && this.current(id)) this.update({ phase: 'ready' });
@@ -356,12 +480,18 @@ export class GroundedController {
       this.fail(error, id);
     }
   }
-  async ask() {
+  async ask(scopeOverride?: VisualScope) {
     if (this.busy || this.disposed) return;
     this.cancel();
     const id = this.generation;
     const request = new AbortController();
     this.request = request;
+    let choice = chooseReadingMethod(this.state.question, this.state.context);
+    const taskTimeout =
+      choice.method === 'visual_page'
+        ? VISUAL_LIMITS.taskTimeoutMs
+        : STRUCTURED_LIMITS.taskTimeoutMs;
+    this.speechDeadlineAt = Date.now() + taskTimeout;
     const deadline = setTimeout(() => {
       if (!this.current(id)) return;
       request.abort();
@@ -369,14 +499,34 @@ export class GroundedController {
       this.discardAutomaticSpeech();
       this.update({ phase: 'error', error: 'TIMEOUT' });
       ++this.generation;
-    }, STRUCTURED_LIMITS.taskTimeoutMs);
+    }, taskTimeout);
     this.deadline = deadline;
     this.update({
       phase: 'reading',
       error: null,
       result: null,
+      scopeRecovery: false,
     });
     try {
+      if (!this.state.context) {
+        const context = await this.page.getContext();
+        if (!this.current(id)) return;
+        this.update({ context });
+        choice = chooseReadingMethod(this.state.question, context);
+      }
+      if (
+        !this.state.question.trim() ||
+        Array.from(this.state.question).length >
+          VISUAL_LIMITS.questionCodePoints
+      )
+        throw Object.assign(new Error('Invalid question'), {
+          code: 'INVALID_INPUT',
+        });
+      this.update({ reader: choice.method });
+      if (choice.method === 'visual_page') {
+        await this.askVisual(id, request.signal, scopeOverride ?? choice.scope);
+        return;
+      }
       const snapshot = await this.capture(id, request.signal);
       if (!snapshot || !this.current(id)) return;
       const structured = isStructuredSnapshot(snapshot);
@@ -453,6 +603,106 @@ export class GroundedController {
       if (this.deadline === deadline) this.deadline = undefined;
     }
   }
+  private async askVisual(id: number, signal: AbortSignal, scope: VisualScope) {
+    this.visualScope = scope;
+    const intended = this.state.context;
+    const context = await this.page.getContext();
+    if (!this.current(id)) return;
+    if (
+      !intended ||
+      intended.tabId !== context.tabId ||
+      intended.windowId !== context.windowId ||
+      intended.origin !== context.origin ||
+      intended.pathname !== context.pathname ||
+      intended.documentId !== context.documentId ||
+      intended.resourceKey !== context.resourceKey
+    )
+      throw Object.assign(new Error('Source changed'), {
+        code: 'STALE_CONTEXT',
+      });
+    this.update({ context });
+    if (
+      context.visual?.permission === 'required' ||
+      (!context.visual && context.permission === 'required')
+    )
+      throw Object.assign(new Error('Browser access required'), {
+        code: 'PAGE_PERMISSION_REQUIRED',
+      });
+    if (!this.page.captureVisual || !this.page.verifyVisual)
+      throw Object.assign(new Error('Visual reader unavailable'), {
+        code: 'UNSUPPORTED_PAGE',
+      });
+    if (!context.visual?.eligible || !context.origin)
+      throw Object.assign(new Error('View unavailable'), {
+        code: 'UNSUPPORTED_PAGE',
+      });
+    if (context.visual.permission !== 'granted')
+      throw Object.assign(new Error('Browser access required'), {
+        code: 'PAGE_PERMISSION_REQUIRED',
+      });
+    // Deliberate Ask/silence submission authorises this task, as with text
+    // reading. The visible disclosure is not a second approval gate.
+    const capture = await this.page.captureVisual(
+      scope,
+      signal,
+      context.origin,
+      context.tabId ?? undefined,
+    );
+    if (!this.current(id)) return;
+    const { snapshot, images } = capture;
+    if (
+      snapshot.origin !== context.origin ||
+      snapshot.pathname !== context.pathname ||
+      snapshot.resource_key !== context.resourceKey ||
+      snapshot.tab_id !== context.tabId ||
+      snapshot.window_id !== context.windowId
+    )
+      throw Object.assign(new Error('Wrong captured source'), {
+        code: 'STALE_CONTEXT',
+      });
+    const parsed = visualRequestSchema.safeParse({
+      request_id: crypto.randomUUID(),
+      question: this.state.question,
+      consent: true,
+      snapshot,
+      images,
+    });
+    if (!parsed.success)
+      throw Object.assign(new Error('Invalid visual capture'), {
+        code: 'INVALID_INPUT',
+      });
+    // Only metadata enters state. Pixel buffers stay scoped to this one request.
+    this.update({ snapshot, stale: false, phase: 'understanding' });
+    const result = visualResponseSchema.parse(
+      await this.transport(parsed.data, signal),
+    );
+    if (!this.current(id)) return;
+    if (
+      result.request_id !== parsed.data.request_id ||
+      result.snapshot_id !== snapshot.snapshot_id ||
+      result.fingerprint !== snapshot.fingerprint ||
+      result.scope !== snapshot.scope ||
+      JSON.stringify(result.coverage) !== JSON.stringify(snapshot.coverage) ||
+      result.evidence.some(
+        (e) => !snapshot.images.some((image) => image.id === e.image_id),
+      )
+    )
+      throw Object.assign(new Error('Visual evidence mismatch'), {
+        code: 'PROVIDER_FAILURE',
+      });
+    if (!(await this.page.verifyVisual(snapshot, signal)))
+      throw Object.assign(new Error('Visual source changed'), {
+        code: 'STALE_CONTEXT',
+      });
+    if (!this.current(id)) return;
+    this.automaticSpeechRequest = result.request_id;
+    this.update({
+      result,
+      resultLanguage: result.answer_language,
+      phase: 'ready',
+      error: null,
+    });
+  }
   returnToPage() {
     this.cancel();
     return this.page.returnToPage();
@@ -469,6 +719,7 @@ export class GroundedController {
       sectionId: null,
       error: null,
       errorUsage: null,
+      errorRequestId: null,
     };
     this.disposed = true;
     this.listeners.clear();

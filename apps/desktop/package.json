@@ -1,0 +1,28 @@
+{
+  "name": "@adc/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "dev": "npm run build && npm start",
+    "start": "electron .",
+    "build": "node scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test src/*.test.ts src/renderer/*.test.ts",
+    "test:smoke": "node scripts/smoke.ts",
+    "test:capture": "node scripts/smoke.ts --capture"
+  },
+  "dependencies": {
+    "@adc/contracts": "*",
+    "@adc/voice-ui": "*",
+    "@supabase/supabase-js": "2.116.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "electron": "44.4.3",
+    "vite": "8.3.0"
+  }
+}

@@ -48,9 +48,9 @@ jobs:
       - name: Check formatting
         run: npm run format:check
 
-      - name: Test voice, grounded answers and authentication without credentials
+      - name: Test browser and desktop features without credentials
         run: npm test
 
-      # Shared packages export TypeScript source; both apps bundle it directly.
-      - name: Build web and extension
+      # Shared packages export TypeScript source; the apps bundle it directly.
+      - name: Build web, extension and desktop
         run: npm run build

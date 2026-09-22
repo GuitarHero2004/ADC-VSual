@@ -80,6 +80,7 @@ test('actual extension Settings preserves drafts, exposes session recovery on ac
     logoutConfirmed: null,
   };
   const authCalls: AuthPanelMessage[] = [];
+  const metadataCalls: { type: 'visual:context'; tabId: number }[] = [];
   const activationMessages: unknown[] = [];
   const activationListeners = new Set<(message: unknown) => void>();
   let pageChecks = 0;
@@ -117,7 +118,17 @@ test('actual extension Settings preserves drafts, exposes session recovery on ac
   );
   expose('chrome', {
     runtime: {
-      async sendMessage(message: AuthPanelMessage) {
+      async sendMessage(
+        message: AuthPanelMessage | { type: 'visual:context'; tabId: number },
+      ) {
+        if (message.type === 'visual:context') {
+          metadataCalls.push(message);
+          return {
+            eligible: true,
+            permission: 'required',
+            resourceKey: 'a'.repeat(64),
+          };
+        }
         authCalls.push(message);
         if (message.type === 'auth:logout') {
           status = {
@@ -247,6 +258,7 @@ test('actual extension Settings preserves drafts, exposes session recovery on ac
       authCalls.map((message) => message.type),
       ['auth:status'],
     );
+    assert.deepEqual(metadataCalls, [{ type: 'visual:context', tabId: 1 }]);
     assert.ok(
       activationMessages.some(
         (message) =>
@@ -268,6 +280,7 @@ test('actual extension Settings preserves drafts, exposes session recovery on ac
     textarea.setSelectionRange(3, 8);
     const draft = textarea.value;
     const checksBeforeSettings = pageChecks;
+    const metadataBeforeSettings = metadataCalls.length;
     const settingsButton = button('Settings');
     await settle(() => settingsButton.click());
     const settings = document.getElementById('companion-settings')!;
@@ -322,6 +335,7 @@ test('actual extension Settings preserves drafts, exposes session recovery on ac
     assert.equal(textarea.selectionStart, 3);
     assert.equal(textarea.selectionEnd, 8);
     assert.equal(pageChecks, checksBeforeSettings);
+    assert.equal(metadataCalls.length, metadataBeforeSettings);
     assert.deepEqual(
       authCalls.map((message) => message.type),
       ['auth:status'],
@@ -395,6 +409,7 @@ test('actual extension Settings preserves drafts, exposes session recovery on ac
     assert.equal(textarea.value, draft);
     assert.equal(document.activeElement, button('Record question'));
     assert.equal(pageChecks, checksBeforeSettings);
+    assert.equal(metadataCalls.length, metadataBeforeSettings);
     assert.deepEqual(
       authCalls.map((message) => message.type),
       ['auth:status'],

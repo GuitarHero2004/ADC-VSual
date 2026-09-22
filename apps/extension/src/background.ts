@@ -1,3 +1,4 @@
+import { installVisualWorker } from './visual-worker.ts';
 import { ActivationBroker } from './activation.ts';
 import { installAuthWorker } from './auth-worker.ts';
 import { ordersOrigins, publicOrigin } from './config-values.ts';
@@ -41,7 +42,9 @@ const floating = installFloatingWorker(
     void auth.cancelInlineDocument(sender).catch(() => undefined);
   },
   structured,
+  (tab) => visual.context(tab),
 );
+const visual = installVisualWorker(chrome, floating.trusted);
 const auth = installAuthWorker(undefined, floating.trusted);
 const panelEpochs = new Map<number, number>();
 
@@ -85,11 +88,17 @@ function openPanel(tab: chrome.tabs.Tab, activate: boolean) {
 }
 
 chrome.action.onClicked.addListener((tab) => {
+  visual.activate(tab);
+  if (visual.interceptActivation(tab) === 'cancelled') return;
   if (!floating.activate(tab, false)) openPanel(tab, false);
 });
 chrome.commands.onCommand.addListener((command, tab) => {
-  if (command === 'toggle-voice' && tab && !floating.activate(tab, true))
-    openPanel(tab, true);
+  if (command !== 'toggle-voice' || !tab) return;
+  visual.activate(tab);
+  const state = visual.interceptActivation(tab);
+  if (state === 'cancelled') return;
+  const record = state !== 'recovering';
+  if (!floating.activate(tab, record)) openPanel(tab, record);
 });
 
 chrome.runtime.onConnect.addListener((port) => {

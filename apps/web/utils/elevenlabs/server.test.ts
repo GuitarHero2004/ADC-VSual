@@ -85,7 +85,7 @@ function transcriptResponse(
   });
 }
 
-test('TTS preserves supplied text and uses the configured voice, Flash model and normal-speed MP3', async () => {
+test('TTS preserves surrounding text and uses the configured voice, Flash model and normal-speed MP3', async () => {
   createFetchResponse = mp3Response;
   const text = '  Ngày 09/10, 1.250.000 VND và 12.5%.  ';
   assert.deepEqual(
@@ -101,7 +101,7 @@ test('TTS preserves supplied text and uses the configured voice, Flash model and
   assert.equal(request.method, 'POST');
   assert.equal(request.headers.get('xi-api-key'), testApiKey);
   assert.deepEqual(await request.json(), {
-    text,
+    text: '  Ngày 09/10, một triệu hai trăm năm mươi nghìn đồng Việt Nam và 12.5%.  ',
     model_id: 'eleven_flash_v2_5',
     language_code: 'vi',
     voice_settings: { speed: 1 },
@@ -118,6 +118,44 @@ test('English and absent TTS language remain server-controlled supported options
     model_id: 'eleven_flash_v2_5',
     voice_settings: { speed: 1 },
   });
+});
+
+test('TTS expands explicit English and Vietnamese prices in the actual SDK payload without mutating the answer', async () => {
+  createFetchResponse = mp3Response;
+  for (const [language, expected] of [
+    ['en', 'fifty-five US dollars per seat per month'],
+    ['vi', 'năm mươi lăm đô la Mỹ mỗi chỗ mỗi tháng'],
+  ] as const) {
+    const input = Object.freeze({ text: 'USD55/seat/month', language });
+    assert.deepEqual(await synthesiseSpeech(input), audioBytes);
+    assert.deepEqual(await capturedRequests.at(-1)!.json(), {
+      text: expected,
+      model_id: 'eleven_flash_v2_5',
+      language_code: language,
+      voice_settings: { speed: 1 },
+    });
+    assert.equal(input.text, 'USD55/seat/month');
+  }
+  assert.equal(capturedRequests.length, 2);
+});
+
+test('TTS accepts a previously prepared copy without expanding again and preserves text when language is absent', async () => {
+  createFetchResponse = mp3Response;
+  const prepared = 'fifty-five US dollars per seat per month';
+  await synthesiseSpeech({ text: prepared, language: 'en' });
+  assert.equal((await capturedRequests[0]!.json()).text, prepared);
+
+  const unlabelled = 'USD55/seat/month';
+  await synthesiseSpeech({ text: unlabelled });
+  assert.equal((await capturedRequests[1]!.json()).text, unlabelled);
+});
+
+test('direct TTS calls reject expansion overflow without dispatching a provider request', async () => {
+  await assert.rejects(
+    synthesiseSpeech({ text: 'USD55 '.repeat(100), language: 'en' }),
+    code('INPUT_TOO_LARGE'),
+  );
+  assert.equal(capturedRequests.length, 0);
 });
 
 test('rejects invalid, blank, oversized and additional synthesis options before HTTP', async () => {

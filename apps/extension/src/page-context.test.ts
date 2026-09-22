@@ -235,15 +235,29 @@ test('side-panel fallback shares browser grant and observes structured changes b
   try {
     assert.equal((await page.getContext()).permission, 'required');
     assert.equal(posted.length, 0);
-    assert.deepEqual(contextRequests.at(-1), {
-      type: 'structured:context',
-      tabId: 1,
-    });
+    assert.deepEqual(
+      contextRequests
+        .filter((message) =>
+          (message as { type: string }).type.startsWith('structured:'),
+        )
+        .at(-1),
+      {
+        type: 'structured:context',
+        tabId: 1,
+      },
+    );
     assert.equal((await page.prepareContext()).permission, 'required');
-    assert.deepEqual(contextRequests.at(-1), {
-      type: 'structured:prepare',
-      tabId: 1,
-    });
+    assert.deepEqual(
+      contextRequests
+        .filter((message) =>
+          (message as { type: string }).type.startsWith('structured:'),
+        )
+        .at(-1),
+      {
+        type: 'structured:prepare',
+        tabId: 1,
+      },
+    );
     assert.equal(posted.length, 0);
     granted = true;
     runtimeMessages.emit(
@@ -603,5 +617,101 @@ test('return to page reports fallback separately and uses supported tab/window A
     assert.equal(fake.posted.length, 1);
   } finally {
     fake.page.dispose();
+  }
+});
+
+test('visual sidebar ignores incidental loading only while its top-document lifetime is observed', async () => {
+  for (const observedDocument of [true, false]) {
+    const fake = fakeBrowser();
+    fake.page.dispose();
+    fake.state.tab.url = 'https://canvas.example.test/view';
+    const sourceMessages = new Events<[unknown]>();
+    const sourceDisconnect = new Events<[]>();
+    const visualMessages = new Events<[unknown]>();
+    const visualDisconnect = new Events<[]>();
+    const runtimeMessages = new Events<
+      [unknown, chrome.runtime.MessageSender]
+    >();
+    const context: OrdersContext = {
+      supported: false,
+      sourceKind: 'structured_page',
+      tabId: 1,
+      windowId: 10,
+      origin: 'https://canvas.example.test',
+      pathname: '/view',
+      permission: observedDocument ? 'granted' : 'required',
+      capability: observedDocument ? 'unsupported' : 'unchecked',
+      reason: observedDocument ? 'unsupported' : 'permission_required',
+      ...(observedDocument ? { documentId: crypto.randomUUID() } : {}),
+    };
+    const browser = {
+      ...fake.api,
+      runtime: {
+        id: 'a'.repeat(32),
+        onMessage: runtimeMessages,
+        sendMessage: async (message: { type: string }) =>
+          message.type === 'visual:context'
+            ? {
+                eligible: true,
+                permission: 'granted',
+                resourceKey: 'a'.repeat(64),
+              }
+            : context,
+        connect: () => ({
+          onMessage: visualMessages,
+          onDisconnect: visualDisconnect,
+          postMessage() {},
+          disconnect() {
+            visualDisconnect.emit();
+          },
+        }),
+      },
+      tabs: {
+        ...fake.api.tabs,
+        connect: () => ({
+          onMessage: sourceMessages,
+          onDisconnect: sourceDisconnect,
+          postMessage() {},
+          disconnect() {
+            sourceDisconnect.emit();
+          },
+        }),
+      },
+    } as unknown as typeof chrome;
+    const page = new OrdersPageContext([], browser);
+    const reasons: string[] = [];
+    page.subscribe((reason) => reasons.push(reason));
+    const abort = new AbortController();
+    try {
+      await page.getContext();
+      const capture = page.captureVisual('current_view', abort.signal);
+      const cancelled = assert.rejects(capture);
+      fake.updated.emit(1, { status: 'loading' });
+      fake.updated.emit(1, { status: 'complete' });
+      if (observedDocument) {
+        assert.deepEqual(
+          reasons,
+          [],
+          'Iframe loading does not invalidate a visual moment',
+        );
+        sourceDisconnect.emit();
+        assert.deepEqual(
+          reasons,
+          ['unavailable'],
+          'A real same-URL document replacement invalidates immediately',
+        );
+      } else {
+        assert.deepEqual(
+          reasons,
+          ['page', 'page'],
+          'Without a document observer loading stays fail-closed',
+        );
+      }
+      abort.abort();
+      await cancelled;
+    } finally {
+      abort.abort();
+      page.dispose();
+    }
   }
 });

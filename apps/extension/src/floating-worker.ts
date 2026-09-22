@@ -1,3 +1,4 @@
+import type { VisualAccessContext } from './visual-protocol.ts';
 import {
   parseOrdersPageRequest,
   parseOrdersPageResponse,
@@ -49,6 +50,7 @@ type Host = {
   expanded: boolean;
   resumeExpected: boolean | null;
   followTask: object | null;
+  visualMode: boolean;
 };
 type WindowFollow = { enabled: boolean; expanded: boolean };
 const followKey = (windowId: number) => `floating-follow:${windowId}`;
@@ -60,6 +62,7 @@ export function installFloatingWorker(
   authOrigin?: string | null,
   onFrameRemoved?: (sender: chrome.runtime.MessageSender) => void,
   structured?: Pick<StructuredPageAccess, 'context' | 'activate' | 'prepare'>,
+  visualContext?: (tab: chrome.tabs.Tab) => Promise<VisualAccessContext>,
 ) {
   const hosts = new Map<number, Host>();
   let speechOwner: Host | null = null;
@@ -67,6 +70,28 @@ export function installFloatingWorker(
   const followStates = new Map<number, WindowFollow>();
   const followEpochs = new Map<number, number>();
   const extensionId = browser.runtime.id;
+  async function withVisual(context: OrdersContext, tab: chrome.tabs.Tab) {
+    if (!visualContext) return context;
+    const { resourceKey, ...visual } = await visualContext(tab);
+    return { ...context, visual, ...(resourceKey ? { resourceKey } : {}) };
+  }
+  async function restoreVisual(host: Host) {
+    if (!visualContext || host.ended) return;
+    const frame = host.frame;
+    try {
+      const tab = await browser.tabs.get(host.tabId);
+      const { resourceKey, ...visual } = await visualContext(tab);
+      if (host.ended || host.frame !== frame || tab.url !== host.url) return;
+      host.context = {
+        ...host.context,
+        visual,
+        ...(resourceKey ? { resourceKey } : {}),
+      };
+      sendFrame(host, { type: 'floating:context', context: host.context });
+    } catch {
+      /* Browser access remains a recoverable condition. */
+    }
+  }
   const sendHost = (host: Host, message: FloatingHostCommand) => {
     try {
       host.port.postMessage(message);
@@ -202,12 +227,14 @@ export function installFloatingWorker(
         (context.documentId && context.documentId !== host.documentId)
       )
         return;
-      host.context = context;
+      const enriched = await withVisual(context, tab);
+      if (!live() || !(await foreground(host)) || !live()) return;
+      host.context = enriched;
       host.following = true;
       host.expanded = state.expanded;
       host.resumeExpected = state.expanded;
       if (context.sourceKind === 'structured_page')
-        sendFrame(host, { type: 'floating:context', context });
+        sendFrame(host, { type: 'floating:context', context: host.context });
       sendFrame(host, { type: 'floating:resume', expanded: state.expanded });
       if (context.permission === 'granted') openSource(host);
     } catch {
@@ -349,6 +376,7 @@ export function installFloatingWorker(
         return;
       }
       if (response.type === 'structured:capability') {
+        if (host.visualMode) return;
         host.context = {
           ...host.context,
           supported: response.supported,
@@ -360,6 +388,7 @@ export function installFloatingWorker(
         response.type === 'orders:changed' ||
         response.type === 'structured:changed'
       ) {
+        if (host.visualMode && response.type === 'structured:changed') return;
         stopSpeech(host);
         host.requests.clear();
         sendFrame(host, response);
@@ -422,8 +451,17 @@ export function installFloatingWorker(
         (context.documentId && context.documentId !== host.documentId)
       )
         return;
-      host.context = context;
-      sendFrame(host, { type: 'floating:context', context });
+      const enriched = await withVisual(context, tab);
+      if (
+        host.ended ||
+        host.dismissed ||
+        host.activationGeneration !== generation ||
+        (frame !== null && host.frame !== frame) ||
+        !(await foreground(host))
+      )
+        return;
+      host.context = enriched;
+      sendFrame(host, { type: 'floating:context', context: host.context });
       if (context.permission === 'granted' && host.frame) openSource(host);
     } catch {
       sendFrame(host, { type: 'floating:invalidated', reason: 'unavailable' });
@@ -469,21 +507,37 @@ export function installFloatingWorker(
           : host.context;
       if (!(await currentTab())) return;
       if (context.documentId && context.documentId !== host.documentId) return;
-      host.context = context;
+      const enriched = await withVisual(context, tab);
+      if (!(await currentTab())) return;
+      host.context = enriched;
       for (const requestId of check.ids)
         sendFrame(host, {
           type: 'floating:context-checked',
           id: requestId,
-          context,
+          context: host.context,
         });
       if (live() && context.permission === 'granted') openSource(host);
     } catch {
       if (live()) {
         // A failed check is not evidence that the previous source is still available.
-        host.context =
+        let context: OrdersContext =
           host.context.sourceKind === 'structured_page'
             ? structuredContext({ ...host.port.sender!.tab!, url: host.url })
             : { ...host.context, supported: false, reason: 'unavailable' };
+        // Structured probing and screenshot access are separate capabilities.
+        // Recheck only current metadata: a failed text probe must not erase
+        // independently verified visual access or imply the page needs markup.
+        try {
+          const tab = await currentTab();
+          if (!tab) return;
+          const enriched = await withVisual(context, tab);
+          if (!(await currentTab())) return;
+          context = enriched;
+        } catch {
+          // Without a successful access lookup, the fallback stays unverified.
+        }
+        if (!live()) return;
+        host.context = context;
         for (const requestId of check.ids)
           sendFrame(host, {
             type: 'floating:context-checked',
@@ -632,6 +686,7 @@ export function installFloatingWorker(
         expanded: false,
         resumeExpected: null,
         followTask: null,
+        visualMode: false,
         context:
           !supportedOrdersUrl(url.href, origins) && structured
             ? structuredContext(sender.tab)
@@ -711,7 +766,13 @@ export function installFloatingWorker(
         >;
         sendHost(host, layout);
         void followLayout(host, layout.expanded);
+      } else if (
+        exactMessage(value, 'floating:visual-mode', ['active']) &&
+        typeof value.active === 'boolean'
+      ) {
+        host.visualMode = value.active;
       } else if (exactMessage(value, 'floating:reset')) {
+        host.visualMode = false;
         stopSpeech(host);
         host.check = null;
         host.followTask = null;
@@ -756,6 +817,7 @@ export function installFloatingWorker(
       other: speechOwner !== null && speechOwner !== host,
     });
     void restoreStructured(host);
+    void restoreVisual(host);
     void resumeFollow(host);
   });
   browser.tabs.onRemoved.addListener((tabId) => {
@@ -814,6 +876,7 @@ export function installFloatingWorker(
         stopSpeech();
         return true;
       }
+      void restoreVisual(host);
       const activation = { id: crypto.randomUUID(), record };
       armFollow(host, record ? host.expanded : true);
       const generation = host.activationGeneration;

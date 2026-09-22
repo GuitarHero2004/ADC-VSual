@@ -1,21 +1,600 @@
-# VSual — RMIT ADC browser companion
+# VSual — RMIT ADC accessibility companion
 
 Hackathon project by **In Motion or Element**, for blind and low-vision users.
 The assistant complements existing screen readers.
 
-VSual answers bounded questions about **structured HTML articles/information pages**
-and the rendered **synthetic `/orders` dashboard**.
+The browser companion answers bounded questions about **structured HTML articles/information pages**
+and the rendered **synthetic `/orders` dashboard**. It also implements
+**captured browser-view questions**, with live use gated on model-route verification.
 Type and select **Ask VSual**, or deliberately record a question
 and pause for five seconds to submit automatically. The configured model through
 Avis answers from captured article excerpts. For orders comparisons, it interprets
 the question and application code calculates from the captured rows. English and Vietnamese are
-supported. Screenshots, Google resource access, arbitrary spreadsheet calculations,
-browser actions, automatic arrival summaries and wake words are outside this feature.
+supported. Google/Microsoft file retrieval, arbitrary spreadsheet calculations,
+browser actions, automatic arrival summaries and wake words remain outside this feature.
 
 The separate **`/voice` setup** remains a labelled speech test: its read-back repeats
 supplied text. In the companion, **Read answer** speaks the validated answer instead.
-Companion answer speech defaults ON for new preferences; recording cues and the
-standalone voice test remain optional. Text and evidence work with Speech OFF.
+Browser companion answer speech defaults ON for new preferences; recording cues and the
+standalone voice test remain optional. Browser text and evidence work with Speech OFF.
+The desktop prototype always reads new answers aloud, with immediate Stop and cached Repeat.
+
+## Windows desktop screen assistant
+
+`feat/desktop-follow-up-guidance` starts from updated `dev` at `ff12674`, after
+the guided-voice merge (PR #18). `apps/desktop` uses Electron and React, the existing Supabase
+account/workspace checks, Avis visual adapter, ElevenLabs endpoints and shared
+voice controller. The browser companion's reading methods remain unchanged.
+
+The desktop journey is **sign in → hear the introduction → use another app → press
+VSual's Talk shortcut → speak → pause five seconds → answer and screenshot evidence
+→ Stop/Repeat → choose a follow-up or ask something else**. Stop and review retains the editable transcript instead of submitting.
+Typing and selecting Ask VSual remains available. It sends
+one current-view screenshot per question. It does not read DOM/accessibility trees,
+retrieve full documents, scroll windows, calculate arbitrary pictured tables,
+operate applications or listen for wake words. Passive launch/tray opening and window
+detection never capture pixels, start recording or call a provider. The deliberate
+Talk shortcut now starts recording when authenticated and ready; silence submission
+then invokes the existing transcription and screenshot-answer flow.
+
+**Privacy:** desktop capture has no automatic masking of private fields. Choose a
+non-sensitive window for testing. VSual's own window cannot be selected as the source.
+The selected window's title and screenshot are sent through the existing
+authenticated backend to Avis; backend/provider retention remains as described
+under visual reading below. Local capture tracks stop immediately after one frame;
+recordings, answers and audio are transient, not written to Supabase.
+
+With Node 24 and npm 11, install from the repository root:
+
+```powershell
+npm ci --include=dev --include-workspace-root
+Copy-Item apps/desktop/.env.example apps/desktop/.env.local
+```
+
+Copy the example only if `.env.local` does not already exist. Edit it locally:
+
+| Desktop runtime setting          | Value                                                                        |
+| -------------------------------- | ---------------------------------------------------------------------------- |
+| `VSUAL_API_BASE_URL`             | `http://127.0.0.1:3000` locally; an exact HTTPS backend origin when deployed |
+| `VSUAL_SUPABASE_URL`             | Same public Supabase project URL as the web app                              |
+| `VSUAL_SUPABASE_PUBLISHABLE_KEY` | Same public publishable/anon key; never a service-role key                   |
+| `VSUAL_WORKSPACE_ID`             | Optional existing workspace UUID; omit to use the backend default            |
+
+Only `apps/desktop/.env.local` is loaded by the desktop main process. Changing it
+requires quitting/restarting the app. Keep database, Avis and ElevenLabs secrets
+in **`apps/web/.env.local`**, with the existing restricted database role/workspace,
+`AVIS_*` settings including a successfully verified `AVIS_VISUAL_VERIFIED_ROUTE`,
+and `ELEVENLABS_*` settings. Do not invent the verification hash or repeat a paid
+compatibility check when the configured route is already verified. No new tables,
+keys, CORS origins or migrations are required for desktop native bearer requests.
+A deployed backend must contain this branch's `/api/desktop-read` contract before
+testing follow-ups. For local verification, run the current web app and desktop
+build together; no deployment or remote configuration change is needed.
+
+Start these in two terminals at the repository root:
+
+```powershell
+npm run dev:web
+```
+
+```powershell
+npm run dev:desktop
+```
+
+`dev:desktop` builds and opens Electron; it is not a hot-reload server. After code
+changes, quit and run it again. Installation downloads the pinned Electron runtime.
+Other checks and commands:
+
+```powershell
+npm run build:desktop
+npm run start:desktop
+npm run typecheck --workspace=@adc/desktop
+npm run test --workspace=@adc/desktop
+npm run test:smoke --workspace=@adc/desktop
+npm run test:capture --workspace=@adc/desktop
+npm run test:capture --workspace=@adc/desktop -- --interactive
+npm run check
+```
+
+The default **Ctrl + Alt + Space** selects the foreground application, opens VSual
+and starts listening after account/workspace and source readiness checks. Wait for
+the short local listening tone before speaking. The current source title is shown above the question. The
+desktop has no window dropdown. Windows detection uses a bounded, hidden PowerShell call to
+[GetForegroundWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getforegroundwindow)
+before VSual takes focus, matching its handle against Electron's native sources.
+The first passive launch uses the same lookup without recording. First sign-in preserves this selected
+window's metadata; logout/account loss clears it and all sensitive work. Repeated
+activation shares one lookup, and only a native match with VSual itself retains
+the preceding target. Electron's cached focus state is not used to select a source.
+Own-window matching compares the native HWND independently of Electron's Chromium
+suffix (which can be `:2` or higher), so Talk from VSual retains the correct target.
+This can add a short activation delay. Missing/blocked detection clears the target
+and asks you to switch to the desired app and press the shortcut again; it never
+guesses from window order or title. Clicking an already-visible VSual window does
+not select the previously focused app; use the shortcut from that app. Tray
+activation can target the Windows shell instead, so use the shortcut from the
+desired app for automatic selection. Settings offers bounded shortcut choices and EN/VI.
+The tray and Record question button provide a fallback for a conflicting Talk shortcut.
+**Ctrl + Alt + Backspace** stops current work without hiding VSual. Settings reports
+Talk and Stop availability separately; VSual never claims an unregistered shortcut works.
+
+| Talk shortcut state                                                            | Result                                                                |
+| ------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| Idle/answer ready                                                              | Resolve the active app, then start recording once                     |
+| Recording                                                                      | Stop and review; disarm silence submission immediately                |
+| Waiting for microphone, transcribing, capturing, answering or preparing speech | Cancel; do not start another recording                                |
+| Answer playing                                                                 | Stop speech, resolve the active app and start listening               |
+| Signed out/access unavailable                                                  | Show sign-in/access guidance; require a fresh shortcut after recovery |
+
+Typed intent IDs, a preload readiness handshake and controller generations prevent
+duplicate or late activations. Recording review is handled before awaiting Windows
+metadata, so a slow lookup cannot keep the silence timer armed. Stop/Hide/logout and
+renderer loss discard pending work. **Hide to tray**, close
+and Escape stop pending capture/requests, recording and playback, then hide VSual.
+They preserve the signed-in session and draft. Passive reopening cancels unfinished work
+and retains the accepted answer only if the selected window identity and title still match.
+It does not automatically replay that answer. Switching to another
+app without hiding VSual does not stop accepted-answer speech. **Quit VSual**
+clears the memory-only session and releases both shortcuts. A second launch reuses
+the existing instance; there is no installer or automatic Windows startup yet.
+On Windows the displayed companion reapplies Electron's `pop-up-menu` topmost
+level after focus: the default `floating` level was demoted by taskbar ordering
+in native testing. This can place VSual above the taskbar; Hide/Escape remains
+available. It does not grant access to secure desktops or protected windows.
+
+Desktop email/password sign-in creates its own Supabase session. Website/extension
+cookies are not reused. Only the native main process owns tokens, refresh and
+authenticated HTTP; the isolated renderer receives account/access state through
+fixed validated IPC methods. Network uncertainty preserves credentials but blocks
+protected work until verification; logout clears local work immediately and uses
+session-local sign-out. Website/extension sessions remain separate. Google sign-in
+on the website is preserved but is not connected to this desktop prototype.
+Language/shortcut settings persist in `preferences.json`. Desktop answer speech is
+always enabled; old desktop speech-OFF records are no longer read. Browser speech
+preferences are unchanged. Tokens never enter browser
+sync, renderer storage or files. Restarting VSual requires signing in again.
+
+After sign-in, a readable three-step guide and **Instructions and hotkeys** link
+explain the journey. The guide and all Talk states stay expanded. The reference lists
+the actual saved Talk shortcut and Stop shortcut with registration status, plus
+**Escape**, **Tab / Shift+Tab**, and **Enter / Space** with their scope. Alternatives
+remain in Settings. **Back to your question** restores focus to the companion; the
+Hide/Quit controls have a separate footer with spacing. The guide is absent on the
+signed-out screen and remains available to signed-in users without workspace access.
+
+Instruction narration uses a **local Windows speech voice**, preferring the default
+voice for the selected English/Vietnamese language. It makes no ElevenLabs request,
+uses no credits, and does not read account or screen content. The welcome runs once
+per app launch after sign-in; the old first-use disk marker no longer suppresses it.
+Opening again or changing settings does not replay it. **Hear instructions again**
+stops assistant work and repeats the local guide. **Stop introduction**, Talk,
+Hide, logout and Stop interrupt it, including delayed voice loading. If no matching
+local voice is installed, the guide reports that and remains fully readable.
+Answer narration still uses the existing ElevenLabs configuration. Both read at 0.9×.
+
+**Known issue before review:** the user reports that the introduction is still not
+audible on their Windows device. Mocked narration tests do not resolve that report.
+Written instructions and hotkeys remain available; check **Hear instructions again**,
+the displayed narration status, installed Windows voices and per-app output before
+treating the spoken welcome as verified. This issue remains open in the pull request.
+
+Desktop recording lasts up to **60 seconds** (browser recording stays at
+30 seconds). After speech, five seconds of silence submits once. Short local tones
+mark the countdown; speaking again resets it. A higher local tone marks submission.
+These cues use no provider credits. **Stop and review** cancels automatic submission;
+reaching the 60-second limit also transcribes for review. Cancel discards the recording.
+The 3 MiB audio limit remains enforced. Local tone echo is briefly excluded from
+activity detection; microphone/speaker behavior still requires a real device check.
+
+Every new desktop answer automatically attempts speech once, with no speech toggle.
+Answers and evidence appear before audio generation and remain readable if it fails.
+Playback uses **0.9×**; **Stop answer audio** immediately cancels pending/playing audio,
+and **Play / Repeat answer** reuses the cached audio. Autoplay denial exposes Play;
+provider errors expose a deliberate retry, never a paid retry loop. Starting recording
+interrupts answer speech. VSual does not control NVDA or system speech. Cancellation
+is local and does not guarantee the provider stopped processing or refunded a request.
+
+### Desktop follow-up guidance
+
+An answer may include **up to three numbered questions** about legible content in
+its screenshot. Each suggestion must reference existing screenshot evidence; these
+references establish the source, not independent verification of a model's interpretation.
+The model may return fewer choices or none when the image cannot support them.
+The same Avis request produces the answer and suggestions. This does not add a
+separate planning request, increase usage limits or enable application actions.
+
+Select a numbered question with Tab and Enter/Space, or press Talk and say
+**“Option one”**, **“Option two”**, **“Option three”** (Vietnamese:
+**“Lựa chọn một/hai/ba”**). Recording still requires deliberate activation; VSual
+does not listen while reading choices. Five seconds of silence submits normally;
+Stop and review lets you edit the choice or question first. The chosen question
+appears in the editable field. An unavailable choice prompts correction locally,
+without a screenshot or model call. Natural typed/spoken follow-ups also work.
+**Ask something else** clears the draft and previous conversation context and
+focuses the question field; it does not submit anything.
+
+Every follow-up takes a **new screenshot** of the selected window. The native
+owner supplies only the previous accepted question and answer, bound to that
+window, account and workspace. Earlier screenshots, audio and a growing chat
+history are not sent as context. Previous text is background only: the new image
+is the evidence, and changes or missing information must be acknowledged.
+Rechecking a different window identity/title clears old choices and requires a
+fresh question. A change inside a window with the same title is not reliable
+document identification; use Ask something else when starting another topic.
+The unchanged input budget includes the previous exchange; a large image plus
+long prior text may be rejected before provider dispatch. Use a smaller window,
+a shorter question or Ask something else rather than repeatedly submitting it.
+Logout, account changes and quitting clear this in-memory context. Nothing is
+saved to a conversation table or file.
+
+The answer and available numbered choices share **one initial ElevenLabs request**
+within the existing 1,000-code-point limit. The same 0.9× player handles Stop and
+cached Repeat. Text/evidence remain usable if speech fails. Choosing a suggestion
+does not calculate arbitrary tables, click a button, navigate or open a file.
+No new dependencies, environment variables, provider permissions or migrations
+are required. The reported inaudible Windows introduction remains a separate issue.
+
+Follow-up verification on 2026-09-23: `npm run check` passed typechecking, lint,
+formatting, **852 automated tests** and desktop/extension/web builds. Providers are
+mocked in those tests. They cover source/account context boundaries, numbered
+EN/VI choices, fresh capture requests, silence submission, duplicate clicks,
+cancelled/late responses, failed-follow-up Repeat and keyboard focus recovery.
+The real Windows `test:smoke` passed renderer/IPC isolation and 200% reflow.
+Both global shortcuts were unavailable to that temporary profile; physical
+shortcut operation was not tested. The extended `test:capture` stopped before
+capture because Windows refused to focus the synthetic fixture. Use
+`npm run test:capture --workspace=@adc/desktop -- --interactive`, activate its
+synthetic window and press the shortcut printed by the test. The extended path
+checks a spoken option, a fresh image and prior-exchange binding, but its native
+run remains pending. Live provider, hardware microphone, pronunciation and NVDA
+checks for this feature remain pending. No provider calls were made for verification.
+
+The opt-in Windows runtime checks use temporary profiles and no AI credits.
+`test:capture` captures a synthetic window through the actual Electron capture/IPC
+path and checks the submitted image pixels; authentication and the answer provider
+are mocked. Its image is `apps/desktop/dist/capture-smoke.jpg`. `test:smoke` checks
+renderer isolation, blocked direct network access, IPC, close-to-tray and 200% reflow.
+These checks do not establish live login/model/voice success or NVDA usability.
+On Windows, `test:capture -- --interactive` waits for you to activate the synthetic
+fixture and press the shortcut printed in the terminal. It checks that the target
+survives first sign-in before capturing any pixels. The default check stops safely
+if Windows refuses its programmatic focus request; it never captures another app.
+
+Guided-voice verification on 2026-09-23: `npm run check` passed typechecks, lint,
+formatting, all 833 tests and web/extension/desktop builds. Its 145 desktop tests include cold
+activation, duplicate intent, signed-out recovery, pending permission cancellation,
+silence-boundary review and guide/recording exclusion. The real Windows
+`test:smoke` passed renderer isolation, readiness IPC, signed-out Talk focus,
+close-to-tray and 200% reflow. These historical checks do not verify the latest
+Windows welcome; the user's reported inaudible introduction remains unresolved.
+The interactive capture check passed through an automation-delivered registered
+shortcut, retaining the intended source through sign-in and subsequent Talk. It verified
+actual submitted synthetic pixels, native MediaRecorder on a generated silent stream,
+duplicate activation, Stop track cleanup, one recorded upload, Stop and review, explicit
+submission and preserved answer/evidence after mocked speech quota errors. Auth, STT,
+AI and TTS services were mocked; no provider credits or personal screen content were used.
+Windows rejected programmatic foreground selection in the non-interactive check;
+use `test:capture -- --interactive` when that happens. The test picks an available
+supported shortcut in its temporary profile if the default conflicts; the printed
+shortcut is authoritative. Talk initially conflicted with another running application;
+Stop registered successfully. Human keyboard operation, microphone permission,
+pronunciation, live provider/account and NVDA journeys still need manual testing.
+Quit any older VSual instance from its tray before starting an updated build.
+
+The earlier ElevenLabs-guide revision passed the full repository check and Windows
+layout checks; that evidence predates the requested switch back to Windows narration.
+For the latest small UI adjustment, verification is limited to focused guide/App tests,
+desktop typechecking, lint/formatting and a desktop build. Hardware speech, microphone
+and NVDA checks remain manual. Quit the old tray instance, run `npm run dev:desktop`
+(and `npm run dev:web` if using the local backend), sign in, and use **Instructions
+and hotkeys**. Check the expanded guide, footer spacing, **Hear instructions again**
+and **Stop introduction**. No guide narration should call `/api/voice/speak`.
+
+Desktop request failures now retain their safe error code across Electron's isolated
+bridge. **Request details** shows the attempt reference and last step (preparation,
+capture or answering); a reference before upload is not evidence of a backend call.
+Capture denial/unavailability is separate from answer-service errors. For a repeated
+failure, share only this code, reference and step, not screen content, tokens or keys.
+After rebuilding, use **Quit VSual** (closing only hides it), then launch again to load
+the updated preload. The error-transport fix is covered by the real Electron smoke
+check and the desktop unit/UI tests; it does not prove a live provider request works.
+
+Manual Windows journey (real login/model/microphone/NVDA checks remain required):
+
+1. Quit the old VSual instance from its tray, then start both apps. Sign in with an
+   existing email/password account that already has workspace access and confirm
+   the displayed account. Check the welcome or select Hear instructions again;
+   test Stop introduction. A Google-only account needs its supported password-recovery
+   setup first. If no introduction is audible, report its visible status separately
+   from answer playback; this remains a known issue.
+2. Open a non-sensitive chart/image or test document, focus that app and press the
+   displayed VSual shortcut. Confirm its name appears automatically. There is no
+   dropdown. The listening tone should sound and recording should start without a
+   Record click. If detection is unavailable, no recording starts; switch back and retry.
+   Press Talk again for Stop and review. Edit the transcript or type a question.
+3. Choose Ask VSual. Check the source, answer, evidence and request
+   reference. The answer reads automatically. Check Stop during preparation/playback
+   and cached Repeat. Test EN/VI, including dates and amounts. Content outside the
+   captured view must not be represented as read.
+4. Return to the source app and press Talk, allow the microphone, speak and pause. Listen for local countdown
+   tones and confirm one submission after five seconds. Resume speaking during the
+   countdown to reset it. Stop and review must let you edit without auto-submission;
+   Cancel must discard pending work. At 60 seconds the recording ends for review.
+5. Use Ctrl + Alt + Backspace during recording, capture and speech; no late answer/audio
+   may appear. Press Talk during processing to cancel, and during playback to start a new question. Hide
+   and reopen; the account remains. Sign out during work; old account data clears.
+   Quit/restart; sign-in is required again.
+6. With this branch's backend running, ask about a non-sensitive view that contains
+   several legible details. Check that numbered follow-ups are relevant and read
+   with the answer. Select one with the keyboard, then test Talk → “Option one”
+   (or “Lựa chọn một”) → silence submission. Test Stop and review before submitting
+   a spoken choice. Each follow-up should show a new capture time and evidence;
+   Repeat must not create another `/api/voice/speak` request. Choose Ask something
+   else and check that focus returns to an empty question. Switch to a differently
+   titled app and activate VSual: old choices must disappear, with no automatic request.
+7. Repeat with keyboard/NVDA: use the displayed global shortcut, Tab/Shift+Tab,
+   Enter/Space and Escape. Use Stop when needed while exploring text and evidence.
+   Check visible focus, a narrow window and 200% zoom. NVDA and app speech may overlap;
+   VSual does not mute or pause your screen reader.
+
+## Visual page reading
+
+`feat/visual-page-read` starts from updated `dev` at `60d0b13` (structured-page-read
+PR #13). It reuses the trusted floating frame/side panel, authentication, workspace
+checks, usage reservations, question controller, Avis integration and speech player.
+There are no new browser permissions, database migrations or hosted services.
+
+An explicit **Ask VSual** chooses a local reading method. Supported article prose
+and orders questions keep their existing readers. Questions about visual content,
+or eligible HTTP(S) views without supported article structure, use one viewport
+image. Opening, expanding or checking the companion never takes a screenshot or
+calls a provider. Visual processing is available by default on a deliberate Ask,
+just like structured text; there is no separate **Use page images** approval button
+or stored processing grant. A brief notice and expandable details explain
+transmission through Avis, private/unsaved content, exclusions, temporary scrolling
+and retention. Browser access remains separate from this application behaviour.
+Use the browser-toolbar button on the source tab if capture access is missing;
+granting access preserves the question and requires a fresh deliberate Ask.
+
+The primary visual path does not require `main`/`article` or a still DOM. It describes
+one captured moment, including legible labels and apparent patterns. It cannot
+retrieve a whole workbook/document, watch a video, open files, or calculate from
+arbitrary pictured numbers. Visual evidence has image IDs, bounded regions and
+readable descriptions; these are model interpretations, **not independent factual
+verification**. Source, capture time and omissions remain readable with Speech OFF.
+
+This is on-demand reading of the live browser: each submitted visual question takes
+a fresh capture. The model receives the actual image pixels with the question, so
+it can summarise readable content, explain a diagram or describe a chart's apparent
+pattern; it is not restricted to transcribing labels. It does not continuously
+watch changes. Scroll to the relevant content and ask again to read another view.
+The original source remains authoritative: valid image references establish where
+the interpretation points, not that every observation is correct.
+Reading-method selection uses the existing local page-capability and question
+rules, keeping one model call per question. The model interprets the permitted
+evidence; it does not grant browser access, execute page JavaScript or inspect
+arbitrary application internals. Ambiguous questions on mixed text/visual pages
+may need to name the chart, table or image they concern.
+
+An explicit whole-page visual question can use up to four overlapping images only
+on positively identified finite document-like pages using the top-level vertical
+scroller. Interactive calendars, grids, presentations, videos, nested scrolling
+and virtualised views are not auto-scrolled. Oversized scope is refused before
+capture; **Read current view** and, where eligible, **Read first portion** are separate
+deliberate actions. Nothing silently truncates into a claimed full-file answer.
+Scrolling, pointer/touch or navigation keys from the user cancel temporary capture;
+cleanup does not pull the user back after takeover. Passive clocks/canvas updates
+do not require a current-view task to wait for DOM stability.
+
+The worker checks source/window/tab before and after every screenshot, including
+away-and-back races. During capture, one compact Cancel surface replaces private
+companion content while keeping controllers mounted. Known private controls,
+unsupported frames and VSual regions are blacked out in the encoded pixels, with
+a 6 CSS-pixel outward margin. Chromium closed-shadow inspection prevents the
+companion iframe escaping masking when a page removes its host marker. Intended
+document editors require a structural policy, not a hostname exception. Inspection
+is bounded to 20,000 nodes and 200 mask rectangles and fails closed when unavailable.
+These measures do not guarantee removal of every private fact from page content.
+
+`VISUAL_LIMITS` defines: one default/four maximum images, 20% overlap, at least one
+second between screenshot starts and one capture batch per extension. Preparation
+is capped at 2 seconds, scroll settling at 1 second, each screenshot call at 2
+seconds and capture at 15 seconds. Raw images are capped at 24 MP; each output at
+2 MP, 2,000 px on its longest edge and 512 KiB. Total outputs are capped at 8 MP /
+2 MiB and serialized requests at 3 MiB. Encoding uses JPEG quality 0.85 once; there
+is no repeated quality ladder. Backend time is capped at 25 seconds, model at 20,
+initial speech preparation at 15 and the submitted task at 60 seconds (STT is
+separate). One model call and at most one initial TTS call; no automatic paid retries.
+
+The verified-profile budget is at most 8,192 total input tokens, including at most
+6,144 image tokens, and 768 output tokens. The existing `gpt-6-astra` route uses
+explicit `original` image detail and its documented 32-pixel patch calculation /
+1.2 multiplier; text uses a conservative UTF-8 byte bound plus framing allowance.
+See [official image token accounting](https://developers.openai.com/api/docs/guides/images-vision).
+The lower applicable bound wins, so a request can fail before its image-count
+ceiling. Answer/speech text remains capped at 1,000 Unicode code points. The backend
+decodes raster bytes using Sharp and validates actual format, dimensions, hashes,
+coverage and evidence references before accepting results. URLs are never fetched.
+Capture preflight checks projected image tokens before scrolling; an explicit first
+portion uses the smaller affordable tile count. The backend additionally checks the
+complete question/instruction/schema budget, which may require a still smaller view.
+
+Images remain transient in the capture/request path, never in rendered page DOM,
+conversation state, browser storage, database, buckets or routine logs. Accepted
+answer metadata/evidence and the latest audio remain session-local. End/logout,
+resource navigation and invalidation cancel pending work; stale results cannot
+appear or speak. Accepted source-bound speech may still continue across tabs under
+the existing rules. Repeat reuses cached audio at 0.9×; Speech OFF makes no TTS call.
+Provider retention remains unverified; no zero-retention claim is made. The bounded
+synthetic image-forwarding check below passed, but does not establish compatibility
+with every browser application or document.
+
+### Visual configuration and current verification gate
+
+Reuse `AVIS_API_KEY`, `AVIS_API_BASE_URL`, `AVIS_AI_MODEL`, Supabase, restricted
+database/workspace and `VOICE_ALLOWED_ORIGINS` in `apps/web/.env.local`. The extension
+keeps its existing `VITE_API_BASE_URL`; it never receives provider keys. One added
+server-only configuration value is `AVIS_VISUAL_VERIFIED_ROUTE`, a non-secret hash
+printed only after the opt-in synthetic check passes:
+
+```sh
+npm run check:avis:visual --workspace=@adc/web
+```
+
+This spends quota on **one** request containing two generated test images, with no
+retry. It is not a real-browser/authentication test and never runs in CI. Set the
+successful printed hash locally or in the intended Vercel environment, then restart
+or redeploy. A changed URL/model/profile invalidates it. Do not fabricate a hash to
+bypass verification. Builds and structured readers work without this setting.
+
+The initial 22 September 2026 compatibility attempt was **inconclusive**: the smoke
+question's “Do not calculate anything” disclaimer tripped our calculation filter.
+After the filter/prompt correction, one explicitly authorised follow-up request
+**passed** against the configured Avis `gpt-6-astra` route: two generated 600×240
+PNG images, unpredictable image-only labels, strict JSON, and matching evidence.
+Application request reference: `a9223562-cbaa-49a7-91b6-d10b69603dee`; upstream
+response ID: `resp_0d962352e98249a9016ab1f4c0f164819786e98934262ed773`; HTTP 200 in
+approximately six seconds. The adapter made exactly one request with retries off,
+4,130 bounded input tokens and the unchanged 768-token output cap. This establishes
+that synthetic route check, not website authentication, browser capture, Google
+Docs compatibility or speech. No environment files were changed. Do not repeat
+this paid check just to reconfirm the same route.
+Automated provider/lifecycle and actual encoded-pixel tests use synthetic data and
+mocks; they do not establish Edge compatibility.
+The completion review adds an integration test from question submission through real
+masking/resizing, HTTP validation and the Avis adapter. It inspects the exact JPEG
+sent to the provider mock at 2× and 4× pixel scales, checking excluded private pixels,
+retained document text and absence of payload logging. This is controlled geometry,
+not an actual Edge zoom test. Browser APIs, authentication and providers are mocked.
+Regression fixes cover Stop and review after the silence timer fires, worker loss
+after capture, incidental iframe-loading updates, speech deadlines, overflowing
+private controls and non-orders table routing. Current-view cleanup never moves page
+scroll/focus; deliberate scrolling retains guarded restoration.
+
+The latest integration pass ran `npm run check` successfully: type checking, lint,
+formatting, **657 tests** (320 extension, 268 web, 69 voice) and both production builds.
+Asynchronous hashing tests use bounded condition waits under parallel load; their
+cancellation assertions and production deadlines remain intact. The built
+visual endpoint rejected anonymous same-origin requests with 401 and originless
+requests with 403, both with `no-store`. An earlier scan of 29 browser-output files found none
+of the three configured server credential literals. These are local checks, not
+Vercel or authenticated visual acceptance. The extension build retains the existing
+non-failing shared-component `use client` bundler warnings.
+
+The Google Docs follow-up fixes a failed structured-page probe dropping independently
+checked screenshot-access metadata. Missing structured document metadata also no
+longer invalidates an otherwise unchanged visual source. Actual document/resource
+changes and access loss still invalidate work. Completed request errors remain
+visible after later context checks instead of becoming a misleading cancellation.
+The reported historical 502 has not been reproduced or attributed to a specific
+provider failure.
+
+If a visual request fails, expand **Request details** for its reference ID. The
+local web terminal (or Vercel function logs) emits a `visual_request_failed` entry
+for server errors with the application request ID, stage, bounded reason/code,
+status, elapsed time, dispatch flag, validated image dimensions/byte totals and
+safe provider metadata. Upstream HTTP status and allowlisted error/request IDs are
+included when available; the model response ID is separate from VSual's reference.
+`X-Client-Request-Id` associates the single upstream attempt with VSual's request.
+Use these fields to distinguish no dispatch, an upstream HTTP failure, output
+limit, malformed answer or evidence rejection after an HTTP 200. Diagnostics never
+copy raw error bodies, images, prompts, source URLs, credentials or arbitrary
+provider headers. Do not share request headers, image bodies, document text or
+credentials. After updating, restart the web server, reload the extension, and
+refresh source tabs before retesting.
+HTTP metadata is captured before the SDK parses the body, so malformed HTTP-200
+JSON/envelopes retain their status and are reported as `invalid_response` rather
+than looking like a request with no response. Both SDK response helpers share one
+cached request; regression tests assert one dispatch and cancellation precedence.
+
+The integration investigation confirmed Edge's registered unpacked path is
+`apps/extension/dist`, whose production-mode build points to `http://127.0.0.1:3000`.
+The matching workspace Next development server is reachable and compiles the
+latest diagnostics. However, Edge's in-memory extension revision and the version
+that handled the original 502 could not be proven: the original request reference
+is unavailable and no matching failure event is in the retained development log.
+Reload the extension before a new test. No claim is made that the historical
+Google Docs 502 is fixed; a new correlated browser request is still required.
+
+The user subsequently reported a successful browser test on the non-sensitive
+two-image fixture: the answer correctly identified `ALPHA-8533` and `BETA-9459` and
+acknowledged the unreadable redacted region. This is **user-reported synthetic
+browser success**, separate from the adapter check above. The browser version,
+request reference and evidence controls were not independently observed. Real
+Google Docs, chart interpretation and audible playback remain to be verified.
+
+### Test visual reading locally
+
+1. Use Node 24 / npm 11. From the root: `npm ci --include=dev --include-workspace-root`,
+   then `npm run dev:web`. In another terminal run
+   `npm run build --workspace=@adc/extension`.
+2. Load/reload `apps/extension/dist` at `edge://extensions` or `chrome://extensions`
+   (Developer mode → Load unpacked), then refresh source tabs. Public backend
+   configuration changes require rebuilding and reloading. Check the actual
+   extension ID against `VOICE_ALLOWED_ORIGINS`; Google sign-in also needs that
+   ID's exact Supabase callback (see [Google configuration](#google-configuration-manual-not-applied-by-this-branch)). Sign in through VSual
+   and confirm workspace access.
+3. Complete the opt-in model check/configuration above before expecting visual answers.
+   Use a synthetic/non-sensitive HTML page first. Activate VSual with its browser
+   toolbar button, keep Speech OFF and type “Describe the current screen”. There
+   should be no extra processing-approval button. Opening the image-processing
+   details must send nothing; the first deliberate Ask captures and submits once.
+4. Check source/capture time, readable image evidence and explicit omitted-content
+   information. Then enable Speech, ask once, Stop during generation/playback and
+   Repeat. Repeat must add no TTS request. Typed answers must survive audio failure.
+5. On a finite long article, ask about the “entire page screenshot”. Check preflight
+   refusal when too long; choose a narrower option deliberately. Cancel or interact
+   during scrolling and verify position restoration/takeover and preserved draft.
+6. Test a tab switch and away/back during capture, resource query/hash navigation,
+   End, logout and account changes. No old answer/audio may become current. Test
+   shortcut cancellation during capture and access recovery without recording.
+7. Test recording with five-second silence, continued-speech timer reset and Stop
+   and review, including immediately after automatic transcription starts: the
+   transcript must remain editable without submitting. Recheck `/orders`
+   deterministic comparison and `/reading-demo` prose/table routing.
+8. Repeat with keyboard only, NVDA, 200% text and narrow layout. Check focus returns
+   to a usable control after capture; only brief status is live-announced. Try
+   English/Vietnamese questions and assess pronunciation separately.
+
+After the synthetic labels test, use non-sensitive content to test interpretation:
+
+- Document: “Summarise the main points visible on this screen and preserve any
+  qualifications.”
+- Chart: “Describe the apparent trend in this chart. Identify the labels supporting
+  your answer and anything too unclear to read. Do not calculate.”
+- Diagram: “Explain how the items in this diagram relate, using its visible labels.”
+- Table: “Read the visible column headings and describe any obvious missing values
+  or ambiguous units. Do not calculate or claim to check hidden rows.”
+
+Inspect the source time and supporting descriptions against the displayed content.
+Scroll to a different region and ask another question: it should capture that new
+view, not reuse the earlier screenshot. A successful labels test does not establish
+correct chart reasoning, complete-document coverage or exact spreadsheet analysis.
+
+Actual Edge matrix for this implementation session (no browser automation surface
+was available; all rows below are **not performed**, not claims of support):
+
+| Target                    | Intended coverage                             | Outstanding check                                 |
+| ------------------------- | --------------------------------------------- | ------------------------------------------------- |
+| YouTube                   | One current frame/page view; no video summary | Moving content, overlay masks, source freshness   |
+| Google / Outlook Calendar | Current visible calendar                      | Labels/occlusions; no automatic scrolling         |
+| Drive / OneDrive          | Current file-list/view                        | No automatic file opening or file retrieval       |
+| Google Docs / Word web    | Capturable current document region            | Editor policy, unsaved text notice, privacy masks |
+| Sheets / Excel web        | Visible cells/chart labels                    | Virtualised grids; no arbitrary arithmetic        |
+| Slides / PowerPoint web   | Visible slide                                 | No traversal of the presentation                  |
+| HTTPS PDF viewer          | Only if capture and masking are available     | Viewer injection may be blocked; fail honestly    |
+| Ordinary HTTP(S) page     | Current view; eligible bounded scroll         | Permissions, zoom/geometry, user takeover         |
+
+`file://`, browser-internal pages and DOM-inaccessible viewers without a verified
+masking policy are unavailable. Apart from the user-reported synthetic result above,
+independent browser authentication-to-visual-answer checks remain pending. Live
+microphone, audible playback, pronunciation, keyboard/reflow and NVDA checks are
+also pending.
+Subsequent milestones may add user-selected text-PDF parsing, bounded scanned-PDF
+rendering/OCR, separately authorised Google/Microsoft file retrieval, exact-range
+spreadsheet analysis with deterministic calculations, and authorised calendar/media
+retrieval. Screenshot support does not implement any of those capabilities or
+guarantee access to YouTube transcripts.
 
 ## Structured page reading
 
@@ -57,9 +636,9 @@ content and VSual's interface are excluded. Tables, frames, canvas, diagrams,
 collapsed content and detectable pagination/unloaded content are disclosed as
 limitations; the reader does not expand or traverse them. Unrecognised application
 internals, closed shadow roots and content not present in the DOM are not read.
-Google Docs/Sheets/Slides, Gmail and PDF pages receive specific explanations when
-their structure is unsupported. This branch does not add their resource readers,
-OCR or visual interpretation; another permission click cannot enable those features.
+Google Docs/Sheets/Slides, Gmail and PDF views can have unsupported structured text.
+The visual fallback above is separate and bounded; it does not add their resource
+readers or whole-file OCR. Another permission click cannot enable file retrieval.
 The snapshot may include text below the viewport and is never described as a
 screenshot, full website, full file or proof of all visible content.
 
@@ -231,6 +810,15 @@ preparing speech in the original floating frame. The new tab exposes that remote
 speech's status and **Stop speech** without copying its answer/evidence into the
 new source. A new Ask, recording or explicit Read action takes over and stops the
 old speech. Returning to the original tab does not replay or submit anything.
+An accepted answer also keeps its one-shot automatic read-back if the tab becomes
+hidden just before the UI starts preparing audio. Mocked controller and rendered
+UI regressions cover that boundary plus tab hiding during preparation/playback;
+they do not prove that a particular browser kept an audible clip playing.
+The additional two-App regression uses real companion/client controllers with
+mocked browser ports, authentication, provider and audio boundaries. New-surface
+mounting and unchanged authentication retain existing audio; remote Stop, a new
+question and logout still stop it. The reported mid-speech browser interruption
+has not been reproduced: an actual-browser retest is still needed after reloading.
 Navigation, relevant changes to the original source, closing/discarding that tab,
 End, logout and account changes stop and clear its work. Closing the owning frame
 or reconnecting its worker also ends audio: no background audio host is introduced.
@@ -450,6 +1038,47 @@ shortcut behaviour, live authenticated end-to-end use and pronunciation remain
 manual; use the sequence below. Mixed/unaccented/explicit-language model decisions
 are covered by controlled contract tests and instructions, not a live language
 evaluation suite.
+
+### Price pronunciation in English and Vietnamese
+
+The existing `/api/voice/speak` endpoint prepares a separate spoken copy for
+desktop, extension and web read-back. Displayed answers, transcripts and evidence
+retain their original text. This is deterministic text preparation, not model
+training or voice cloning; it makes no additional AI request.
+
+| Supplied text      | English speech copy                                    | Vietnamese speech copy                          |
+| ------------------ | ------------------------------------------------------ | ----------------------------------------------- |
+| `USD55`            | fifty-five US dollars                                  | năm mươi lăm đô la Mỹ                           |
+| `USD55/seat/month` | fifty-five US dollars per seat per month               | năm mươi lăm đô la Mỹ mỗi chỗ mỗi tháng         |
+| `1.250.000 VND`    | one million two hundred fifty thousand Vietnamese dong | một triệu hai trăm năm mươi nghìn đồng Việt Nam |
+
+Supported labels are `USD`, `US$`, `VND` and `₫`, before or after an unsigned
+amount. Supported rates include seat/user and day/week/month/year/hour. Clear
+one- or two-digit decimals retain each decimal digit without rounding. Ambiguous
+single separators (`USD1,250`), malformed amounts, bare `$`, dates, identifiers,
+marked code and URLs are left unchanged. Other abbreviations and unsupported
+rate expressions are not guessed. Amounts are bounded to twelve integer digits.
+
+Preparation follows the supplied speech language (`en`/`vi`); companion answers
+already supply their resolved language. If language is absent, including Auto on
+the manual `/voice` page, text passes through unchanged. Both original and expanded
+copies must fit the existing 1,000-Unicode-character limit. Expansion overflow is
+rejected before usage reservation or synthesis, without truncation; shorten the
+text in `/voice`, or ask for a shorter answer in the companion.
+
+The configured ElevenLabs voice/model and existing playback rate are preserved.
+No new environment variables, dependencies or database changes are needed. The
+model-specific [Flash v2.5 documentation](https://elevenlabs.io/docs/overview/models)
+describes its number-normalisation limits; this feature does not enable a paid
+normalisation option. Vietnamese accent and intelligibility still depend on the
+selected voice and require a human listening check.
+
+To test locally, run `npm run dev:web`, open `http://127.0.0.1:3000/voice`, sign in,
+enable app speech and choose English or Vietnamese explicitly. Type the examples
+above and select **Read back**. Check **Stop** and **Repeat**, then try a desktop
+answer containing a price against this backend. Cached Repeat must make no new
+TTS request. Automated formatter, HTTP and SDK-payload tests use provider mocks;
+live pronunciation and NVDA checks for this change have not been performed.
 
 ## Install and run
 
@@ -1088,7 +1717,8 @@ recordings and text are sent to ElevenLabs under its
    Play/Repeat and every speed. Network tools should show no new `/speak` request
    for Repeat/speed changes. Editing text/language must require fresh synthesis.
    Test `09/10/2026`, `1.250,50 ₫`, `1,250.50 USD`, `Q3` and mixed-language text.
-   The application preserves digits; assess provider pronunciation manually.
+   Displayed text retains its digits. With English/Vietnamese selected, clear
+   currency amounts receive a spoken copy as described above; assess pronunciation manually.
 7. Sign out while recording, requesting permission, generating and speaking.
    Pending work/audio must clear, including other open extension setup documents.
 
@@ -1170,8 +1800,8 @@ submission path. Its answer controller sends only validated answer text through 
 `/api/voice/speak` transport. This is the bounded integration point for later
 reasoning work. Model/page content never grants action authority.
 
-Review this work on `feat/structured-page-read`, based on updated `dev` at floating-companion
-merge `8500f0d` (PR #12), which includes automatic voice replies. Merge a reviewed feature before starting a separate follow-up branch
+Review this work on `feat/visual-page-read`, based on updated `dev` at structured-page-read
+merge `60d0b13` (PR #13), which includes floating companion and automatic voice replies. Merge a reviewed feature before starting a separate follow-up branch
 for broader scope or pending acceptance. When committing a completed feature,
 split changes into focused commits with concise messages that explain their purpose
 to technical and non-technical readers. Keep related tests with their implementation.

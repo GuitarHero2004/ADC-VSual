@@ -51,6 +51,11 @@ export const COMPANION_PLAYBACK_RATE = 0.9;
 export interface VoiceControllerOptions {
   fixedPlaybackRate?: number;
   silenceAutoFinish?: boolean;
+  /** Defaults to 30 seconds; desktop recording may opt in to at most 60 seconds. */
+  maxRecordingMs?: number;
+  silenceCountdownCues?: boolean;
+  /** Desktop activation needs an audible indication that microphone capture is ready. */
+  recordingStartCue?: boolean;
 }
 
 export interface VoiceSnapshot {
@@ -107,7 +112,7 @@ export interface VoiceDependencies {
     onUnavailable: () => void,
   ): Promise<() => void>;
   now?(): number;
-  cue(): void;
+  cue(kind?: 'start' | 'countdown' | 'submit'): void;
 }
 
 interface Recording {
@@ -121,12 +126,17 @@ interface Recording {
   timer: unknown;
   silenceTimer: unknown;
   silenceDeadline: number | null;
+  lastCountdownCue: number | null;
+  lastCueAt: number;
+  ignoreActivityUntil: number;
   activityRequest: AbortController;
   stopActivity: (() => void) | undefined;
-  finishReason: 'manual' | 'duration' | 'silence';
 }
 
 const QUESTION_SILENCE_MS = 5_000;
+const COUNTDOWN_SETTLE_MS = 150;
+// Covers the 60 ms local tone, analyser sample window and a short speaker echo.
+const COUNTDOWN_ECHO_GUARD_MS = 250;
 
 function stopTracks(stream: MicrophoneStream) {
   stream.getTracks().forEach((track) => track.stop());
@@ -203,7 +213,11 @@ export class VoiceController {
   private readonly dependencies: VoiceDependencies;
   private readonly fixedPlaybackRate: number | undefined;
   private readonly silenceAutoFinish: boolean;
+  private readonly silenceCountdownCues: boolean;
+  private readonly maxRecordingMs: number;
+  private readonly recordingStartCue: boolean;
   private automaticQuestion: string | null = null;
+  private automaticQuestionGeneration: number | null = null;
 
   constructor(
     transport: VoiceTransport,
@@ -214,6 +228,17 @@ export class VoiceController {
     this.dependencies = dependencies;
     this.fixedPlaybackRate = options.fixedPlaybackRate;
     this.silenceAutoFinish = options.silenceAutoFinish ?? false;
+    this.silenceCountdownCues = options.silenceCountdownCues ?? false;
+    this.maxRecordingMs = options.maxRecordingMs ?? RECORDING_MAX_MS;
+    this.recordingStartCue = options.recordingStartCue ?? false;
+    if (
+      !Number.isInteger(this.maxRecordingMs) ||
+      this.maxRecordingMs <= 0 ||
+      this.maxRecordingMs > 60_000
+    )
+      throw new RangeError(
+        'Recording duration must be between 1 and 60000 milliseconds.',
+      );
     if (this.fixedPlaybackRate !== undefined)
       this.snapshot.playbackRate = this.fixedPlaybackRate;
   }
@@ -261,6 +286,8 @@ export class VoiceController {
     }
     recording.stopActivity = undefined;
     recording.silenceDeadline = null;
+    recording.lastCountdownCue = null;
+    recording.ignoreActivityUntil = 0;
     if (this.recording === recording)
       this.update({ silenceSecondsRemaining: null });
   }
@@ -287,7 +314,23 @@ export class VoiceController {
         this.finish('silence');
         return;
       }
-      this.update({ silenceSecondsRemaining: Math.ceil(remaining / 1_000) });
+      const seconds = Math.ceil(remaining / 1_000);
+      this.update({ silenceSecondsRemaining: seconds });
+      if (!isRecording()) return;
+      if (
+        this.silenceCountdownCues &&
+        this.snapshot.audioFeedback &&
+        recording.lastCountdownCue !== seconds &&
+        now() - recording.lastCueAt >= 1_000
+      ) {
+        recording.lastCountdownCue = seconds;
+        recording.lastCueAt = now();
+        // Set the guard before sounding the cue: local speaker activity is not
+        // user speech and must not continually extend the silence deadline.
+        recording.ignoreActivityUntil = now() + COUNTDOWN_ECHO_GUARD_MS;
+        this.cue('countdown');
+      }
+      if (!isRecording()) return;
       recording.silenceTimer = this.dependencies.schedule(
         tick,
         Math.min(remaining, 1_000),
@@ -298,12 +341,25 @@ export class VoiceController {
       const stop = await observe(
         recording.stream,
         () => {
-          if (!isRecording()) return;
+          if (!isRecording() || now() < recording.ignoreActivityUntil) return;
           const firstActivity = recording.silenceDeadline === null;
           recording.silenceDeadline = now() + QUESTION_SILENCE_MS;
+          recording.lastCountdownCue = null;
           if (this.snapshot.silenceSecondsRemaining !== 5)
             this.update({ silenceSecondsRemaining: 5 });
-          if (firstActivity)
+          if (!isRecording()) return;
+          if (this.silenceCountdownCues) {
+            this.dependencies.unschedule(recording.silenceTimer);
+            // Sustained activity postpones the first tone; resumed speech starts
+            // a fresh countdown without allowing multiple tones in one second.
+            recording.silenceTimer = this.dependencies.schedule(
+              tick,
+              Math.max(
+                COUNTDOWN_SETTLE_MS,
+                recording.lastCueAt + 1_000 - now(),
+              ),
+            );
+          } else if (firstActivity)
             recording.silenceTimer = this.dependencies.schedule(tick, 1_000);
         },
         recording.activityRequest.signal,
@@ -313,6 +369,14 @@ export class VoiceController {
       else recording.stopActivity = stop;
     } catch {
       unavailable();
+    }
+  }
+
+  private cue(kind?: 'start' | 'countdown' | 'submit') {
+    try {
+      this.dependencies.cue(kind);
+    } catch {
+      // Optional local feedback cannot interrupt recording or submission.
     }
   }
 
@@ -348,6 +412,7 @@ export class VoiceController {
 
   cancel = () => {
     this.automaticQuestion = null;
+    this.automaticQuestionGeneration = null;
     this.generation += 1;
     this.request?.abort();
     this.request = undefined;
@@ -472,9 +537,11 @@ export class VoiceController {
         timer: undefined,
         silenceTimer: undefined,
         silenceDeadline: null,
+        lastCountdownCue: null,
+        lastCueAt: Number.NEGATIVE_INFINITY,
+        ignoreActivityUntil: 0,
         activityRequest: new AbortController(),
         stopActivity: undefined,
-        finishReason: 'manual',
       };
       this.recording = recording;
       recorder.ondata = (chunk) => {
@@ -527,24 +594,35 @@ export class VoiceController {
           });
           return;
         }
-        if (this.silenceAutoFinish && this.snapshot.audioFeedback)
-          this.dependencies.cue();
-        void this.transcribe(
-          blob,
-          audioFilename(recorder.mimeType),
-          id,
-          recording.finishReason === 'silence',
-        );
+        if (this.silenceAutoFinish && this.snapshot.audioFeedback) {
+          if (!this.silenceCountdownCues) this.cue();
+          else if (this.automaticQuestionGeneration === recording.id)
+            this.cue('submit');
+        }
+        void this.transcribe(blob, audioFilename(recorder.mimeType), id);
       };
       recorder.start();
       recording.timer = this.dependencies.schedule(
         () => this.finish(true),
-        RECORDING_MAX_MS,
+        this.maxRecordingMs,
       );
       this.update({ phase: 'recording', notice: 'recording' });
+      if (
+        !this.current(id) ||
+        this.recording !== recording ||
+        recording.finished
+      )
+        return;
+      if (
+        this.snapshot.audioFeedback &&
+        (this.recordingStartCue || !this.silenceAutoFinish)
+      ) {
+        recording.ignoreActivityUntil =
+          (this.dependencies.now?.() ?? performance.now()) +
+          COUNTDOWN_ECHO_GUARD_MS;
+        this.cue('start');
+      }
       void this.observeActivity(recording);
-      if (this.snapshot.audioFeedback && !this.silenceAutoFinish)
-        this.dependencies.cue();
     } catch (error) {
       if (stream) stopTracks(stream);
       if (!this.current(id)) return;
@@ -558,11 +636,23 @@ export class VoiceController {
   };
 
   finish = (automatic: boolean | 'silence' = false) => {
+    if (automatic === false) {
+      // A deliberate review wins even if the silence timer already stopped the
+      // recorder. Keep its final chunk and any pending transcription, but disarm
+      // the later companion submission before publishing another state update.
+      this.automaticQuestion = null;
+      this.automaticQuestionGeneration = null;
+      if (
+        this.snapshot.phase === 'transcribing' &&
+        this.snapshot.notice === 'silence_reached'
+      )
+        this.update({ notice: 'transcribing' });
+    }
     const recording = this.recording;
     if (!recording || recording.finished || !this.current(recording.id)) return;
     recording.finished = true;
-    recording.finishReason =
-      automatic === 'silence' ? 'silence' : automatic ? 'duration' : 'manual';
+    this.automaticQuestionGeneration =
+      automatic === 'silence' ? recording.id : null;
     this.stopActivity(recording);
     this.dependencies.unschedule(recording.timer);
     this.update({
@@ -586,12 +676,7 @@ export class VoiceController {
     }
   };
 
-  private async transcribe(
-    blob: Blob,
-    filename: string,
-    id: number,
-    autoSubmit = false,
-  ) {
+  private async transcribe(blob: Blob, filename: string, id: number) {
     const request = new AbortController();
     this.request = request;
     try {
@@ -605,7 +690,10 @@ export class VoiceController {
       this.releaseAudio();
       if (!this.current(id)) return;
       this.automaticQuestion =
-        autoSubmit && response.transcript.trim() ? response.transcript : null;
+        this.automaticQuestionGeneration === id && response.transcript.trim()
+          ? response.transcript
+          : null;
+      this.automaticQuestionGeneration = null;
       // Preserve the provider transcript exactly, including whitespace and digits.
       this.update({
         text: response.transcript,

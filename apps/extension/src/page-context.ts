@@ -1,3 +1,10 @@
+import type { VisualSnapshot } from '@adc/contracts';
+import { VisualPageClient } from './visual-client.ts';
+import type {
+  VisualScope,
+  VisualTaskState,
+  VisualSource,
+} from './visual-protocol.ts';
 import type { GroundedSnapshot, StructuredSnapshot } from '@adc/contracts';
 import {
   OrdersPageError,
@@ -12,7 +19,8 @@ import {
   type StructuredPageResponse,
 } from './structured-adapter.ts';
 
-export type PageSnapshot = GroundedSnapshot | StructuredSnapshot;
+export type PageSnapshot =
+  GroundedSnapshot | StructuredSnapshot | VisualSnapshot;
 type PageRequest = OrdersPageRequest | StructuredPageRequest;
 type PageResponse = OrdersPageResponse | StructuredPageResponse;
 
@@ -28,6 +36,8 @@ export interface OrdersContext {
   permission?: 'granted' | 'required';
   capability?: 'unchecked' | 'supported' | 'unsupported';
   documentId?: string;
+  visual?: { eligible: boolean; permission: 'granted' | 'required' };
+  resourceKey?: string;
 }
 export type PageContextInfo = OrdersContext;
 export function validStructuredContext(
@@ -88,6 +98,120 @@ export class OrdersPageContext {
   private readonly browser: Pick<typeof chrome, 'tabs' | 'windows'> &
     Partial<Pick<typeof chrome, 'runtime'>>;
   private port: chrome.runtime.Port | null = null;
+  private visual: VisualPageClient | null = null;
+  private visualMode = false;
+  private lastContext: OrdersContext | null = null;
+  private visualClient() {
+    if (!this.browser.runtime) throw new OrdersPageError('UNAVAILABLE');
+    return (this.visual ??= new VisualPageClient(
+      { runtime: this.browser.runtime },
+      () => this.invalidate('unavailable'),
+    ));
+  }
+  private visualSource(): VisualSource {
+    const context = this.lastContext;
+    if (
+      !context ||
+      context.tabId === null ||
+      context.windowId === null ||
+      !context.origin ||
+      !context.pathname ||
+      !context.resourceKey
+    )
+      throw new OrdersPageError('UNAVAILABLE');
+    return {
+      tabId: context.tabId,
+      windowId: context.windowId,
+      origin: context.origin,
+      pathname: context.pathname,
+      resourceKey: context.resourceKey,
+      ...(context.documentId ? { documentId: context.documentId } : {}),
+    };
+  }
+  private async rememberContext(context: OrdersContext) {
+    const lookup = this.contextLookup;
+    const revision = this.revision;
+    if (this.browser.runtime?.sendMessage && context.tabId !== null) {
+      try {
+        const visual: unknown = await this.browser.runtime.sendMessage({
+          type: 'visual:context',
+          tabId: context.tabId,
+        });
+        if (
+          visual &&
+          typeof visual === 'object' &&
+          'eligible' in visual &&
+          typeof visual.eligible === 'boolean' &&
+          'permission' in visual &&
+          (visual.permission === 'granted' ||
+            visual.permission === 'required') &&
+          (!visual.eligible ||
+            ('resourceKey' in visual &&
+              typeof visual.resourceKey === 'string' &&
+              /^[a-f0-9]{64}$/u.test(visual.resourceKey)))
+        )
+          context = {
+            ...context,
+            ...('resourceKey' in visual &&
+            typeof visual.resourceKey === 'string'
+              ? { resourceKey: visual.resourceKey }
+              : {}),
+            visual: {
+              eligible: visual.eligible,
+              permission: visual.permission,
+            },
+          };
+      } catch {
+        /* No capture access demonstrated. */
+      }
+    }
+    if (
+      this.disposed ||
+      lookup !== this.contextLookup ||
+      revision !== this.revision
+    )
+      throw new OrdersPageError('CONTEXT_CHANGED');
+    this.lastContext = context;
+    return context;
+  }
+  setTaskState(state: VisualTaskState) {
+    try {
+      this.visualClient().setTaskState(this.visualSource(), state);
+    } catch {
+      /* Source is not available yet. */
+    }
+  }
+  async captureVisual(
+    scope: VisualScope,
+    signal: AbortSignal,
+    expectedOrigin?: string,
+    expectedTabId?: number,
+  ) {
+    const source = this.visualSource();
+    if (
+      (expectedOrigin !== undefined && expectedOrigin !== source.origin) ||
+      (expectedTabId !== undefined && expectedTabId !== source.tabId)
+    )
+      throw new OrdersPageError('CONTEXT_CHANGED');
+    this.visualMode = true;
+    const revision = this.revision;
+    const result = await this.visualClient().capture(source, scope, signal);
+    signal.throwIfAborted();
+    if (
+      this.disposed ||
+      revision !== this.revision ||
+      result.snapshot.resource_key !== source.resourceKey
+    )
+      throw new OrdersPageError('CONTEXT_CHANGED');
+    return result;
+  }
+  async verifyVisual(snapshot: VisualSnapshot, signal: AbortSignal) {
+    return (
+      !this.disposed &&
+      !!this.visual &&
+      (await this.visual.verify(snapshot, signal))
+    );
+  }
   // Observe navigation before permission/capture creates a content-script port.
   private activeTabId: number | null = null;
   private tabId: number | null = null;
@@ -150,6 +274,11 @@ export class OrdersPageContext {
     id: number,
     change: { url?: string; status?: string },
   ) => {
+    // A bound top-document port disconnects when that document is replaced,
+    // including a same-URL reload. Iframe loading can also change tab status;
+    // it must not invalidate a captured visual moment. Without that observer,
+    // retain the conservative loading-status fallback.
+    if (this.visualMode && this.port && change.url === undefined) return;
     if (
       id === this.activeTabId &&
       (change.url !== undefined ||
@@ -229,7 +358,7 @@ export class OrdersPageContext {
         if (validStructuredContext(value, tab.id, tab.windowId)) {
           if (value.permission === 'granted' && !this.port)
             this.openPort(value);
-          return value;
+          return await this.rememberContext(value);
         }
       }
       const context: OrdersContext = {
@@ -243,7 +372,7 @@ export class OrdersPageContext {
           ? { title: tab.title.slice(0, 300) }
           : {}),
       };
-      return context;
+      return await this.rememberContext(context);
     } catch {
       return {
         supported: false,
@@ -309,6 +438,7 @@ export class OrdersPageContext {
         response.type === 'orders:changed' ||
         response.type === 'structured:changed'
       ) {
+        if (this.visualMode && response.type === 'structured:changed') return;
         if (!this.documentKey || response.document_key === this.documentKey)
           this.invalidate('page');
         return;
@@ -392,6 +522,7 @@ export class OrdersPageContext {
     expectedOrigin: string,
     expectedTabId?: number,
   ): Promise<PageSnapshot> {
+    this.visualMode = false;
     const current = await this.getContext();
     if (!current.supported) throw new OrdersPageError('UNSUPPORTED_PAGE');
     const revision = this.revision;
@@ -436,6 +567,8 @@ export class OrdersPageContext {
   }
 
   async verify(snapshot: PageSnapshot, signal: AbortSignal): Promise<boolean> {
+    if ('source_kind' in snapshot && snapshot.source_kind === 'visual_page')
+      return this.verifyVisual(snapshot, signal);
     if (!this.port || snapshot.document_key !== this.documentKey) return false;
     const revision = this.revision;
     try {
@@ -516,6 +649,8 @@ export class OrdersPageContext {
   }
 
   reset() {
+    this.visual?.reset();
+    this.visualMode = false;
     this.disconnect();
     this.invalidate('unavailable');
   }
@@ -524,6 +659,9 @@ export class OrdersPageContext {
     if (this.disposed) return;
     this.disposed = true;
     this.reset();
+    this.visual?.dispose();
+    this.visual = null;
+    this.lastContext = null;
     this.listeners.clear();
     this.browser.tabs.onActivated.removeListener(this.onActivated);
     this.browser.tabs.onUpdated.removeListener(this.onUpdated);

@@ -9,6 +9,21 @@ function setup(context: Partial<OrdersContext> = {}) {
   const messages = new Set<(value: unknown) => void>();
   const disconnects = new Set<() => void>();
   const posted: unknown[] = [];
+  const visualMessages = new Set<(value: unknown) => void>();
+  const visualDisconnects = new Set<() => void>();
+  const visualPosted: unknown[] = [];
+  const visualPort = {
+    onMessage: {
+      addListener: (fn: (value: unknown) => void) => visualMessages.add(fn),
+    },
+    onDisconnect: {
+      addListener: (fn: () => void) => visualDisconnects.add(fn),
+    },
+    postMessage: (value: unknown) => visualPosted.push(value),
+    disconnect: () => {
+      for (const listener of visualDisconnects) listener();
+    },
+  } as unknown as chrome.runtime.Port;
   let opens = 0;
   const port = {
     onMessage: {
@@ -36,7 +51,7 @@ function setup(context: Partial<OrdersContext> = {}) {
       ...context,
     },
     {
-      runtime: {},
+      runtime: { connect: () => visualPort },
       sidePanel: {
         open: () => {
           opens++;
@@ -48,6 +63,7 @@ function setup(context: Partial<OrdersContext> = {}) {
   return {
     client,
     posted,
+    visualPosted,
     port,
     get opens() {
       return opens;
@@ -198,6 +214,67 @@ const article: StructuredSnapshot = {
   ],
   coverage: { partial: false, limitations: [], included_sections: ['s1'] },
 };
+
+test('visual source identity survives an omitted structured probe ID but rejects a different proven document', async () => {
+  const initial = {
+    ...structuredContext,
+    visual: { eligible: true, permission: 'granted' as const },
+    resourceKey: 'a'.repeat(64),
+  };
+  const app = setup(initial);
+  const page = app.client.createPage();
+  const reasons: string[] = [];
+  page.subscribe((reason) => reasons.push(reason));
+  const abort = new AbortController();
+  try {
+    const pending = page.captureVisual('current_view', abort.signal);
+    const cancelled = assert.rejects(pending, { name: 'AbortError' });
+    assert.equal(
+      (app.visualPosted[0] as { type: string }).type,
+      'visual:capture',
+    );
+    const missingProbeIdentity = { ...initial } as Partial<OrdersContext>;
+    delete missingProbeIdentity.documentId;
+    app.receive({
+      type: 'floating:context',
+      context: {
+        ...missingProbeIdentity,
+        supported: false,
+        permission: 'required',
+        capability: 'unchecked',
+        reason: 'permission_required',
+      },
+    });
+    assert.deepEqual(
+      reasons,
+      [],
+      'A missing structured grant does not replace the visual source',
+    );
+    const context = await page.getContext();
+    assert.equal(context.documentId, initial.documentId);
+    assert.equal(
+      context.permission,
+      'required',
+      'Structured access is not falsely granted',
+    );
+    assert.deepEqual(context.visual, initial.visual);
+    app.receive({
+      type: 'floating:context',
+      context: { ...initial, documentId: crypto.randomUUID() },
+    });
+    assert.deepEqual(
+      reasons,
+      ['page'],
+      'A different document still invalidates immediately',
+    );
+    abort.abort();
+    await cancelled;
+  } finally {
+    abort.abort();
+    page.dispose();
+    app.client.dispose();
+  }
+});
 
 test('explicit page check requests fresh worker metadata once; standby and inspection-free asking need no capture step', async () => {
   const app = setup({
