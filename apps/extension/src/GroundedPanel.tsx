@@ -1,6 +1,7 @@
 import {
   GROUNDED_QUESTION_MAX_LENGTH,
   unicodeLength,
+  VISUAL_LIMITS,
   type GroundedRow,
   type UiLanguage,
 } from '@adc/contracts';
@@ -26,6 +27,7 @@ import { ordersOrigins } from './config-values.ts';
 import {
   GroundedController,
   isStructuredSnapshot,
+  isVisualSnapshot,
 } from './grounded-controller.ts';
 import { createGroundedTransport } from './grounded-transport.ts';
 import { groundedText } from './grounded-strings.ts';
@@ -36,6 +38,10 @@ import {
   unsupportedPageText,
 } from './structured-strings.ts';
 import { StructuredSource } from './StructuredSource.tsx';
+import { VisualSource } from './VisualSource.tsx';
+import { visualText, visualError } from './visual-strings.ts';
+import { canAskPage, chooseReadingMethod } from './reading-method.ts';
+import { readVisualNotice, saveVisualNotice } from './visual-notice.ts';
 import {
   ANSWER_PREFERENCES_KEY,
   loadAnswerSpeech,
@@ -68,6 +74,7 @@ export interface CompanionControls {
 interface Mounted {
   controller: GroundedController;
   speech: VoiceController;
+  speechDeadline: { current: number | null };
 }
 
 export function GroundedPanel(props: Props) {
@@ -76,9 +83,49 @@ export function GroundedPanel(props: Props) {
   const questionVoice = useRef<VoiceController | null>(null);
   const [mounted, setMounted] = useState<Mounted | null>(null);
   useEffect(() => {
+    const speechDeadline = { current: null as number | null };
     const speech = new VoiceController(
       {
-        speak: (...args) => latest.current.voiceTransport.speak(...args),
+        speak: async (text, language, signal) => {
+          const result = controller.getSnapshot().result;
+          if (
+            !result ||
+            !('source_kind' in result) ||
+            result.source_kind !== 'visual_page'
+          )
+            return latest.current.voiceTransport.speak(text, language, signal);
+          const remaining =
+            speechDeadline.current === null
+              ? VISUAL_LIMITS.speechTimeoutMs
+              : Math.min(
+                  VISUAL_LIMITS.speechTimeoutMs,
+                  speechDeadline.current - Date.now(),
+                );
+          speechDeadline.current = null;
+          if (remaining <= 0)
+            return Promise.reject(
+              Object.assign(new Error('Speech deadline exceeded'), {
+                code: 'TIMEOUT',
+              }),
+            );
+          const timeout = AbortSignal.timeout(Math.ceil(remaining));
+          const bounded = AbortSignal.any([signal, timeout]);
+          try {
+            const audio = await latest.current.voiceTransport.speak(
+              text,
+              language,
+              bounded,
+            );
+            bounded.throwIfAborted();
+            return audio;
+          } catch (error) {
+            if (!signal.aborted && timeout.aborted)
+              throw Object.assign(new Error('Speech deadline exceeded'), {
+                code: 'TIMEOUT',
+              });
+            throw error;
+          }
+        },
         transcribe: (...args) =>
           latest.current.voiceTransport.transcribe(...args),
       },
@@ -114,7 +161,11 @@ export function GroundedPanel(props: Props) {
       },
       { continueAnswerAcrossTabs: !!latest.current.continueAnswerAcrossTabs },
     );
-    setMounted({ controller, speech });
+    setMounted({ controller, speech, speechDeadline });
+    void readVisualNotice(latest.current.sessionKey).then((accepted) => {
+      // A slow storage read must not undo an acknowledgement made in this UI.
+      if (accepted) controller.setVisualNoticeAccepted(true);
+    });
     void controller.refreshContext();
     const end = () => {
       controller.clearTransient();
@@ -148,6 +199,7 @@ export function GroundedPanel(props: Props) {
 function Companion({
   controller,
   speech,
+  speechDeadline,
   questionVoice,
   ...props
 }: Props &
@@ -162,6 +214,7 @@ function Companion({
   const structured = state.context?.sourceKind === 'structured_page';
   const t = companionText(props.language, structured);
   const s = structuredText[props.language];
+  const v = visualText[props.language];
   const audio = useSyncExternalStore(
     speech.subscribe,
     speech.getSnapshot,
@@ -180,13 +233,18 @@ function Companion({
   const surface = useRef<HTMLDivElement>(null);
   const resultText = state.result?.text ?? '';
   const resultLanguage = state.resultLanguage ?? 'en';
-  const allowed =
-    !!state.context?.supported && state.context.permission !== 'required';
+  const allowed = canAskPage(state.context);
+  const visualCandidate =
+    !!state.context?.visual?.eligible &&
+    chooseReadingMethod(state.question, state.context).method === 'visual_page';
+  const [noticeStatus, setNoticeStatus] = useState('');
   const unsupportedMessage = unsupportedPageText(props.language, state.context);
-  const askUnavailable = !state.context?.supported
-    ? state.context?.permission === 'required'
-      ? s.askAccess
-      : s.askUnsupported
+  const askUnavailable = !allowed
+    ? state.context?.visual?.eligible
+      ? v.access
+      : state.context?.permission === 'required'
+        ? s.askAccess
+        : s.askUnsupported
     : null;
   const busy = state.phase === 'reading' || state.phase === 'understanding';
   useEffect(() => {
@@ -238,7 +296,11 @@ function Companion({
           'recording',
           'transcribing',
         ].includes(next.phase);
-        if (capturing && !wasCapturing) props.onActivity?.();
+        if (capturing && !wasCapturing) {
+          // Supersede the old answer without cancelling the microphone just started.
+          controller.cancel(false);
+          props.onActivity?.();
+        }
         wasCapturing = capturing;
         if (capturing) {
           setHeldVoiceQuestion(null);
@@ -251,8 +313,7 @@ function Companion({
           const current = controller.getSnapshot();
           if (
             !controller.busy &&
-            current.context?.supported &&
-            current.context.permission !== 'required' &&
+            canAskPage(current.context) &&
             unicodeLength(automaticQuestion) <= GROUNDED_QUESTION_MAX_LENGTH
           ) {
             props.onActivity?.();
@@ -263,7 +324,7 @@ function Companion({
             void controller.ask();
           } else
             setHeldVoiceQuestion(
-              !current.context?.supported
+              !canAskPage(current.context)
                 ? 'page'
                 : unicodeLength(automaticQuestion) >
                     GROUNDED_QUESTION_MAX_LENGTH
@@ -288,6 +349,11 @@ function Companion({
     return props.onReady(
       () => {
         if (controller.busy) controller.cancel();
+        else if (
+          controller.getSnapshot().question.trim() &&
+          !canAskPage(controller.getSnapshot().context)
+        )
+          void controller.refreshContext(true);
         else if (
           ['generating', 'speaking'].includes(speech.getSnapshot().phase)
         )
@@ -316,8 +382,14 @@ function Companion({
     if (!fresh) return;
     speech.setLanguage(fresh.answer_language);
     speech.editText(fresh.text);
+    speechDeadline.current =
+      speech.getSnapshot().speechEnabled &&
+      'source_kind' in fresh &&
+      fresh.source_kind === 'visual_page'
+        ? controller.getSpeechDeadline()
+        : null;
     if (speech.getSnapshot().speechEnabled) void speech.readBack();
-  }, [controller, speech, state.result]);
+  }, [controller, speech, state.result, speechDeadline]);
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -343,18 +415,22 @@ function Companion({
     return () => window.removeEventListener('storage', updated);
   }, [speech]);
   const status = state.error
-    ? companionError(props.language, state.error, structured)
-    : state.phase === 'stale'
-      ? t.previous
-      : state.phase === 'ready'
-        ? state.result?.status === 'answer'
-          ? t.answerReady
-          : state.result
-            ? t.clarification
-            : t.tableReady
-        : state.phase === 'idle'
-          ? ''
-          : t[state.phase === 'error' ? 'idle' : state.phase];
+    ? ((state.reader === 'visual_page'
+        ? visualError(props.language, state.error)
+        : null) ?? companionError(props.language, state.error, structured))
+    : state.reader === 'visual_page' && state.phase === 'reading'
+      ? v.capturing
+      : state.phase === 'stale'
+        ? t.previous
+        : state.phase === 'ready'
+          ? state.result?.status === 'answer'
+            ? t.answerReady
+            : state.result
+              ? t.clarification
+              : t.tableReady
+          : state.phase === 'idle'
+            ? ''
+            : t[state.phase === 'error' ? 'idle' : state.phase];
   const playbackActive = ['generating', 'speaking'].includes(audio.phase);
   const focusQuestion = () =>
     surface.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus();
@@ -415,35 +491,46 @@ function Companion({
               ? t.checking
               : state.context.reason === 'unavailable'
                 ? t.unavailablePage
-                : !state.context.supported
-                  ? structured
-                    ? state.context.permission === 'required'
-                      ? s.activation
-                      : unsupportedMessage
-                    : t.unsupported
-                  : t.readyPage}
+                : state.context.visual?.eligible && !state.context.supported
+                  ? state.context.visual.permission === 'granted'
+                    ? v.ready
+                    : v.access
+                  : !state.context.supported
+                    ? structured
+                      ? state.context.permission === 'required'
+                        ? s.activation
+                        : unsupportedMessage
+                      : t.unsupported
+                    : t.readyPage}
         </p>
         {structured &&
           state.context &&
           !state.context.supported &&
+          !state.context.visual?.eligible &&
           state.context.permission !== 'required' && (
             <p className="field-help">{s.unsupportedHelp}</p>
           )}
-        {!state.context?.supported && !structured && (
-          <div id="page-permission-help">
-            <p>{t.permissionHelp}</p>
-            <ul>
-              {supportedOrigins.map((origin) => (
-                <li key={origin}>
-                  <a href={`${origin}/orders`} target="_blank" rel="noreferrer">
-                    {new URL(origin).host}/orders
-                  </a>
-                </li>
-              ))}
-            </ul>
-            <p>{t.recheckHelp}</p>
-          </div>
-        )}
+        {!state.context?.supported &&
+          !structured &&
+          !state.context?.visual?.eligible && (
+            <div id="page-permission-help">
+              <p>{t.permissionHelp}</p>
+              <ul>
+                {supportedOrigins.map((origin) => (
+                  <li key={origin}>
+                    <a
+                      href={`${origin}/orders`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {new URL(origin).host}/orders
+                    </a>
+                  </li>
+                ))}
+              </ul>
+              <p>{t.recheckHelp}</p>
+            </div>
+          )}
         <button
           type="button"
           disabled={busy}
@@ -458,8 +545,32 @@ function Companion({
         }
         className="question-composer"
       >
-        <p className="field-help">{t.processingNotice}</p>
-        {state.context && !state.context.supported && (
+        <p className="field-help">
+          {visualCandidate ? v.ready : t.processingNotice}
+        </p>
+        {visualCandidate && (
+          <section aria-labelledby="visual-notice-heading" className="notice">
+            <h3 id="visual-notice-heading">{v.noticeTitle}</h3>
+            <p>{v.notice}</p>
+            {!state.visualNoticeAccepted && (
+              <button
+                type="button"
+                onClick={() => {
+                  controller.setVisualNoticeAccepted(true);
+                  setNoticeStatus(v.accepted);
+                  focusQuestion();
+                  void saveVisualNotice(props.sessionKey).catch(() =>
+                    setNoticeStatus(v.unavailableStorage),
+                  );
+                }}
+              >
+                {v.acknowledge}
+              </button>
+            )}
+            <p role="status">{noticeStatus}</p>
+          </section>
+        )}
+        {state.context && !allowed && (
           <p className="field-help">{s.draftOnly}</p>
         )}
         {state.snapshot &&
@@ -547,7 +658,9 @@ function Companion({
             type="button"
             disabled={busy || voiceBusy}
             onClick={() => {
-              questionVoice.current?.editText(t.sampleText);
+              questionVoice.current?.editText(
+                visualCandidate ? v.sample : t.sampleText,
+              );
               focusQuestion();
             }}
           >
@@ -558,6 +671,14 @@ function Companion({
       <p role="status" aria-atomic="true" className="status">
         {status}
       </p>
+      {state.errorRequestId && (
+        <details className="field-help">
+          <summary>{v.requestDetails}</summary>
+          <p>
+            {v.requestReference}: {state.errorRequestId}
+          </p>
+        </details>
+      )}
       {heldVoiceQuestion && (
         <div>
           <p role="status" aria-atomic="true">
@@ -579,6 +700,33 @@ function Companion({
           operation="answer"
         />
       )}
+      {state.scopeRecovery && (
+        <div className="notice">
+          <p>{v.narrowing}</p>
+          <div className="controls">
+            <button
+              type="button"
+              onClick={() => {
+                props.onActivity?.();
+                void controller.askNarrower('current_view');
+              }}
+            >
+              {v.readCurrent}
+            </button>
+            {state.error !== 'VISUAL_UNSUPPORTED' && (
+              <button
+                type="button"
+                onClick={() => {
+                  props.onActivity?.();
+                  void controller.askNarrower('first_portion');
+                }}
+              >
+                {v.readFirst}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       {state.snapshot && state.stale && <p className="notice">{t.previous}</p>}
       {state.result && (
         <>
@@ -597,6 +745,7 @@ function Companion({
               {state.result.text}
             </p>
             {'source_kind' in state.result &&
+              state.result.source_kind === 'structured_page' &&
               state.snapshot &&
               isStructuredSnapshot(state.snapshot) && (
                 <p className="field-help">
@@ -629,6 +778,9 @@ function Companion({
                 }
                 onClick={() => {
                   controller.discardAutomaticSpeech();
+                  // A deliberate retry/read is a new speech action, not the
+                  // original submitted task's automatic preparation deadline.
+                  speechDeadline.current = null;
                   if (playbackActive) speech.stopPlayback();
                   else if (!allowed) return;
                   else {
@@ -688,62 +840,79 @@ function Companion({
                 operation="speak"
               />
             )}
-            {state.result.status === 'answer' && 'evidence' in state.result && (
-              <>
-                <p className="field-help">{t.capturedOnly}</p>
-                <details ref={evidenceDetails} className="evidence-disclosure">
-                  <summary>{t.viewEvidence}</summary>
-                  <h3 id="evidence-heading">{t.evidence}</h3>
-                  <p>
-                    {t.region}: {state.result.evidence.region}. {t.year}:{' '}
-                    {state.result.evidence.year}. {t.unit}.
-                  </p>
-                  <SourceTable
-                    rows={state.result.evidence.rows}
-                    caption={state.result.evidence.table_title}
-                    language={props.language}
-                    sourceLanguage={
-                      state.snapshot && !isStructuredSnapshot(state.snapshot)
-                        ? state.snapshot.locale
-                        : 'en-US'
-                    }
-                  />
-                  <p lang={resultLanguage}>
-                    {state.result.evidence.calculation.description}
-                  </p>
-                  {state.result.evidence.calculation.limitation && (
-                    <p lang={resultLanguage}>
-                      {state.result.evidence.calculation.limitation}
-                    </p>
-                  )}
-                  <p>
-                    {state.result.evidence.origin}
-                    {state.result.evidence.pathname}
-                  </p>
-                  <p>
-                    {t.captured}:{' '}
-                    <time dateTime={state.result.evidence.captured_at}>
-                      {new Date(
-                        state.result.evidence.captured_at,
-                      ).toLocaleString(props.language)}
-                    </time>
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (evidenceDetails.current) {
-                        evidenceDetails.current.open = false;
-                        evidenceDetails.current
-                          .querySelector('summary')
-                          ?.focus();
-                      }
-                    }}
+            {state.result.status === 'answer' &&
+              'evidence' in state.result &&
+              !('source_kind' in state.result) && (
+                <>
+                  <p className="field-help">{t.capturedOnly}</p>
+                  <details
+                    ref={evidenceDetails}
+                    className="evidence-disclosure"
                   >
-                    {t.closeEvidence}
-                  </button>
-                </details>
-              </>
-            )}
+                    <summary>{t.viewEvidence}</summary>
+                    <h3 id="evidence-heading">{t.evidence}</h3>
+                    <p>
+                      {t.region}: {state.result.evidence.region}. {t.year}:{' '}
+                      {state.result.evidence.year}. {t.unit}.
+                    </p>
+                    <SourceTable
+                      rows={state.result.evidence.rows}
+                      caption={state.result.evidence.table_title}
+                      language={props.language}
+                      sourceLanguage={
+                        state.snapshot &&
+                        !isStructuredSnapshot(state.snapshot) &&
+                        !isVisualSnapshot(state.snapshot)
+                          ? state.snapshot.locale
+                          : 'en-US'
+                      }
+                    />
+                    <p lang={resultLanguage}>
+                      {state.result.evidence.calculation.description}
+                    </p>
+                    {state.result.evidence.calculation.limitation && (
+                      <p lang={resultLanguage}>
+                        {state.result.evidence.calculation.limitation}
+                      </p>
+                    )}
+                    <p>
+                      {state.result.evidence.origin}
+                      {state.result.evidence.pathname}
+                    </p>
+                    <p>
+                      {t.captured}:{' '}
+                      <time dateTime={state.result.evidence.captured_at}>
+                        {new Date(
+                          state.result.evidence.captured_at,
+                        ).toLocaleString(props.language)}
+                      </time>
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (evidenceDetails.current) {
+                          evidenceDetails.current.open = false;
+                          evidenceDetails.current
+                            .querySelector('summary')
+                            ?.focus();
+                        }
+                      }}
+                    >
+                      {t.closeEvidence}
+                    </button>
+                  </details>
+                </>
+              )}
+            {'source_kind' in state.result &&
+              state.result.source_kind === 'visual_page' &&
+              state.snapshot &&
+              isVisualSnapshot(state.snapshot) && (
+                <VisualSource
+                  snapshot={state.snapshot}
+                  response={state.result}
+                  language={props.language}
+                />
+              )}
             {'evidence_ids' in state.result &&
               state.result.evidence_ids.length > 0 &&
               state.snapshot &&
@@ -765,7 +934,12 @@ function Companion({
         <p>{t.empty}</p>
         <button
           type="button"
-          disabled={!allowed || busy || voiceBusy}
+          disabled={
+            !state.context?.supported ||
+            state.context.permission === 'required' ||
+            busy ||
+            voiceBusy
+          }
           onClick={() => {
             props.onActivity?.();
             void controller.inspect();
@@ -779,30 +953,32 @@ function Companion({
             language={props.language}
           />
         )}
-        {state.snapshot && !isStructuredSnapshot(state.snapshot) && (
-          <section aria-labelledby="source-table-heading">
-            <h3 id="source-table-heading">{t.table}</h3>
-            {state.stale && <p className="notice">{t.previous}</p>}
-            <p>
-              {t.region}: {state.snapshot.region}. {t.year}:{' '}
-              {state.snapshot.year}. {t.unit}.
-            </p>
-            <SourceTable
-              rows={state.snapshot.rows}
-              caption={state.snapshot.table_title}
-              language={props.language}
-              sourceLanguage={state.snapshot.locale}
-            />
-            <p>
-              {t.captured}:{' '}
-              <time dateTime={state.snapshot.captured_at}>
-                {new Date(state.snapshot.captured_at).toLocaleString(
-                  props.language,
-                )}
-              </time>
-            </p>
-          </section>
-        )}
+        {state.snapshot &&
+          !isStructuredSnapshot(state.snapshot) &&
+          !isVisualSnapshot(state.snapshot) && (
+            <section aria-labelledby="source-table-heading">
+              <h3 id="source-table-heading">{t.table}</h3>
+              {state.stale && <p className="notice">{t.previous}</p>}
+              <p>
+                {t.region}: {state.snapshot.region}. {t.year}:{' '}
+                {state.snapshot.year}. {t.unit}.
+              </p>
+              <SourceTable
+                rows={state.snapshot.rows}
+                caption={state.snapshot.table_title}
+                language={props.language}
+                sourceLanguage={state.snapshot.locale}
+              />
+              <p>
+                {t.captured}:{' '}
+                <time dateTime={state.snapshot.captured_at}>
+                  {new Date(state.snapshot.captured_at).toLocaleString(
+                    props.language,
+                  )}
+                </time>
+              </p>
+            </section>
+          )}
       </details>
       {props.settingsTarget === undefined
         ? speechPreferences
@@ -812,7 +988,7 @@ function Companion({
       <div className="return-controls">
         <button
           type="button"
-          disabled={!state.context?.supported}
+          disabled={!state.context?.origin}
           onClick={() => {
             void controller
               .returnToPage()

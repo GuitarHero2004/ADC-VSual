@@ -1,3 +1,10 @@
+import type { VisualSnapshot } from '@adc/contracts';
+import { VisualPageClient } from './visual-client.ts';
+import type {
+  VisualScope,
+  VisualTaskState,
+  VisualSource,
+} from './visual-protocol.ts';
 import {
   OrdersPageError,
   parseOrdersPageResponse,
@@ -32,6 +39,37 @@ export type { FloatingEvent } from './floating-protocol.ts';
 /** The frame never accepts page-window messages or chooses its own source tab. */
 export class FloatingClient {
   private bound = true;
+  private visualMode = false;
+  private visual: VisualPageClient | null = null;
+  private visualClient() {
+    return (this.visual ??= new VisualPageClient(this.browser, () =>
+      this.emit({ type: 'cancel' }),
+    ));
+  }
+  private visualSource(): VisualSource {
+    if (
+      this.context.tabId === null ||
+      this.context.windowId === null ||
+      !this.context.origin ||
+      !this.context.pathname ||
+      !this.context.resourceKey
+    )
+      throw new OrdersPageError('UNAVAILABLE');
+    return {
+      tabId: this.context.tabId,
+      windowId: this.context.windowId,
+      origin: this.context.origin,
+      pathname: this.context.pathname,
+      resourceKey: this.context.resourceKey,
+      ...(this.context.documentId
+        ? { documentId: this.context.documentId }
+        : {}),
+    };
+  }
+  private setVisualMode(active: boolean) {
+    this.visualMode = active;
+    this.post({ type: 'floating:visual-mode', active });
+  }
   private readyState = false;
   private revision = 0;
   private readonly listeners = new Set<(event: FloatingEvent) => void>();
@@ -101,6 +139,8 @@ export class FloatingClient {
     void this.browser.runtime.lastError;
     if (!this.bound) return;
     this.bound = false;
+    this.visual?.dispose();
+    this.visual = null;
     clearInterval(this.heartbeat);
     this.activations.length = 0;
     this.resume = null;
@@ -200,7 +240,8 @@ export class FloatingClient {
       response.type === 'orders:changed' ||
       response.type === 'structured:changed'
     ) {
-      this.invalidate('page');
+      if (!this.visualMode || response.type !== 'structured:changed')
+        this.invalidate('page');
       return;
     }
     const pending = this.pending.get(response.id);
@@ -216,17 +257,47 @@ export class FloatingClient {
   };
   private validContext(value: unknown): value is OrdersContext {
     return (
-      validStructuredContext(
-        value,
-        this.context.tabId ?? undefined,
-        this.context.windowId ?? undefined,
-      ) &&
+      !!value &&
+      typeof value === 'object' &&
+      (this.context.sourceKind === 'structured_page'
+        ? validStructuredContext(
+            value,
+            this.context.tabId ?? undefined,
+            this.context.windowId ?? undefined,
+          )
+        : 'tabId' in value &&
+          value.tabId === this.context.tabId &&
+          'windowId' in value &&
+          value.windowId === this.context.windowId &&
+          'origin' in value &&
+          'pathname' in value) &&
+      'origin' in value &&
       value.origin === this.context.origin &&
+      'pathname' in value &&
       value.pathname === this.context.pathname
     );
   }
   private updateContext(context: OrdersContext) {
-    const changed = JSON.stringify(this.context) !== JSON.stringify(context);
+    // A failed structured-reader probe can omit its document ID without the
+    // trusted floating document being replaced. Preserve the known identity
+    // for visual observations; permission metadata still updates separately.
+    // Real replacement is signalled by a different ID, URL/resource, or port
+    // lifetime and continues to invalidate the task.
+    if (this.visualMode && this.context.documentId && !context.documentId)
+      context = { ...context, documentId: this.context.documentId };
+    const identity = (value: OrdersContext) => ({
+      tabId: value.tabId,
+      windowId: value.windowId,
+      origin: value.origin,
+      pathname: value.pathname,
+      documentId: value.documentId,
+      visual: value.visual,
+      resourceKey: value.resourceKey,
+    });
+    const changed = this.visualMode
+      ? JSON.stringify(identity(this.context)) !==
+        JSON.stringify(identity(context))
+      : JSON.stringify(this.context) !== JSON.stringify(context);
     this.context = context;
     if (changed) this.invalidate('page');
   }
@@ -348,6 +419,8 @@ export class FloatingClient {
     this.invalidations.clear();
   }
   private reset() {
+    this.visual?.reset();
+    this.visualMode = false;
     this.post({ type: 'floating:reset' });
     this.invalidate('unavailable');
   }
@@ -384,6 +457,49 @@ export class FloatingClient {
       if (disposed || !this.bound) throw new OrdersPageError('UNAVAILABLE');
     };
     return {
+      setTaskState: (state: VisualTaskState) => {
+        if (disposed || !this.bound) return;
+        try {
+          this.visualClient().setTaskState(this.visualSource(), state);
+        } catch {
+          /* Source is not available yet. */
+        }
+      },
+      captureVisual: async (
+        scope: VisualScope,
+        signal: AbortSignal,
+        expectedOrigin?: string,
+        expectedTabId?: number,
+      ) => {
+        available();
+        const source = this.visualSource();
+        if (
+          (expectedOrigin !== undefined && expectedOrigin !== source.origin) ||
+          (expectedTabId !== undefined && expectedTabId !== source.tabId)
+        )
+          throw new OrdersPageError('CONTEXT_CHANGED');
+        this.setVisualMode(true);
+        const revision = this.revision;
+        const result = await this.visualClient().capture(source, scope, signal);
+        signal.throwIfAborted();
+        available();
+        if (
+          revision !== this.revision ||
+          result.snapshot.resource_key !== source.resourceKey
+        )
+          throw new OrdersPageError('CONTEXT_CHANGED');
+        return result;
+      },
+      verifyVisual: async (snapshot: VisualSnapshot, signal: AbortSignal) => {
+        if (
+          disposed ||
+          !this.bound ||
+          snapshot.tab_id !== this.context.tabId ||
+          snapshot.window_id !== this.context.windowId
+        )
+          return false;
+        return this.visualClient().verify(snapshot, signal);
+      },
       prepareContext: async (): Promise<OrdersContext> => {
         available();
         const context = await this.preparePage();
@@ -408,6 +524,7 @@ export class FloatingClient {
         expectedTabId?: number,
       ): Promise<PageSnapshot> => {
         available();
+        if (this.visualMode) this.setVisualMode(false);
         if (!this.context.supported)
           throw new OrdersPageError('UNSUPPORTED_PAGE');
         if (
@@ -453,6 +570,13 @@ export class FloatingClient {
         snapshot: PageSnapshot,
         signal: AbortSignal,
       ): Promise<boolean> => {
+        if ('source_kind' in snapshot && snapshot.source_kind === 'visual_page')
+          return (
+            !disposed &&
+            this.bound &&
+            !!this.visual &&
+            this.visual.verify(snapshot, signal)
+          );
         if (
           disposed ||
           !this.bound ||
