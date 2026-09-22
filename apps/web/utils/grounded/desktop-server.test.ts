@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, mock, test } from 'node:test';
-import { VISUAL_LIMITS, desktopResponseSchema } from '@adc/contracts';
+import {
+  VISUAL_LIMITS,
+  desktopRequestSchema,
+  desktopResponseSchema,
+  desktopSpeechText,
+} from '@adc/contracts';
 import { VoiceError } from '../voice/errors.ts';
 import { requireGroundedConfiguration } from './server.ts';
 import { visualRouteVerification } from './visual-server.ts';
@@ -226,4 +231,139 @@ test('desktop cancelled generation discards a late successful response', async (
   finish(providerResponse());
   await rejected;
   assert.equal(requests.length, 1);
+});
+
+const guidedAnswer = {
+  ...desktopModelAnswer,
+  follow_ups: [
+    { question: 'Which colour fills this view?', evidence_indices: [1] },
+    { question: 'What can be seen near its edges?', evidence_indices: [1] },
+  ],
+};
+
+test('desktop returns evidenced follow-ups in the same provider request', async () => {
+  respond = () => providerResponse(guidedAnswer);
+  const input = await desktopFixture();
+  const answer = await answerDesktopWindow(input, new AbortController().signal);
+  assert.deepEqual(answer.follow_ups, guidedAnswer.follow_ups);
+  assert.equal(requests.length, 1);
+  const body = await requests[0]!.json();
+  assert.equal(body.text.format.name, 'desktop_window_answer');
+  assert.ok(body.text.format.schema.required.includes('follow_ups'));
+  assert.match(body.instructions, /never actions, navigation or calculations/);
+  assert.match(body.instructions, /one-based positions/);
+  assert.match(desktopSpeechText(answer), /1\. Which colour/);
+  assert.match(desktopSpeechText(answer), /2\. What can/);
+  assert.ok(Array.from(desktopSpeechText(answer)).length <= 1000);
+});
+
+test('desktop rejects unsupported suggestion references and excessive speech', async () => {
+  const input = await desktopFixture();
+  for (const value of [
+    {
+      ...guidedAnswer,
+      follow_ups: [{ question: 'What is this?', evidence_indices: [2] }],
+    },
+    {
+      ...guidedAnswer,
+      follow_ups: [{ question: 'What is this?', evidence_indices: [] }],
+    },
+    {
+      ...guidedAnswer,
+      follow_ups: [{ question: 'What is this?', evidence_indices: [0] }],
+    },
+    {
+      ...guidedAnswer,
+      follow_ups: Array.from({ length: 4 }, () => guidedAnswer.follow_ups[0]),
+    },
+    {
+      ...guidedAnswer,
+      follow_ups: [{ question: '😀'.repeat(161), evidence_indices: [1] }],
+    },
+    { ...guidedAnswer, text: 'A'.repeat(950) },
+    { ...guidedAnswer, status: 'unsupported' },
+    { ...guidedAnswer, status: 'clarification', evidence: [] },
+  ]) {
+    assert.throws(
+      () => validateDesktopAnswer(input, value),
+      code('PROVIDER_FAILURE'),
+    );
+  }
+  assert.equal(requests.length, 0);
+});
+
+test('desktop calculation fallback removes model suggestions as well as evidence', async () => {
+  const input = await desktopFixture();
+  input.question = 'Calculate the total of all numbers.';
+  const answer = validateDesktopAnswer(input, guidedAnswer);
+  assert.equal(answer.status, 'unsupported');
+  assert.deepEqual(answer.follow_ups, []);
+  assert.deepEqual(answer.evidence, []);
+  assert.equal(desktopSpeechText(answer), answer.text);
+});
+
+test('desktop previous exchange is same-source bounded background, included in the input budget', async () => {
+  const input = await desktopFixture();
+  const previous = {
+    request_id: crypto.randomUUID(),
+    source_id: input.snapshot.source_id,
+    question: 'What is visible?',
+    answer: 'The earlier view had a green area.',
+  };
+  const before = prepareDesktopInput(input).inputTokenBound;
+  input.follow_up_context = previous;
+  const prepared = prepareDesktopInput(desktopRequestSchema.parse(input));
+  assert.ok(prepared.inputTokenBound > before);
+  assert.deepEqual(JSON.parse(prepared.modelInput).source.previous_exchange, {
+    question: previous.question,
+    answer: previous.answer,
+  });
+  assert.match(
+    prepared.instructions,
+    /fresh screenshot controls what is visible now/,
+  );
+  assert.ok(!prepared.modelInput.includes(previous.request_id));
+  assert.ok(!prepared.modelInput.includes(previous.source_id));
+  for (const context of [
+    { ...previous, source_id: crypto.randomUUID() },
+    { ...previous, request_id: input.request_id },
+    { ...previous, answer: 'a'.repeat(1001) },
+    { ...previous, question: 'a'.repeat(1001) },
+    { ...previous, extra: 'not allowed' },
+  ])
+    assert.equal(
+      desktopRequestSchema.safeParse({ ...input, follow_up_context: context })
+        .success,
+      false,
+    );
+  Object.assign(input.snapshot.images[0], { width: 1885, height: 1060 });
+  input.follow_up_context.answer = '😀'.repeat(1000);
+  assert.throws(() => prepareDesktopInput(input), code('INPUT_TOO_LARGE'));
+  assert.equal(requests.length, 0);
+});
+
+test('desktop legacy answers remain displayable but missing model suggestions are rejected', async () => {
+  const input = await desktopFixture();
+  const { follow_ups, ...legacy } = validateDesktopAnswer(
+    input,
+    desktopModelAnswer,
+  );
+  assert.deepEqual(follow_ups, []);
+  assert.deepEqual(desktopResponseSchema.parse(legacy).follow_ups, []);
+  const { follow_ups: omitted, ...incompleteModel } = desktopModelAnswer;
+  assert.deepEqual(omitted, []);
+  assert.throws(
+    () => validateDesktopAnswer(input, incompleteModel),
+    code('PROVIDER_FAILURE'),
+  );
+  const vietnamese = validateDesktopAnswer(input, {
+    ...guidedAnswer,
+    answer_language: 'vi',
+    text: 'Ảnh chụp có vùng màu xanh.',
+    follow_ups: [
+      { question: 'Vùng màu xanh nằm ở đâu?', evidence_indices: [1] },
+    ],
+  });
+  assert.match(desktopSpeechText(vietnamese), /Bạn có thể hỏi tiếp: 1\./);
+  assert.match(desktopSpeechText(vietnamese), /Nhấn phím tắt Nói/);
 });
