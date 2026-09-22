@@ -29,10 +29,11 @@ An explicit **Ask VSual** chooses a local reading method. Supported article pros
 and orders questions keep their existing readers. Questions about visual content,
 or eligible HTTP(S) views without supported article structure, use one viewport
 image. Opening, expanding or checking the companion never takes a screenshot or
-calls a provider. A first-use visual-processing notice explains transmission through
-Avis, private/unsaved content, exclusions, temporary scrolling and retention.
-Acknowledgement is remembered in trusted `chrome.storage.session` for the signed-in
-extension session; it does not submit a draft. This is separate from browser access.
+calls a provider. Visual processing is available by default on a deliberate Ask,
+just like structured text; there is no separate **Use page images** approval button
+or stored processing grant. A brief notice and expandable details explain
+transmission through Avis, private/unsaved content, exclusions, temporary scrolling
+and retention. Browser access remains separate from this application behaviour.
 Use the browser-toolbar button on the source tab if capture access is missing;
 granting access preserves the question and requires a fresh deliberate Ask.
 
@@ -50,6 +51,11 @@ pattern; it is not restricted to transcribing labels. It does not continuously
 watch changes. Scroll to the relevant content and ask again to read another view.
 The original source remains authoritative: valid image references establish where
 the interpretation points, not that every observation is correct.
+Reading-method selection uses the existing local page-capability and question
+rules, keeping one model call per question. The model interprets the permitted
+evidence; it does not grant browser access, execute page JavaScript or inspect
+arbitrary application internals. Ambiguous questions on mixed text/visual pages
+may need to name the chart, table or image they concern.
 
 An explicit whole-page visual question can use up to four overlapping images only
 on positively identified finite document-like pages using the top-level vertical
@@ -147,11 +153,11 @@ private controls and non-orders table routing. Current-view cleanup never moves 
 scroll/focus; deliberate scrolling retains guarded restoration.
 
 The latest integration pass ran `npm run check` successfully: type checking, lint,
-formatting, **655 tests** (318 extension, 268 web, 69 voice) and both production builds.
+formatting, **657 tests** (320 extension, 268 web, 69 voice) and both production builds.
 Asynchronous hashing tests use bounded condition waits under parallel load; their
 cancellation assertions and production deadlines remain intact. The built
 visual endpoint rejected anonymous same-origin requests with 401 and originless
-requests with 403, both with `no-store`. A scan of 29 browser-output files found none
+requests with 403, both with `no-store`. An earlier scan of 29 browser-output files found none
 of the three configured server credential literals. These are local checks, not
 Vercel or authenticated visual acceptance. The extension build retains the existing
 non-failing shared-component `use client` bundler warnings.
@@ -211,8 +217,9 @@ Google Docs, chart interpretation and audible playback remain to be verified.
    and confirm workspace access.
 3. Complete the opt-in model check/configuration above before expecting visual answers.
    Use a synthetic/non-sensitive HTML page first. Activate VSual with its browser
-   toolbar button, keep Speech OFF, type “Describe the current screen”, acknowledge
-   the visual notice, and confirm acknowledgement alone sends nothing. Select Ask.
+   toolbar button, keep Speech OFF and type “Describe the current screen”. There
+   should be no extra processing-approval button. Opening the image-processing
+   details must send nothing; the first deliberate Ask captures and submits once.
 4. Check source/capture time, readable image evidence and explicit omitted-content
    information. Then enable Speech, ask once, Stop during generation/playback and
    Repeat. Repeat must add no TTS request. Typed answers must survive audio failure.
@@ -484,6 +491,15 @@ preparing speech in the original floating frame. The new tab exposes that remote
 speech's status and **Stop speech** without copying its answer/evidence into the
 new source. A new Ask, recording or explicit Read action takes over and stops the
 old speech. Returning to the original tab does not replay or submit anything.
+An accepted answer also keeps its one-shot automatic read-back if the tab becomes
+hidden just before the UI starts preparing audio. Mocked controller and rendered
+UI regressions cover that boundary plus tab hiding during preparation/playback;
+they do not prove that a particular browser kept an audible clip playing.
+The additional two-App regression uses real companion/client controllers with
+mocked browser ports, authentication, provider and audio boundaries. New-surface
+mounting and unchanged authentication retain existing audio; remote Stop, a new
+question and logout still stop it. The reported mid-speech browser interruption
+has not been reproduced: an actual-browser retest is still needed after reloading.
 Navigation, relevant changes to the original source, closing/discarding that tab,
 End, logout and account changes stop and clear its work. Closing the owning frame
 or reconnecting its worker also ends audio: no background audio host is introduced.
