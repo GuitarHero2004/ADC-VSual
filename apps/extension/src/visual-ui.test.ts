@@ -273,6 +273,7 @@ test('actual visual companion processes first Ask without extra approval, expose
         },
         onReady: () => () => {},
         createPage: page,
+        continueAnswerAcrossTabs: true,
         autoFocus: false,
         onControls: (next) => {
           controls = next;
@@ -386,6 +387,20 @@ test('actual visual companion processes first Ask without extra approval, expose
       1,
       'Rerender must not repeat the automatic attempt',
     );
+    const setHidden = async (hidden: boolean) => {
+      await act(async () => {
+        Object.defineProperty(dom.window.document, 'hidden', {
+          configurable: true,
+          value: hidden,
+        });
+        dom.window.document.dispatchEvent(
+          new dom.window.Event('visibilitychange'),
+        );
+        await flush();
+      });
+    };
+    await setHidden(true);
+    assert.equal(controlsNow().speech.getSnapshot().phase, 'generating');
     await act(async () => {
       pendingAudio!.resolve(new Blob(['mock audio'], { type: 'audio/mpeg' }));
       await flush();
@@ -393,6 +408,14 @@ test('actual visual companion processes first Ask without extra approval, expose
     pendingAudio = null;
     assert.equal(plays, 1);
     assert.deepEqual(rates, [0.9]);
+    assert.equal(controlsNow().speech.getSnapshot().phase, 'speaking');
+    await setHidden(false);
+    await setHidden(true);
+    assert.equal(controlsNow().speech.getSnapshot().phase, 'speaking');
+    assert.equal(generations, 1, 'Tab visibility must not regenerate speech');
+    assert.equal(plays, 1, 'Tab visibility must not replay accepted audio');
+    assert.equal(releases, 0, 'Tab visibility must not discard accepted audio');
+    await setHidden(false);
     await click('Stop speech');
     await click('Read again');
     assert.equal(

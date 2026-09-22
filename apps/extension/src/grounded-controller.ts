@@ -271,7 +271,9 @@ export class GroundedController {
     this.deadline = undefined;
     this.request?.abort();
     this.request = undefined;
-    this.discardAutomaticSpeech();
+    // Preserve an accepted answer's single reserved read-back even when hiding
+    // beats the React effect that claims it. Repeated tab events cannot reserve
+    // another attempt; cancellation and source changes still discard it.
     // The owning document keeps its accepted answer/audio. Recording and any
     // armed silence submission still stop; a tab switch never starts new work.
     this.stopMedia(true);

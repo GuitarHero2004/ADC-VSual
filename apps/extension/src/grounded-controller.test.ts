@@ -607,6 +607,7 @@ test('accepted floating answer keeps its own source and speech across tab switch
   await controller.refreshContext();
   await controller.ask();
   const accepted = controller.getSnapshot().result;
+  assert.equal(controller.claimAutomaticSpeech(), accepted);
   const snapshot = controller.getSnapshot().snapshot;
   const currentSource = controller.getSnapshot().context;
   const fullStops = calls.stopMedia;
@@ -628,6 +629,32 @@ test('accepted floating answer keeps its own source and speech across tab switch
   assert.equal(calls.capture, 1);
   assert.equal(controller.pauseForTab(), true);
   assert.equal(calls.preserveSpeech, 2);
+  assert.equal(controller.claimAutomaticSpeech(), null);
+  controller.dispose();
+});
+
+test('hiding before the UI claims an accepted answer preserves exactly one automatic read-back', async () => {
+  const { controller, calls, invalidate } = setup({
+    continueAnswerAcrossTabs: true,
+  });
+  await controller.refreshContext();
+  await controller.ask();
+  const accepted = controller.getSnapshot().result;
+  const stopped = calls.stopMedia;
+  // The worker's tab event and the document's visibility event can both arrive
+  // before React runs the accepted-answer effect. Neither starts new work.
+  invalidate('tab');
+  assert.equal(controller.pauseForTab(), true);
+  await flush();
+  assert.equal(controller.getSnapshot().result, accepted);
+  assert.equal(controller.getSnapshot().phase, 'ready');
+  assert.equal(calls.stopMedia, stopped);
+  assert.equal(calls.preserveSpeech, 2);
+  assert.equal(calls.capture, 1);
+  assert.equal(calls.provider, 1);
+  assert.equal(controller.claimAutomaticSpeech(), accepted);
+  assert.equal(controller.claimAutomaticSpeech(), null);
+  invalidate('tab');
   assert.equal(controller.claimAutomaticSpeech(), null);
   controller.dispose();
 });
