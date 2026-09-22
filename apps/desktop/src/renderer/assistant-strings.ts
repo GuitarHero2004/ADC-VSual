@@ -83,6 +83,13 @@ const en = {
   errorCode: 'Error code',
   beforeImageSent: 'The screen image was not sent for this request.',
   noEvidence: 'No supporting region was identified in this screenshot.',
+  followUps: 'What would you like to explore?',
+  followUpHelp:
+    'Choose a question below, or use the Talk shortcut and say an option number. Each follow-up sends a fresh screenshot with your previous question and answer as context. Ask something else starts without that context.',
+  followUpEmpty:
+    'Ask a follow-up in the question field or with the Talk shortcut. VSual sends a fresh screenshot with your previous question and answer as context. Ask something else starts without that context.',
+  askSomethingElse: 'Ask something else',
+  previousAnswer: 'Previous answer. Your new question is being processed.',
   questionTooLong: 'Shorten your question to 1,000 characters.',
 };
 
@@ -169,6 +176,13 @@ const vi: typeof en = {
   errorCode: 'Mã lỗi',
   beforeImageSent: 'Ảnh màn hình chưa được gửi trong yêu cầu này.',
   noEvidence: 'Không xác định được vùng dẫn chứng trong ảnh chụp này.',
+  followUps: 'Bạn muốn tìm hiểu thêm điều gì?',
+  followUpHelp:
+    'Chọn câu hỏi bên dưới, hoặc dùng phím tắt Nói rồi nói số lựa chọn. Mỗi câu hỏi tiếp theo gửi ảnh chụp mới cùng câu hỏi và câu trả lời trước làm ngữ cảnh. Hỏi điều khác bắt đầu không dùng ngữ cảnh đó.',
+  followUpEmpty:
+    'Nhập câu hỏi tiếp theo hoặc dùng phím tắt Nói. VSual gửi ảnh chụp mới cùng câu hỏi và câu trả lời trước làm ngữ cảnh. Hỏi điều khác bắt đầu không dùng ngữ cảnh đó.',
+  askSomethingElse: 'Hỏi điều khác',
+  previousAnswer: 'Câu trả lời trước. Đang xử lý câu hỏi mới của bạn.',
   questionTooLong: 'Rút ngắn câu hỏi còn tối đa 1.000 ký tự.',
 };
 export const assistantText = { en, vi };
@@ -176,6 +190,14 @@ export const assistantText = { en, vi };
 /** Screen errors must not be mislabeled as ElevenLabs or sign-in failures. */
 export function screenError(code: string, language: UiLanguage): string {
   const messages: Record<string, [string, string]> = {
+    invalid_choice: [
+      'Choose one of the numbered questions currently shown, or ask your own question. No screenshot or answer request was sent.',
+      'Chọn một câu hỏi được đánh số đang hiển thị, hoặc đặt câu hỏi của bạn. Chưa gửi ảnh chụp hay yêu cầu trả lời.',
+    ],
+    source_changed: [
+      'The window changed. The previous answer and choices were cleared; your question was not sent. Review your question for the new window before asking again.',
+      'Cửa sổ đã thay đổi. Đã xóa câu trả lời và lựa chọn trước; chưa gửi câu hỏi. Hãy xem lại câu hỏi cho cửa sổ mới trước khi hỏi tiếp.',
+    ],
     provider_failure: [
       'The screen-reading service could not complete the answer. Your question is preserved. Request details below can help identify the cause.',
       'Dịch vụ đọc màn hình chưa thể hoàn tất câu trả lời. Câu hỏi được giữ lại. Chi tiết yêu cầu bên dưới giúp xác định nguyên nhân.',
@@ -193,8 +215,8 @@ export function screenError(code: string, language: UiLanguage): string {
       'Yêu cầu đọc ảnh màn hình chưa được chấp nhận. Mở lại VSual từ cửa sổ cần đọc rồi thử lại. Câu hỏi được giữ lại.',
     ],
     input_too_large: [
-      'The captured window exceeds the image limit. Resize the window and try again. Your question is preserved.',
-      'Ảnh chụp cửa sổ vượt giới hạn. Thu nhỏ cửa sổ rồi thử lại. Câu hỏi được giữ lại.',
+      'The screenshot, question or previous exchange exceeds the request limit. Try a smaller window or shorter question, or choose Ask something else to start without the previous exchange. Your question is preserved until you clear it.',
+      'Ảnh chụp, câu hỏi hoặc lượt trao đổi trước vượt giới hạn yêu cầu. Thử thu nhỏ cửa sổ hoặc rút ngắn câu hỏi, hoặc chọn Hỏi điều khác để bắt đầu không dùng lượt trao đổi trước. Câu hỏi được giữ lại cho đến khi bạn xóa.',
     ],
     cancelled: [
       'Screen reading was cancelled. Your question is preserved.',

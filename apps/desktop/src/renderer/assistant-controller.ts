@@ -1,5 +1,6 @@
 import {
   desktopResponseSchema,
+  desktopSpeechText,
   usageLimitSchema,
   VISUAL_LIMITS,
   type DesktopResponse,
@@ -18,6 +19,35 @@ import type {
 } from '../bridge.ts';
 
 export const DESKTOP_RECORDING_MAX_MS = 60_000;
+
+/** Only standalone option phrases are commands; names and arbitrary numbers stay questions. */
+function spokenChoice(text: string): number | null {
+  const value = text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replaceAll('đ', 'd')
+    .toLowerCase()
+    .replace(/[.!?,]+$/g, '')
+    .trim();
+  const match =
+    /^(?:(?:choose|option|choose option|chon|lua chon|cau|cau hoi|so)\s+)?(\d+|one|two|three|four|five|mot|hai|ba|bon|nam)$/.exec(
+      value,
+    );
+  if (!match) return null;
+  const words: Record<string, number> = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    mot: 1,
+    hai: 2,
+    ba: 3,
+    bon: 4,
+    nam: 5,
+  };
+  return words[match[1]!] ?? Number(match[1]);
+}
 export interface CapturedWindowFrame {
   bytes: ArrayBuffer;
   width: number;
@@ -190,11 +220,12 @@ export class DesktopAssistantController {
   useActiveSource = async () => {
     if (this.disposed) return;
     this.cancel();
-    this.speech.clear();
+    const previous =
+      this.state.sources.find((item) => item.id === this.state.sourceId) ??
+      this.state.sources[0];
     const generation = ++this.sourceGeneration;
     this.update({
       sourceId: '',
-      answer: null,
       phase: 'idle',
       loadingSources: true,
       errorCode: null,
@@ -204,14 +235,27 @@ export class DesktopAssistantController {
     try {
       const source = await this.bridge.getActiveSource();
       if (this.disposed || generation !== this.sourceGeneration) return;
+      const sameSource =
+        source?.id === previous?.id && source?.title === previous?.title;
+      if (!sameSource) this.speech.clear();
       this.update({
         sourceId: source?.id ?? '',
         sources: source ? [source] : [],
         loadingSources: false,
+        answer: sameSource ? this.state.answer : null,
+        phase: sameSource && this.state.answer ? 'ready' : 'idle',
       });
     } catch (error) {
-      if (!this.disposed && generation === this.sourceGeneration)
-        this.update({ loadingSources: false, errorCode: safeErrorCode(error) });
+      if (!this.disposed && generation === this.sourceGeneration) {
+        this.speech.clear();
+        this.update({
+          sourceId: '',
+          sources: [],
+          answer: null,
+          loadingSources: false,
+          errorCode: safeErrorCode(error),
+        });
+      }
     }
   };
 
@@ -259,7 +303,7 @@ export class DesktopAssistantController {
   };
 
   startRecording = async () => {
-    if (this.disposed || this.pending) return;
+    if (this.disposed || this.pending || this.state.loadingSources) return;
     this.beforeWork();
     if (!this.state.sourceId) {
       this.update({ errorCode: 'source_required', phase: 'error' });
@@ -270,10 +314,73 @@ export class DesktopAssistantController {
     await this.question.start();
   };
 
-  ask = async (supplied = this.question.getSnapshot().text) => {
-    if (this.disposed || this.pending) return;
+  chooseFollowUp = async (index: number, requestId: string) => {
+    if (this.disposed || this.pending || this.state.loadingSources) return;
+    if (
+      ['requesting_permission', 'recording', 'transcribing'].includes(
+        this.question.getSnapshot().phase,
+      )
+    )
+      return;
+    const answer = this.state.answer;
+    const option = answer?.response.follow_ups[index];
+    if (
+      !Number.isInteger(index) ||
+      !option ||
+      answer.response.request_id !== requestId
+    ) {
+      this.update({
+        phase: 'error',
+        errorCode: 'invalid_choice',
+        errorUsage: null,
+        errorDetails: null,
+      });
+      return;
+    }
+    this.question.editText(option.question);
+    await this.ask(option.question, requestId);
+  };
+
+  askSomethingElse = () => {
+    if (this.disposed) return;
+    this.cancel();
+    this.question.clear();
+    this.speech.clear();
+    this.update({ answer: null, phase: 'idle' });
+  };
+
+  ask = async (
+    supplied = this.question.getSnapshot().text,
+    expectedRequestId?: string,
+  ) => {
+    if (this.disposed || this.pending || this.state.loadingSources) return;
     this.beforeWork();
-    const question = supplied.trim();
+    const previous = this.state.answer;
+    if (
+      expectedRequestId &&
+      previous?.response.request_id !== expectedRequestId
+    )
+      return;
+    let question = supplied.trim();
+    const choice = previous?.response.follow_ups.length
+      ? spokenChoice(question)
+      : null;
+    if (choice !== null) {
+      const option = previous!.response.follow_ups[choice - 1];
+      if (!option) {
+        this.question.cancel();
+        this.speech.stopPlayback();
+        this.update({
+          phase: 'error',
+          errorCode: 'invalid_choice',
+          errorUsage: null,
+          errorDetails: null,
+        });
+        return;
+      }
+      question = option.question;
+      this.question.editText(question);
+    }
     if (
       !question ||
       Array.from(question).length > VISUAL_LIMITS.questionCodePoints
@@ -299,7 +406,7 @@ export class DesktopAssistantController {
       return;
     }
     this.question.cancel();
-    this.speech.clear();
+    this.speech.stopPlayback();
     const generation = ++this.generation;
     const pending = { id: crypto.randomUUID(), abort: new AbortController() };
     let stage: NonNullable<AssistantSnapshot['errorDetails']>['stage'] =
@@ -321,13 +428,28 @@ export class DesktopAssistantController {
     }, VISUAL_LIMITS.taskTimeoutMs);
     this.update({
       phase: 'preparing',
-      answer: null,
       errorCode: null,
       errorUsage: null,
       errorDetails: null,
     });
     let capturedBytes: ArrayBuffer | null = null;
     try {
+      if (previous) {
+        // Recheck the native target before using a previous exchange; never carry it to another app.
+        const active = await this.bridge.getActiveSource();
+        if (!current()) return;
+        if (active?.id !== source.id || active.title !== source.title) {
+          this.speech.clear();
+          this.update({
+            answer: null,
+            sourceId: active?.id ?? '',
+            sources: active ? [active] : [],
+          });
+          throw Object.assign(new Error('Follow-up source changed'), {
+            code: 'SOURCE_CHANGED',
+          });
+        }
+      }
       const ticket = await this.bridge.prepareCapture(source.id, pending.id);
       if (!current()) return;
       if (
@@ -349,12 +471,19 @@ export class DesktopAssistantController {
         captureId: ticket.captureId,
         requestId: pending.id,
         question,
+        ...(previous
+          ? { followUpRequestId: previous.response.request_id }
+          : {}),
         ...frame,
       });
       new Uint8Array(capturedBytes).fill(0);
       const parsed = desktopResponseSchema.safeParse(await responsePending);
       if (!current()) return;
-      if (!parsed.success || parsed.data.request_id !== pending.id)
+      if (
+        !parsed.success ||
+        parsed.data.request_id !== pending.id ||
+        parsed.data.source_id !== source.id
+      )
         throw Object.assign(new Error('Mismatched answer'), {
           code: 'INVALID_RESPONSE',
         });
@@ -364,12 +493,18 @@ export class DesktopAssistantController {
         phase: 'ready',
         answer: { response, title: ticket.title, question },
       });
+      this.speech.clear();
       this.speech.setLanguage(response.answer_language);
-      this.speech.editText(response.text);
+      this.speech.editText(desktopSpeechText(response));
       // Deliberately not an effect: each accepted response gets one automatic attempt.
       void this.speech.readBack();
     } catch (error) {
       if (current()) {
+        const code = safeErrorCode(error);
+        if (previous && code === 'source_unavailable') {
+          this.speech.clear();
+          this.update({ answer: null });
+        }
         const usage = usageLimitSchema.safeParse(
           error && typeof error === 'object' && 'usage' in error
             ? error.usage
@@ -377,7 +512,7 @@ export class DesktopAssistantController {
         );
         this.update({
           phase: 'error',
-          errorCode: safeErrorCode(error),
+          errorCode: code,
           errorUsage: usage.success ? usage.data : null,
           // Our attempt ID exists even when capture fails before any HTTP request.
           errorDetails: { requestId: pending.id, stage },
