@@ -1,11 +1,9 @@
 import 'server-only';
 
-import {
-  speechSynthesisInputSchema,
-  type RecognitionLanguage,
-} from '@adc/contracts';
+import { type RecognitionLanguage } from '@adc/contracts';
 import { ElevenLabsClient, ElevenLabsError } from '@elevenlabs/elevenlabs-js';
 import { VoiceError } from '../voice/errors.ts';
+import { prepareSpeechInput } from '../voice/speech-text.ts';
 
 const MAX_GENERATED_BYTES = 4 * 1024 * 1024;
 const PROVIDER_TIMEOUT_MS = 30_000;
@@ -175,27 +173,19 @@ export async function transcribeAudio(
 }
 
 export async function synthesiseSpeech(input: unknown, signal?: AbortSignal) {
-  const parsed = speechSynthesisInputSchema.safeParse(input);
-  if (!parsed.success)
-    throw new VoiceError(
-      'INVALID_INPUT',
-      'Enter between 1 and 1,000 characters for read-back.',
-      400,
-    );
+  const prepared = prepareSpeechInput(input);
   return callProvider('speak', signal, async (client, config, abortSignal) => {
     const { data: audio, rawResponse } = await client.textToSpeech
       .convert(
         config.voiceId!,
         {
-          text: parsed.data.text,
+          text: prepared.text,
           modelId: config.model,
           outputFormat: 'mp3_44100_128',
           // Override only this request. The player applies the companion's
           // slower rate; account-level voice settings must not slow it twice.
           voiceSettings: { speed: 1 },
-          ...(parsed.data.language
-            ? { languageCode: parsed.data.language }
-            : {}),
+          ...(prepared.language ? { languageCode: prepared.language } : {}),
         },
         { abortSignal },
       )
