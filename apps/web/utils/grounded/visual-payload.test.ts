@@ -347,7 +347,6 @@ for (const dpr of [2, 4])
     try {
       await controller.refreshContext();
       controller.setQuestion('Read the document label in this screen.');
-      controller.setVisualNoticeAccepted(true);
       assert.equal(captures, 0);
       await controller.ask();
       assert.equal(

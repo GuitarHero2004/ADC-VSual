@@ -41,7 +41,6 @@ import { StructuredSource } from './StructuredSource.tsx';
 import { VisualSource } from './VisualSource.tsx';
 import { visualText, visualError } from './visual-strings.ts';
 import { canAskPage, chooseReadingMethod } from './reading-method.ts';
-import { readVisualNotice, saveVisualNotice } from './visual-notice.ts';
 import {
   ANSWER_PREFERENCES_KEY,
   loadAnswerSpeech,
@@ -162,10 +161,6 @@ export function GroundedPanel(props: Props) {
       { continueAnswerAcrossTabs: !!latest.current.continueAnswerAcrossTabs },
     );
     setMounted({ controller, speech, speechDeadline });
-    void readVisualNotice(latest.current.sessionKey).then((accepted) => {
-      // A slow storage read must not undo an acknowledgement made in this UI.
-      if (accepted) controller.setVisualNoticeAccepted(true);
-    });
     void controller.refreshContext();
     const end = () => {
       controller.clearTransient();
@@ -237,7 +232,6 @@ function Companion({
   const visualCandidate =
     !!state.context?.visual?.eligible &&
     chooseReadingMethod(state.question, state.context).method === 'visual_page';
-  const [noticeStatus, setNoticeStatus] = useState('');
   const unsupportedMessage = unsupportedPageText(props.language, state.context);
   const askUnavailable = !allowed
     ? state.context?.visual?.eligible
@@ -546,29 +540,13 @@ function Companion({
         className="question-composer"
       >
         <p className="field-help">
-          {visualCandidate ? v.ready : t.processingNotice}
+          {visualCandidate ? v.processingNotice : t.processingNotice}
         </p>
         {visualCandidate && (
-          <section aria-labelledby="visual-notice-heading" className="notice">
-            <h3 id="visual-notice-heading">{v.noticeTitle}</h3>
+          <details className="notice">
+            <summary>{v.noticeTitle}</summary>
             <p>{v.notice}</p>
-            {!state.visualNoticeAccepted && (
-              <button
-                type="button"
-                onClick={() => {
-                  controller.setVisualNoticeAccepted(true);
-                  setNoticeStatus(v.accepted);
-                  focusQuestion();
-                  void saveVisualNotice(props.sessionKey).catch(() =>
-                    setNoticeStatus(v.unavailableStorage),
-                  );
-                }}
-              >
-                {v.acknowledge}
-              </button>
-            )}
-            <p role="status">{noticeStatus}</p>
-          </section>
+          </details>
         )}
         {state.context && !allowed && (
           <p className="field-help">{s.draftOnly}</p>

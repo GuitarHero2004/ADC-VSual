@@ -30,7 +30,7 @@ function deferred<T>() {
   return { resolve, promise };
 }
 
-test('actual visual companion gates first use, exposes readable language-tagged evidence and generates speech only for a fresh eligible answer', async (t) => {
+test('actual visual companion processes first Ask without extra approval, exposes evidence and preserves accepted speech across tab visibility', async (t) => {
   const hook = registerHooks({
     load(url, context, next) {
       if (!url.endsWith('.tsx')) return next(url, context);
@@ -56,7 +56,6 @@ test('actual visual companion gates first use, exposes readable language-tagged 
     url: 'https://extension.example.test/floating.html',
     pretendToBeVisual: true,
   });
-  const stored: Record<string, unknown> = {};
   const originals = new Map<string, PropertyDescriptor | undefined>();
   for (const [key, value] of Object.entries({
     window: dom.window,
@@ -66,16 +65,6 @@ test('actual visual companion gates first use, exposes readable language-tagged 
     HTMLElement: dom.window.HTMLElement,
     HTMLTextAreaElement: dom.window.HTMLTextAreaElement,
     IS_REACT_ACT_ENVIRONMENT: true,
-    chrome: {
-      storage: {
-        session: {
-          get: async (key: string) => ({ [key]: stored[key] }),
-          set: async (value: Record<string, unknown>) => {
-            Object.assign(stored, value);
-          },
-        },
-      },
-    },
   })) {
     originals.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, {
@@ -316,19 +305,30 @@ test('actual visual companion gates first use, exposes readable language-tagged 
     await act(async () => {
       controlsNow().question.editText('Lịch đang hiển thị cuộc họp nào?');
     });
-    assert.ok(button('Use page images for my questions'));
-    await click('Ask VSual');
-    assert.equal(captures, 0);
-    assert.equal(modelCalls, 0);
     assert.equal(
-      controlsNow().controller.getSnapshot().error,
-      'VISUAL_NOTICE_REQUIRED',
+      [...dom.window.document.querySelectorAll('button')].some(
+        (button) => button.textContent === 'Use page images for my questions',
+      ),
+      false,
     );
-    await click('Use page images for my questions');
-    assert.equal(captures, 0);
-    assert.equal(modelCalls, 0);
-    assert.equal(generations, 0);
-    assert.ok(Object.values(stored).includes(true));
+    assert.match(
+      dom.window.document.body.textContent!,
+      /image and question through Avis/,
+    );
+    const disclosure = [
+      ...dom.window.document.querySelectorAll('details'),
+    ].find(
+      (element) =>
+        element.querySelector('summary')?.textContent ===
+        'How page images are processed',
+    );
+    assert.ok(disclosure);
+    await act(async () => {
+      disclosure.open = true;
+      await flush();
+    });
+    assert.equal(captures, 0, 'Reading the disclosure must not capture');
+    assert.equal(modelCalls, 0, 'Reading the disclosure must not submit');
     await click('Ask VSual');
     assert.equal(captures, 1);
     assert.equal(modelCalls, 1);

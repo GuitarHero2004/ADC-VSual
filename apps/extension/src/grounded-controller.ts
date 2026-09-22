@@ -73,7 +73,6 @@ export interface GroundedState {
   errorUsage: UsageLimit | null;
   stale: boolean;
   reader: ReadingMethod | null;
-  visualNoticeAccepted: boolean;
   scopeRecovery: boolean;
 }
 export type CompanionSnapshot =
@@ -114,7 +113,6 @@ export class GroundedController {
     errorUsage: null,
     stale: false,
     reader: null,
-    visualNoticeAccepted: false,
     scopeRecovery: false,
   };
   private listeners = new Set<() => void>();
@@ -179,9 +177,6 @@ export class GroundedController {
           (this.state.context?.permission === 'required' &&
             this.state.context.visual?.permission !== 'granted')),
     });
-  }
-  setVisualNoticeAccepted(accepted: boolean) {
-    this.update({ visualNoticeAccepted: accepted });
   }
   getSpeechDeadline() {
     return this.speechDeadlineAt;
@@ -643,10 +638,8 @@ export class GroundedController {
       throw Object.assign(new Error('Browser access required'), {
         code: 'PAGE_PERMISSION_REQUIRED',
       });
-    if (!this.state.visualNoticeAccepted)
-      throw Object.assign(new Error('Review the visual notice first'), {
-        code: 'VISUAL_NOTICE_REQUIRED',
-      });
+    // Deliberate Ask/silence submission authorises this task, as with text
+    // reading. The visible disclosure is not a second approval gate.
     const capture = await this.page.captureVisual(
       scope,
       signal,

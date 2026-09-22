@@ -230,7 +230,6 @@ test('a completed visual backend failure survives later source/focus events with
   for (const reason of ['page', 'tab', 'unavailable'] as const) {
     const app = await setup({ continueAnswerAcrossTabs: true });
     const requestId = crypto.randomUUID();
-    app.controller.setVisualNoticeAccepted(true);
     app.hooks.transport = async () => {
       throw Object.assign(new Error('Safe synthetic provider failure'), {
         code: 'PROVIDER_FAILURE',
@@ -270,7 +269,6 @@ test('a completed visual backend failure survives later source/focus events with
 
 test('request references must be valid UUIDs and are cleared with the session', async () => {
   const app = await setup();
-  app.controller.setVisualNoticeAccepted(true);
   let requestId = 'untrusted non-reference text';
   app.hooks.transport = async () => {
     throw Object.assign(new Error('Safe failure'), {
@@ -288,7 +286,7 @@ test('request references must be valid UUIDs and are cleared with the session', 
   app.controller.dispose();
 });
 
-test('visual standby, context refresh and notice acceptance never capture or submit', async () => {
+test('visual standby never captures; the first deliberate Ask needs no extra processing approval', async () => {
   const { controller, calls } = await setup();
   const unsubscribe = controller.subscribe(() => {});
   controller.getSnapshot();
@@ -298,19 +296,19 @@ test('visual standby, context refresh and notice acceptance never capture or sub
   assert.equal(calls.capture, 0);
   assert.equal(calls.model, 0);
   await controller.ask();
-  assert.equal(controller.getSnapshot().error, 'VISUAL_NOTICE_REQUIRED');
-  assert.equal(calls.capture, 0);
-  controller.setVisualNoticeAccepted(true);
-  await flush();
-  assert.equal(calls.capture, 0);
-  assert.equal(calls.model, 0);
+  assert.equal(controller.getSnapshot().error, null);
+  assert.equal(controller.getSnapshot().phase, 'ready');
+  assert.equal(calls.capture, 1);
+  assert.equal(calls.model, 1);
+  await controller.refreshContext();
+  assert.equal(calls.capture, 1, 'Refreshing context must not capture again');
+  assert.equal(calls.model, 1, 'Refreshing context must not submit again');
   assert.match(controller.getSnapshot().question, /calendar/);
   unsubscribe();
   controller.dispose();
 });
 test('missing browser access preserves draft; granting it does not submit or capture', async () => {
   const { controller, calls, context, taskStates } = await setup();
-  controller.setVisualNoticeAccepted(true);
   context({ visual: { eligible: true, permission: 'required' } });
   await controller.refreshContext();
   await controller.ask();
@@ -331,7 +329,6 @@ test('missing browser access preserves draft; granting it does not submit or cap
 });
 test('canvas/application visual answer accepts readable evidence and claims speech only once without retaining bytes', async () => {
   const { controller, calls, taskStates } = await setup();
-  controller.setVisualNoticeAccepted(true);
   await controller.ask();
   const state = controller.getSnapshot();
   assert.equal(state.phase, 'ready');
@@ -359,7 +356,6 @@ test('canvas/application visual answer accepts readable evidence and claims spee
 });
 test('oversized rendered-page recovery waits for an explicit narrower action', async () => {
   const { controller, calls, hooks, makeCapture, scopes } = await setup();
-  controller.setVisualNoticeAccepted(true);
   controller.setQuestion('Explain the chart across the whole page');
   hooks.capture = async (scope) => {
     if (scope === 'rendered_page')
@@ -382,7 +378,6 @@ test('oversized rendered-page recovery waits for an explicit narrower action', a
 test('narrower-scope choices cannot submit after editing the question or changing its resource', async () => {
   for (const change of ['question', 'resource'] as const) {
     const { controller, calls, hooks, context } = await setup();
-    controller.setVisualNoticeAccepted(true);
     controller.setQuestion('Explain the chart across the whole page');
     hooks.capture = async () => {
       throw Object.assign(new Error('Too long'), { code: 'VISUAL_TOO_LARGE' });
@@ -402,7 +397,6 @@ test('narrower-scope choices cannot submit after editing the question or changin
 });
 test('duplicate Ask and cancellation during capture never send late image payloads', async () => {
   const { controller, calls, hooks, makeCapture, signals } = await setup();
-  controller.setVisualNoticeAccepted(true);
   const pending = deferred<Capture>();
   hooks.capture = () => pending.promise;
   const task = controller.ask();
@@ -422,7 +416,6 @@ test('cancel, source changes, logout and account cleanup reject a late visual an
   for (const action of ['cancel', 'source', 'logout', 'account'] as const) {
     const { controller, calls, hooks, response, invalidate } = await setup();
     t.after(() => controller.dispose());
-    controller.setVisualNoticeAccepted(true);
     const pending = deferred<CompanionResponse>();
     let input!: CompanionRequest;
     hooks.transport = (value) => {
@@ -451,7 +444,6 @@ test('cancel, source changes, logout and account cleanup reject a late visual an
 });
 test('detected resource change between Ask and capture prevents screenshot or provider work', async () => {
   const { controller, calls, context } = await setup();
-  controller.setVisualNoticeAccepted(true);
   context({ resourceKey: 'c'.repeat(64) });
   await controller.ask();
   assert.equal(controller.getSnapshot().error, 'STALE_CONTEXT');
@@ -467,7 +459,6 @@ test('foreign image IDs and mismatched request/source IDs are never displayed or
     'fingerprint',
   ] as const) {
     const { controller, hooks, response } = await setup();
-    controller.setVisualNoticeAccepted(true);
     hooks.transport = async (input) => {
       const value = response(input);
       if (change === 'image') value.evidence[0]!.image_id = 'image-4';
@@ -486,7 +477,6 @@ test('foreign image IDs and mismatched request/source IDs are never displayed or
 test('visual answers cannot inflate capture scope or replace its coverage', async () => {
   for (const change of ['scope', 'coverage'] as const) {
     const { controller, hooks, response } = await setup();
-    controller.setVisualNoticeAccepted(true);
     hooks.transport = async (input) => {
       const value = response(input);
       if (change === 'scope') value.scope = 'rendered_page';
@@ -502,7 +492,6 @@ test('visual answers cannot inflate capture scope or replace its coverage', asyn
 });
 test('same-tab snapshot from another pathname is rejected before upload', async () => {
   const { controller, calls, hooks, makeCapture } = await setup();
-  controller.setVisualNoticeAccepted(true);
   hooks.capture = async (scope) => {
     const capture = await makeCapture(scope);
     capture.snapshot.pathname = '/other-document';
@@ -519,7 +508,6 @@ test('same-tab snapshot from another pathname is rejected before upload', async 
 });
 test('failed final visual source verification preserves the draft but rejects the answer', async () => {
   const { controller, hooks } = await setup();
-  controller.setVisualNoticeAccepted(true);
   hooks.verify = async () => false;
   await controller.ask();
   assert.equal(controller.getSnapshot().phase, 'stale');
@@ -532,7 +520,6 @@ test('accepted floating visual speech survives a tab switch without replay while
   const { controller, calls, invalidate } = await setup({
     continueAnswerAcrossTabs: true,
   });
-  controller.setVisualNoticeAccepted(true);
   await controller.ask();
   assert.ok(controller.claimAutomaticSpeech());
   const result = controller.getSnapshot().result;
@@ -553,7 +540,6 @@ test('accepted floating visual speech survives a tab switch without replay while
 test('visual overall deadline prevents late answer speech without deleting the question', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { controller, calls, hooks, response } = await setup();
-  controller.setVisualNoticeAccepted(true);
   const pending = deferred<CompanionResponse>();
   let input!: CompanionRequest;
   hooks.transport = (value) => {

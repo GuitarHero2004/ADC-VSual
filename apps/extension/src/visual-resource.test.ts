@@ -69,7 +69,6 @@ test('narrow-scope recovery cannot submit an old question against a new same-pat
   );
   try {
     await controller.refreshContext();
-    controller.setVisualNoticeAccepted(true);
     controller.setQuestion('Explain the entire page chart');
     await controller.ask();
     assert.equal(controller.getSnapshot().scopeRecovery, true);

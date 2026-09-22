@@ -6,14 +6,11 @@ export const visualText = {
       'Page images are available after browser activation. Answers describe captured content, not the complete file or account.',
     access:
       'Use VSual’s browser toolbar button or assigned shortcut on this tab to enable access, then ask again. Your draft is preserved. If this browser view prevents privacy masking, it cannot be read yet.',
-    noticeTitle: 'Before using page images',
+    processingNotice:
+      'When you ask, VSual automatically captures this view and sends the image and question through Avis. Opening VSual alone captures nothing.',
+    noticeTitle: 'How page images are processed',
     notice:
       'Page images are sent through Avis to the configured model service. They may include private information and visible unsaved document content. Known private controls and VSual are excluded where supported; this is not universal removal of private information. Reading an eligible longer page may temporarily scroll it. You can cancel. Our app does not save screenshots; provider retention follows its own policies.',
-    acknowledge: 'Use page images for my questions',
-    accepted:
-      'Page-image notice acknowledged for this sign-in session. Select Ask VSual when ready; acknowledgement does not send your draft.',
-    unavailableStorage:
-      'The acknowledgement could not be saved. You can use page images in this open companion after acknowledging the notice.',
     capturing: 'Capturing page images…',
     cancel: 'Cancel capture',
     requestDetails: 'Request details',
@@ -44,14 +41,11 @@ export const visualText = {
       'Có thể dùng ảnh trang sau khi kích hoạt từ trình duyệt. Câu trả lời dựa trên nội dung đã chụp, không phải toàn bộ tệp hoặc tài khoản.',
     access:
       'Dùng nút VSual trên thanh công cụ hoặc phím tắt tại thẻ này để cấp quyền, rồi hỏi lại. Bản nháp được giữ nguyên. Nếu trình duyệt chặn việc che vùng riêng tư, VSual chưa thể đọc vùng này.',
-    noticeTitle: 'Trước khi dùng ảnh trang',
+    processingNotice:
+      'Khi bạn hỏi, VSual tự động chụp vùng này và gửi ảnh cùng câu hỏi qua Avis. Chỉ mở VSual không chụp nội dung.',
+    noticeTitle: 'Cách xử lý ảnh trang',
     notice:
       'Ảnh trang được gửi qua Avis đến dịch vụ mô hình đã cấu hình. Ảnh có thể chứa thông tin riêng tư và nội dung tài liệu chưa lưu. Các trường riêng tư đã nhận diện và VSual được loại trừ khi hỗ trợ; không bảo đảm loại bỏ mọi thông tin riêng tư. Đọc trang dài phù hợp có thể tạm cuộn trang. Bạn có thể hủy. Ứng dụng không lưu ảnh; nhà cung cấp áp dụng chính sách lưu giữ riêng.',
-    acknowledge: 'Dùng ảnh trang cho câu hỏi của tôi',
-    accepted:
-      'Đã xác nhận thông báo ảnh trang trong phiên đăng nhập này. Chọn Hỏi VSual khi sẵn sàng; xác nhận không gửi bản nháp.',
-    unavailableStorage:
-      'Chưa lưu được xác nhận. Bạn vẫn có thể dùng ảnh trong cửa sổ trợ lý này sau khi xác nhận thông báo.',
     capturing: 'Đang chụp nội dung trang…',
     cancel: 'Hủy chụp',
     requestDetails: 'Chi tiết yêu cầu',
@@ -85,10 +79,6 @@ const errors: Record<string, [string, string]> = {
     'Máy chủ chưa bật đọc hình ảnh. Tuyến mô hình đã cấu hình cần vượt qua kiểm tra ảnh thử nghiệm trước. Vẫn có thể đọc văn bản có cấu trúc và bảng đơn hàng.',
   ],
   PAGE_PERMISSION_REQUIRED: [visualText.en.access, visualText.vi.access],
-  VISUAL_NOTICE_REQUIRED: [
-    'Review the page-image notice, then select Ask VSual again.',
-    'Xem và xác nhận thông báo ảnh trang, rồi chọn Hỏi VSual lần nữa.',
-  ],
   VISUAL_SCOPE_TOO_LARGE: [visualText.en.narrowing, visualText.vi.narrowing],
   VISUAL_UNSUPPORTED: [
     'This view cannot be captured safely with the available access. Try the browser side panel or another supported view.',
