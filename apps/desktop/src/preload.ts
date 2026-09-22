@@ -1,6 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { IpcRendererEvent } from 'electron';
-import type { DesktopBridge, DesktopState } from './bridge.ts';
+import type {
+  DesktopActivationEvent,
+  DesktopBridge,
+  DesktopState,
+} from './bridge.ts';
 import type { DesktopSessionState } from './session-types.ts';
 
 async function command<T>(name: string, ...args: unknown[]): Promise<T> {
@@ -32,28 +36,61 @@ async function command<T>(name: string, ...args: unknown[]): Promise<T> {
   return result.value;
 }
 
-// Install before React loads so activation during a cold start is not lost.
-// One queued delivery also survives Strict Mode subscribe/unsubscribe cycles.
-const activationListeners = new Set<() => void>();
-let pendingActivation = false;
+// Preload owns delivery until React has installed its controller and hydrated auth.
+// Only main-process events can enter this queue; page messages cannot activate it.
+const activationListeners = new Set<(event: DesktopActivationEvent) => void>();
+let pendingActivation: DesktopActivationEvent | null = null;
+let activationReady = false;
 let deliveryScheduled = false;
+const delivered = new Set<string>();
 function deliverActivation() {
   if (deliveryScheduled) return;
   deliveryScheduled = true;
   queueMicrotask(() => {
     deliveryScheduled = false;
-    if (!pendingActivation || activationListeners.size === 0) return;
-    pendingActivation = false;
-    for (const listener of activationListeners) listener();
+    if (
+      !activationReady ||
+      !pendingActivation ||
+      activationListeners.size === 0
+    )
+      return;
+    const event = pendingActivation;
+    pendingActivation = null;
+    if (delivered.has(event.id)) return;
+    delivered.add(event.id);
+    if (delivered.size > 32) delivered.delete(delivered.values().next().value!);
+    for (const listener of activationListeners) listener(event);
   });
 }
-ipcRenderer.on('desktop:activated', () => {
-  pendingActivation = true;
+ipcRenderer.on('desktop:activated', (_event, input: unknown) => {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return;
+  const event = input as Record<string, unknown>;
+  if (
+    Object.keys(event).length !== 2 ||
+    typeof event.id !== 'string' ||
+    !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(event.id) ||
+    (event.kind !== 'open' && event.kind !== 'talk') ||
+    delivered.has(event.id)
+  )
+    return;
+  pendingActivation = { id: event.id, kind: event.kind };
   deliverActivation();
+});
+ipcRenderer.on('assistant:suspend', () => {
+  pendingActivation = null;
 });
 
 // Expose fixed capabilities; never expose Electron, event objects or raw invoke.
 const bridge: DesktopBridge = {
+  async activationReady() {
+    activationReady = true;
+    await ipcRenderer.invoke('desktop:activation-ready');
+    deliverActivation();
+  },
+  stopWork: () => ipcRenderer.invoke('desktop:stop'),
+  getGuideSeenVersion: () => ipcRenderer.invoke('desktop:guide-version'),
+  markGuideSeenVersion: (version) =>
+    ipcRenderer.invoke('desktop:guide-seen', version),
   getState: () => ipcRenderer.invoke('desktop:state'),
   updatePreferences: (preferences) =>
     ipcRenderer.invoke('desktop:preferences', preferences),

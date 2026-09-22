@@ -11,6 +11,11 @@ export const DESKTOP_SHORTCUTS = [
   'Control+Alt+V',
   'Control+Shift+Space',
 ] as const;
+export const DESKTOP_STOP_SHORTCUT = 'Control+Alt+Backspace';
+export interface DesktopActivationEvent {
+  id: string;
+  kind: 'open' | 'talk';
+}
 export type DesktopShortcut = (typeof DESKTOP_SHORTCUTS)[number];
 export interface DesktopPreferences {
   language: UiLanguage;
@@ -19,6 +24,7 @@ export interface DesktopPreferences {
 export interface DesktopState {
   preferences: DesktopPreferences;
   shortcutRegistered: boolean;
+  stopShortcutRegistered: boolean;
   preferencesSaved: boolean;
   issue: 'shortcut_unavailable' | 'preferences_not_saved' | null;
 }
@@ -49,7 +55,11 @@ export interface DesktopBridge {
   hide(): Promise<void>;
   quit(): Promise<void>;
   onState(listener: (state: DesktopState) => void): () => void;
-  onActivate(listener: () => void): () => void;
+  onActivate(listener: (event: DesktopActivationEvent) => void): () => void;
+  activationReady(): Promise<void>;
+  stopWork(): Promise<void>;
+  getGuideSeenVersion(): Promise<number>;
+  markGuideSeenVersion(version: number): Promise<void>;
   getSession(): Promise<DesktopSessionState>;
   signIn(email: string, password: string): Promise<DesktopSessionState>;
   retrySession(): Promise<DesktopSessionState>;

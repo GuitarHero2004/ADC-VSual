@@ -210,6 +210,7 @@ test('five seconds of silence submits once; manual finish only transcribes and r
     await h.controller.startRecording();
     assert.equal(h.controller.speech.getSnapshot().phase, 'ready');
     assert.ok(h.playbacks[0]!.pauses > 0);
+    h.advance(300);
     h.activity();
     h.advance(4_000);
     assert.equal(h.calls.transcriptions, 0);
@@ -388,6 +389,7 @@ test('desktop recording lasts up to sixty seconds; its local countdown is audibl
       'Duration limit transcribes for review, not automatic Ask',
     );
     await h.controller.startRecording();
+    h.advance(300);
     h.activity();
     h.advance(1_200);
     assert.ok(h.calls.cues.includes('countdown'));
@@ -438,5 +440,180 @@ test('failed requests retain a safe reference and the last actual stage, without
     } finally {
       h.controller.dispose();
     }
+  }
+});
+
+const talk = () => ({ id: crypto.randomUUID(), kind: 'talk' as const });
+
+test('talk starts once with a listening cue; passive opening never records or captures', async () => {
+  const h = await ready();
+  try {
+    await h.controller.activate({ id: crypto.randomUUID(), kind: 'open' });
+    assert.equal(h.recorders.length, 0);
+    const intent = talk();
+    await Promise.all([
+      h.controller.activate(intent),
+      h.controller.activate(intent),
+    ]);
+    assert.equal(h.recorders.length, 1);
+    assert.equal(h.controller.question.getSnapshot().phase, 'recording');
+    assert.deepEqual(h.calls.cues, ['start']);
+    assert.equal(h.calls.captures, 0);
+    assert.equal(h.calls.transcriptions, 0);
+    // A start tone must not count as user speech and arm a submission.
+    h.activity();
+    h.advance(5_000);
+    assert.equal(h.calls.transcriptions, 0);
+    h.activity();
+    h.advance(5_000);
+    await settle();
+    assert.equal(h.calls.reads.length, 1);
+    assert.equal(h.calls.speech.length, 1);
+  } finally {
+    h.controller.dispose();
+  }
+});
+
+test('hotkey stops for review at the silence boundary without waiting for source lookup', async () => {
+  const h = await ready();
+  try {
+    await h.controller.activate(talk());
+    h.advance(300);
+    h.activity();
+    h.advance(4_999);
+    h.bridge.getActiveSource = () => {
+      throw new Error('Review must not look up another source');
+    };
+    const reviewing = h.controller.activate(talk());
+    h.advance(1);
+    await reviewing;
+    await settle();
+    assert.equal(h.calls.transcriptions, 1);
+    assert.equal(h.calls.reads.length, 0);
+    assert.equal(
+      h.controller.question.getSnapshot().text,
+      'What is the revenue?',
+    );
+  } finally {
+    h.controller.dispose();
+  }
+});
+
+test('cancel during native selection or pending microphone permission cannot start a late recording', async () => {
+  const h = await ready();
+  try {
+    const selected = deferred<DesktopSource | null>();
+    h.bridge.getActiveSource = () => selected.promise;
+    const starting = h.controller.activate(talk());
+    h.controller.cancel();
+    selected.resolve(source);
+    await starting;
+    assert.equal(h.recorders.length, 0);
+    h.bridge.getActiveSource = async () => source;
+    const stream =
+      deferred<
+        Awaited<ReturnType<typeof h.dependencies.voice.getMicrophone>>
+      >();
+    h.dependencies.voice.getMicrophone = () => stream.promise;
+    const permission = h.controller.activate(talk());
+    await settle();
+    assert.equal(
+      h.controller.question.getSnapshot().phase,
+      'requesting_permission',
+    );
+    await h.controller.activate(talk());
+    let released = false;
+    stream.resolve({
+      getTracks: () => [
+        {
+          stop: () => {
+            released = true;
+          },
+        },
+      ],
+    });
+    await permission;
+    assert.equal(released, true);
+    assert.equal(h.recorders.length, 0);
+  } finally {
+    h.controller.dispose();
+  }
+});
+
+test('talk during answering cancels without another capture or microphone and suppresses the late answer', async () => {
+  const h = await ready();
+  try {
+    const result = deferred<DesktopResponse>();
+    let requestId = '';
+    h.bridge.readScreen = async (input) => {
+      requestId = input.requestId;
+      return result.promise;
+    };
+    const pending = h.controller.ask();
+    await settle();
+    await h.controller.activate(talk());
+    result.resolve(answerFor(requestId));
+    await pending;
+    assert.equal(h.controller.getSnapshot().answer, null);
+    assert.equal(h.calls.captures, 1);
+    assert.equal(h.recorders.length, 0);
+    assert.equal(h.calls.speech.length, 0);
+  } finally {
+    h.controller.dispose();
+  }
+});
+
+test('talk cancels audio preparation; during playback it silences the player before recording', async () => {
+  const h = await ready();
+  try {
+    const delayed = deferred<ArrayBuffer>();
+    const speak = h.bridge.speak;
+    h.bridge.speak = () => delayed.promise;
+    await h.controller.ask();
+    await h.controller.activate(talk());
+    delayed.resolve(new Uint8Array([1]).buffer);
+    await settle();
+    assert.equal(h.playbacks.length, 0);
+    assert.equal(h.recorders.length, 0);
+    assert.ok(h.controller.getSnapshot().answer);
+    h.bridge.speak = speak;
+    await h.controller.speech.readBack();
+    assert.equal(h.playbacks[0]?.plays, 1);
+    const getMicrophone = h.dependencies.voice.getMicrophone;
+    h.dependencies.voice.getMicrophone = async () => {
+      assert.ok(h.playbacks[0]!.pauses > 0);
+      return getMicrophone();
+    };
+    await h.controller.activate(talk());
+    assert.equal(h.recorders.length, 1);
+    assert.equal(h.controller.question.getSnapshot().phase, 'recording');
+  } finally {
+    h.controller.dispose();
+  }
+});
+
+test('missing target and denied microphone are recoverable and do not submit preserved drafts', async () => {
+  const h = await ready();
+  try {
+    h.bridge.getActiveSource = async () => null;
+    await h.controller.activate(talk());
+    assert.equal(h.controller.getSnapshot().errorCode, 'source_required');
+    h.bridge.getActiveSource = async () => source;
+    h.dependencies.voice.getMicrophone = async () => {
+      throw new DOMException('Denied', 'NotAllowedError');
+    };
+    await h.controller.activate(talk());
+    assert.equal(
+      h.controller.question.getSnapshot().errorCode,
+      'microphone_denied',
+    );
+    assert.equal(
+      h.controller.question.getSnapshot().text,
+      'What is the revenue?',
+    );
+    assert.equal(h.calls.reads.length, 0);
+    assert.equal(h.calls.transcriptions, 0);
+  } finally {
+    h.controller.dispose();
   }
 });

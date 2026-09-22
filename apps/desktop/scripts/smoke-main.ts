@@ -26,7 +26,7 @@ void app.whenReady().then(async () => {
       quit: () => app.quit(),
     });
     // Check native window flags on the displayed companion, as in normal launch.
-    host.show();
+    await host.activate();
     // The hidden test process can have its first native ShowWindow ignored.
     host.window.showInactive();
     const contents = host.window.webContents;
@@ -71,11 +71,14 @@ void app.whenReady().then(async () => {
     assert.equal(rendered.node, 'undefined');
     assert.equal(rendered.language, 'en');
     assert.deepEqual(rendered.bridge, [
+      'activationReady',
       'cancelOperation',
       'getActiveSource',
+      'getGuideSeenVersion',
       'getSession',
       'getState',
       'hide',
+      'markGuideSeenVersion',
       'onActivate',
       'onSession',
       'onState',
@@ -87,9 +90,44 @@ void app.whenReady().then(async () => {
       'signIn',
       'signOut',
       'speak',
+      'stopWork',
       'transcribe',
       'updatePreferences',
     ]);
+    const guide = await contents.executeJavaScript(`(async () => ({
+      seen: await window.vsualDesktop.getGuideSeenVersion(),
+      speaking: speechSynthesis.speaking,
+      text: document.querySelector('.desktop-introduction')?.textContent,
+      hotkeys: document.querySelectorAll('.desktop-hotkeys kbd').length
+    }))()`);
+    assert.equal(
+      guide.seen,
+      0,
+      'Signed-out launch cannot consume the authenticated welcome',
+    );
+    assert.equal(guide.speaking, false, 'The Windows welcome waits for login');
+    assert.equal(
+      guide.text,
+      undefined,
+      'Instructions appear only in the signed-in screen',
+    );
+    assert.equal(guide.hotkeys, 0);
+    console.log(
+      JSON.stringify({ check: 'signed_out_guide_and_hotkeys', passed: true }),
+    );
+    // Real IPC and renderer, signed out: Talk must guide sign-in without microphone access.
+    await host.activate('talk');
+    await contents.executeJavaScript(
+      'new Promise(resolve => setTimeout(resolve, 100))',
+    );
+    const signedOutTalk = await contents.executeJavaScript(`({
+      focused: document.activeElement?.id,
+      recording: document.querySelector('#desktop-question') !== null,
+      guide: document.querySelector('.desktop-introduction [role="status"]')?.textContent
+    })`);
+    assert.equal(signedOutTalk.focused, 'desktop-signin-title');
+    assert.equal(signedOutTalk.recording, false);
+    await contents.executeJavaScript('window.vsualDesktop.stopWork()');
     // Exercise actual contextBridge rejection copying, not a VM-only mock.
     const rejectionCodes = await contents.executeJavaScript(`(async () => {
       const caught = async (operation) => {
@@ -145,6 +183,10 @@ void app.whenReady().then(async () => {
     assert.equal(
       state.shortcutRegistered,
       globalShortcut.isRegistered(state.preferences.shortcut),
+    );
+    assert.equal(
+      state.stopShortcutRegistered,
+      globalShortcut.isRegistered('Control+Alt+Backspace'),
     );
     // The production sender check and strict preferences validator are exercised.
     const rejected = await contents.executeJavaScript(
@@ -219,6 +261,9 @@ void app.whenReady().then(async () => {
         reflow200: true,
         closeToTray: true,
         shortcutRegistered: state.shortcutRegistered,
+        stopShortcutRegistered: state.stopShortcutRegistered,
+        signedOutTalk: true,
+        guideHiddenBeforeLogin: true,
         physicalShortcutKeypress: 'not_run',
         nvda: 'not_run',
       }),

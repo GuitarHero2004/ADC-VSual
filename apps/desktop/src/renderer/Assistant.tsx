@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { VISUAL_LIMITS, type UiLanguage } from '@adc/contracts';
 import { SignInForm } from '../../../../packages/voice-ui/src/SignInForm.tsx';
 import { browserDependencies } from '../../../../packages/voice-ui/src/browser.ts';
@@ -26,6 +32,9 @@ interface Props {
   language: UiLanguage;
   shortcut: DesktopShortcut;
   dependencies?: AssistantDependencies;
+  onBeforeWork?: () => void;
+  registerStopWork?: (stop: (() => void) | null) => void;
+  onSessionChange?: (session: DesktopSessionState | null) => void;
 }
 
 export function DesktopAssistant({
@@ -33,6 +42,9 @@ export function DesktopAssistant({
   language,
   shortcut,
   dependencies,
+  onBeforeWork,
+  registerStopWork,
+  onSessionChange,
 }: Props) {
   const [session, setSession] = useState<DesktopSessionState | null>(null);
   const [loading, setLoading] = useState(true);
@@ -43,6 +55,69 @@ export function DesktopAssistant({
   const live = useRef(false);
   const text = assistantText[language];
   const accepted = useRef<DesktopSessionState | null>(null);
+  const activeController = useRef<DesktopAssistantController | null>(null);
+  const beforeWork = useRef(onBeforeWork);
+  beforeWork.current = onBeforeWork;
+  const sessionChanged = useRef(onSessionChange);
+  sessionChanged.current = onSessionChange;
+  const registerStop = useRef(registerStopWork);
+  registerStop.current = registerStopWork;
+  const [controllerReady, setControllerReady] = useState(false);
+  const [activationNotice, setActivationNotice] = useState(false);
+  const focusGeneration = useRef(0);
+  const stopGuide = useCallback(() => beforeWork.current?.(), []);
+  const acceptController = useCallback(
+    (controller: DesktopAssistantController | null, ready = true) => {
+      activeController.current = controller;
+      registerStop.current?.(controller?.cancel ?? null);
+      setControllerReady(controller !== null && ready);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    let active = true;
+    const removeActivation = bridge.onActivate((event) => {
+      const generation = ++focusGeneration.current;
+      if (event.kind === 'talk') stopGuide();
+      const currentSession = accepted.current;
+      const controller = activeController.current;
+      if (
+        !controller ||
+        currentSession?.phase !== 'signed_in' ||
+        currentSession.workspace !== 'allowed'
+      ) {
+        // Consume the intent now; successful login never arms an old microphone request.
+        if (event.kind === 'talk') {
+          setActivationNotice(true);
+          document.getElementById('desktop-signin-title')?.focus();
+        }
+        return;
+      }
+      setActivationNotice(false);
+      // Do not move focus when delayed native or permission work resolves.
+      if (event.kind === 'talk')
+        document.getElementById('desktop-question')?.focus();
+      void controller.activate(event).catch(() => {
+        if (
+          active &&
+          generation === focusGeneration.current &&
+          activeController.current === controller
+        )
+          setError('unavailable');
+      });
+    });
+    const removeSuspend = bridge.onSuspend(() => {
+      focusGeneration.current++;
+      activeController.current?.cancel();
+    });
+    return () => {
+      active = false;
+      focusGeneration.current++;
+      removeActivation();
+      removeSuspend();
+    };
+  }, [bridge, stopGuide]);
 
   useEffect(() => {
     live.current = true;
@@ -50,8 +125,17 @@ export function DesktopAssistant({
     let eventReceived = false;
     const remove = bridge.onSession((next) => {
       if (!active) return;
+      if (
+        next.epoch !== accepted.current?.epoch ||
+        next.phase !== 'signed_in' ||
+        next.workspace !== 'allowed'
+      ) {
+        focusGeneration.current++;
+        activeController.current?.cancel();
+      }
       eventReceived = true;
       accepted.current = next;
+      sessionChanged.current?.(next);
       setSession(next);
       setLoading(false);
       setError(null);
@@ -61,6 +145,7 @@ export function DesktopAssistant({
       (next) => {
         if (!active || eventReceived) return;
         accepted.current = next;
+        sessionChanged.current?.(next);
         setSession(next);
         setLoading(false);
       },
@@ -74,11 +159,13 @@ export function DesktopAssistant({
       active = false;
       live.current = false;
       revision.current++;
+      sessionChanged.current?.(null);
       remove();
     };
   }, [bridge, retry]);
 
   async function auth(operation: () => Promise<DesktopSessionState>) {
+    stopGuide();
     const current = ++revision.current;
     const before = accepted.current;
     setError(null);
@@ -89,6 +176,7 @@ export function DesktopAssistant({
       if (accepted.current !== before && accepted.current?.epoch !== next.epoch)
         return;
       accepted.current = next;
+      sessionChanged.current?.(next);
       setSession(next);
     } catch (failure) {
       if (live.current && revision.current === current)
@@ -97,6 +185,11 @@ export function DesktopAssistant({
   }
 
   async function signOut() {
+    stopGuide();
+    accepted.current = null;
+    sessionChanged.current?.(null);
+    focusGeneration.current++;
+    activeController.current?.cancel();
     setSigningOut(true);
     // Remove the session-owned controls immediately, before remote logout finishes.
     setSession(null);
@@ -110,25 +203,21 @@ export function DesktopAssistant({
     session.workspace === 'allowed' &&
     session.account;
   const errorCode = error ?? session?.errorCode?.toLowerCase();
+  useEffect(() => {
+    if (loading || (allowed && !controllerReady)) return;
+    void bridge.activationReady().catch(() => {
+      if (live.current) setError('unavailable');
+    });
+  }, [bridge, loading, allowed, controllerReady]);
   return (
-    <section className="desktop-assistant" aria-label={text.title}>
-      <section
-        className="desktop-quickstart"
-        aria-labelledby="desktop-guide-title"
-      >
-        <h2 id="desktop-guide-title">{text.guideTitle}</h2>
-        <ol>
-          <li>
-            {text.guideActivate.replace(
-              '{shortcut}',
-              shortcut.replace('Control', 'Ctrl').replaceAll('+', ' + '),
-            )}
-          </li>
-          <li>{text.guideAsk}</li>
-          <li>{text.guideListen}</li>
-        </ol>
-      </section>
+    <section
+      id="desktop-assistant"
+      tabIndex={-1}
+      className="desktop-assistant"
+      aria-label={text.title}
+    >
       <p className="desktop-help">{text.separate}</p>
+      {activationNotice && <p role="status">{text.activationRequiresAccess}</p>}
       {loading || signingOut ? (
         <p role="status">{signingOut ? text.signingOut : text.checking}</p>
       ) : session?.account ? (
@@ -155,7 +244,9 @@ export function DesktopAssistant({
         </div>
       ) : (
         <section aria-labelledby="desktop-signin-title">
-          <h2 id="desktop-signin-title">{text.signIn}</h2>
+          <h2 id="desktop-signin-title" tabIndex={-1}>
+            {text.signIn}
+          </h2>
           <SignInForm
             language={language}
             busy={session?.phase === 'signing_in'}
@@ -190,6 +281,8 @@ export function DesktopAssistant({
           epoch={session.epoch}
           language={language}
           shortcut={shortcut}
+          onBeforeWork={stopGuide}
+          onController={acceptController}
           {...(dependencies ? { dependencies } : {})}
         />
       )}
@@ -203,10 +296,19 @@ function SessionAssistant({
   language,
   shortcut,
   dependencies,
-}: Props & { epoch: string }) {
+  onBeforeWork,
+  onController,
+}: Props & {
+  epoch: string;
+  onController: (
+    controller: DesktopAssistantController | null,
+    ready?: boolean,
+  ) => void;
+}) {
   const [controller, setController] =
     useState<DesktopAssistantController | null>(null);
   useEffect(() => {
+    let live = true;
     const current = new DesktopAssistantController(
       bridge,
       epoch,
@@ -214,24 +316,26 @@ function SessionAssistant({
         capture: captureWindowFrame,
         voice: browserDependencies,
       },
+      onBeforeWork,
     );
-    const removeSuspend = bridge.onSuspend(current.cancel);
-    const removeActivation = bridge.onActivate(() => {
-      void current.useActiveSource();
-    });
     setController(current);
-    void current.useActiveSource();
+    onController(current, false);
+    // Source metadata is safe to restore after login; this never starts recording.
+    void current.useActiveSource().then(() => {
+      if (live) onController(current, true);
+    });
     return () => {
-      removeSuspend();
-      removeActivation();
+      live = false;
+      onController(null);
       current.dispose();
     };
-  }, [bridge, epoch, dependencies]);
+  }, [bridge, epoch, dependencies, onBeforeWork, onController]);
   return controller ? (
     <AssistantControls
       controller={controller}
       language={language}
       shortcut={shortcut}
+      {...(onBeforeWork ? { onBeforeWork } : {})}
     />
   ) : (
     <p role="status">{assistantText[language].checking}</p>
@@ -242,10 +346,12 @@ export function AssistantControls({
   controller,
   language,
   shortcut,
+  onBeforeWork,
 }: {
   controller: DesktopAssistantController;
   language: UiLanguage;
   shortcut: DesktopShortcut;
+  onBeforeWork?: () => void;
 }) {
   const state = useSyncExternalStore(
     controller.subscribe,
@@ -451,7 +557,10 @@ export function AssistantControls({
                 speech.phase === 'generating' ||
                 speech.phase === 'speaking'
               }
-              onClick={() => void controller.speech.readBack()}
+              onClick={() => {
+                onBeforeWork?.();
+                void controller.speech.readBack();
+              }}
             >
               {speech.hasAudio
                 ? speech.notice === 'autoplay_blocked'

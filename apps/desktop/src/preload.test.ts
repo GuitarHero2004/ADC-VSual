@@ -52,21 +52,39 @@ test('preload preserves cold activation, cleans subscribers, and exposes only na
       },
     },
   );
-  const activate = () => {
-    for (const listener of events.get('desktop:activated') ?? []) listener();
+  const emit = (channel: string, input?: unknown) => {
+    for (const listener of events.get(channel) ?? []) listener({}, input);
   };
-  activate();
+  const activate = (id = crypto.randomUUID()) => {
+    emit('desktop:activated', { id, kind: 'talk' });
+    return id;
+  };
+  const initialId = activate();
   await Promise.resolve();
   let first = 0;
   let second = 0;
   const unsubscribe = bridge.onActivate(() => first++);
   unsubscribe();
-  const remove = bridge.onActivate(() => second++);
+  const remove = bridge.onActivate((event) => {
+    assert.equal(event.kind, 'talk');
+    second++;
+  });
+  await Promise.resolve();
+  assert.equal(
+    second,
+    0,
+    'A subscriber alone does not bypass initial session hydration',
+  );
+  await bridge.activationReady();
   await Promise.resolve();
   assert.equal(first, 0);
   assert.equal(second, 1);
   await Promise.resolve();
   assert.equal(second, 1, 'No replay from later microtasks');
+  activate(initialId);
+  emit('desktop:activated', { id: 'bad', kind: 'talk' });
+  await Promise.resolve();
+  assert.equal(second, 1, 'Duplicate and malformed native events are rejected');
   activate();
   await Promise.resolve();
   assert.equal(second, 2);
@@ -74,12 +92,24 @@ test('preload preserves cold activation, cleans subscribers, and exposes only na
   activate();
   await Promise.resolve();
   assert.equal(second, 2);
+  emit('assistant:suspend');
+  const removeLater = bridge.onActivate(() => second++);
+  await Promise.resolve();
+  assert.equal(
+    second,
+    2,
+    'Stop clears an activation queued during unsubscribe',
+  );
+  removeLater();
   assert.deepEqual(Object.keys(bridge).sort(), [
+    'activationReady',
     'cancelOperation',
     'getActiveSource',
+    'getGuideSeenVersion',
     'getSession',
     'getState',
     'hide',
+    'markGuideSeenVersion',
     'onActivate',
     'onSession',
     'onState',
@@ -91,6 +121,7 @@ test('preload preserves cold activation, cleans subscribers, and exposes only na
     'signIn',
     'signOut',
     'speak',
+    'stopWork',
     'transcribe',
     'updatePreferences',
   ]);
@@ -98,6 +129,7 @@ test('preload preserves cold activation, cleans subscribers, and exposes only na
   await bridge.hide();
   await bridge.quit();
   assert.deepEqual(calls, [
+    ['desktop:activation-ready'],
     ['desktop:state'],
     ['desktop:hide'],
     ['desktop:quit'],

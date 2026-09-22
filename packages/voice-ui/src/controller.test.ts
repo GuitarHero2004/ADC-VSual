@@ -158,6 +158,59 @@ async function settle() {
   await Promise.resolve();
 }
 
+test('the optional recording start cue uses the activity clock when no clock is injected', async (context) => {
+  const h = harness({}, { silenceAutoFinish: true, recordingStartCue: true });
+  let time = 10;
+  context.mock.method(performance, 'now', () => time);
+  let activity = () => {};
+  h.dependencies.observeAudioActivity = async (_stream, listener) => {
+    activity = listener;
+    return () => {};
+  };
+  const cues: string[] = [];
+  h.dependencies.cue = (kind) => {
+    cues.push(kind ?? 'start');
+  };
+  h.controller.setAudioFeedback(true);
+  try {
+    await h.controller.start();
+    assert.deepEqual(cues, ['start']);
+    activity();
+    assert.equal(h.controller.getSnapshot().silenceSecondsRemaining, null);
+    time += 300;
+    activity();
+    assert.equal(h.controller.getSnapshot().silenceSecondsRemaining, 5);
+  } finally {
+    h.controller.dispose();
+  }
+});
+
+test('cancellation when recording becomes ready suppresses its start tone and activity observer', async () => {
+  const h = harness({}, { silenceAutoFinish: true, recordingStartCue: true });
+  let cues = 0;
+  let observers = 0;
+  h.dependencies.cue = () => {
+    cues++;
+  };
+  h.dependencies.observeAudioActivity = async () => {
+    observers++;
+    return () => {};
+  };
+  h.controller.setAudioFeedback(true);
+  const remove = h.controller.subscribe(() => {
+    if (h.controller.getSnapshot().phase === 'recording') h.controller.cancel();
+  });
+  try {
+    await h.controller.start();
+    assert.equal(cues, 0);
+    assert.equal(observers, 0);
+    assert.ok(h.trackStops > 0);
+  } finally {
+    remove();
+    h.controller.dispose();
+  }
+});
+
 function silenceHarness(
   overrides: Partial<VoiceTransport> = {},
   options: VoiceControllerOptions = {},

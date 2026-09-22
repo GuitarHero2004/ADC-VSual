@@ -10,6 +10,7 @@ import {
 } from 'electron';
 import { createDesktopHost } from '../src/host.ts';
 import { readForegroundWindow } from '../src/foreground.ts';
+import { DESKTOP_SHORTCUTS } from '../src/bridge.ts';
 
 // Real Windows pixels, synthetic window only. Auth and the provider are mocked.
 const profile = process.env.VSUAL_SMOKE_PROFILE;
@@ -41,12 +42,14 @@ const timer = setTimeout(
     fixture?.destroy();
     app.exit(1);
   },
-  interactive ? 165_000 : 45_000,
+  interactive ? 165_000 : 40_000,
 );
 app.on('window-all-closed', () => {});
 void app.whenReady().then(async () => {
   let providerCalls = 0;
   let speechCalls = 0;
+  let transcribeCalls = 0;
+  let recordedBytes = 0;
   try {
     fixture = new BrowserWindow({
       width: 760,
@@ -95,6 +98,28 @@ void app.whenReady().then(async () => {
           account: { id: user.id, email: user.email },
           workspace: 'allowed',
         });
+      if (url.pathname === '/api/voice/transcribe') {
+        transcribeCalls++;
+        assert.ok(
+          init?.body instanceof FormData,
+          'Recorded audio uses multipart upload',
+        );
+        const audio = init.body.get('audio');
+        assert.ok(
+          audio instanceof Blob && audio.size > 0,
+          'Native MediaRecorder produced nonempty audio',
+        );
+        assert.ok(
+          audio.type.startsWith('audio/webm'),
+          'Recorded media retains the Chromium audio MIME type',
+        );
+        recordedBytes += audio.size;
+        return Response.json({
+          request_id: new Headers(init.headers).get('X-Request-ID'),
+          transcript: 'Explain the red square and blue rectangle.',
+          detected_language: 'en',
+        });
+      }
       if (url.pathname === '/api/voice/speak') {
         speechCalls++;
         // Exercise recoverable voice failure without producing sound or spending credits.
@@ -162,11 +187,18 @@ void app.whenReady().then(async () => {
     host.hide();
     fixture.show();
     if (interactive) {
-      const settings = host.settings.snapshot();
+      let settings = host.settings.snapshot();
+      if (!settings.shortcutRegistered) {
+        for (const shortcut of DESKTOP_SHORTCUTS) {
+          if (shortcut === settings.preferences.shortcut) continue;
+          settings = await host.settings.update({ language: 'en', shortcut });
+          if (settings.shortcutRegistered) break;
+        }
+      }
       assert.equal(
         settings.shortcutRegistered,
         true,
-        'Close another VSual instance using this shortcut before the interactive check',
+        'No supported Talk shortcut is available for this temporary test profile',
       );
       console.log(
         JSON.stringify({
@@ -263,6 +295,140 @@ void app.whenReady().then(async () => {
       1,
       'Each accepted answer automatically attempts speech once',
     );
+    // Replace only the microphone device in this isolated synthetic renderer.
+    // Native MediaRecorder, preload IPC, React and main auth/request ownership stay real.
+    await contents.executeJavaScript(
+      `(async()=>{
+      const context=new AudioContext();
+      await context.resume();
+      window.__captureVoiceCheck={context,streams:[],generators:[],requests:0};
+      Object.defineProperty(navigator.mediaDevices,'getUserMedia',{
+        configurable:true,
+        value:async(constraints)=>{
+          if(constraints.video || !constraints.audio)throw new Error('Unexpected synthetic microphone constraints');
+          const destination=context.createMediaStreamDestination();
+          const silence=context.createConstantSource();
+          silence.offset.value=0;
+          silence.connect(destination);
+          silence.start();
+          window.__captureVoiceCheck.generators.push(silence);
+          window.__captureVoiceCheck.requests++;
+          window.__captureVoiceCheck.streams.push(destination.stream);
+          return destination.stream;
+        }
+      });
+    })()`,
+      true,
+    );
+    host.window.focus();
+    const voiceForeground = await readForegroundWindow();
+    assert.ok(
+      [host.window.getMediaSourceId(), fixture.getMediaSourceId()].some(
+        (source) => source.split(':')[1] === voiceForeground?.split(':')[1],
+      ),
+      'Windows focus changed outside the synthetic fixture; no microphone activation was attempted',
+    );
+    await Promise.all([host.activate('talk'), host.activate('talk')]);
+    const afterTalkSource = await contents.executeJavaScript(
+      'window.vsualDesktop.getActiveSource()',
+    );
+    assert.equal(
+      afterTalkSource?.title,
+      'VSual synthetic capture fixture',
+      'Talk from VSual preserves the selected external window',
+    );
+    const firstRecording = await contents.executeJavaScript(`(async()=>{
+      const end=Date.now()+5000;
+      while(![...document.querySelectorAll('button')].some(button=>button.textContent.trim()==='Stop and review')){
+        if(Date.now()>end)throw new Error('Talk did not start synthetic recording: '+JSON.stringify({requests:window.__captureVoiceCheck.requests,status:[...document.querySelectorAll('[role=status]')].map(element=>element.textContent),controls:[...document.querySelectorAll('button')].map(element=>element.textContent.trim())}));
+        await new Promise(resolve=>setTimeout(resolve,25));
+      }
+      return window.__captureVoiceCheck.requests;
+    })()`);
+    assert.equal(
+      firstRecording,
+      1,
+      'Duplicate native Talk delivers one microphone request',
+    );
+    await contents.executeJavaScript('window.vsualDesktop.stopWork()');
+    const cancelledRecording = await contents.executeJavaScript(`(async()=>{
+      const end=Date.now()+5000;
+      while(window.__captureVoiceCheck.streams.some(stream=>stream.getTracks().some(track=>track.readyState!=='ended'))){
+        if(Date.now()>end)throw new Error('Stop did not release synthetic microphone tracks');
+        await new Promise(resolve=>setTimeout(resolve,25));
+      }
+      return window.__captureVoiceCheck.streams.length;
+    })()`);
+    assert.equal(cancelledRecording, 1);
+    assert.equal(
+      transcribeCalls,
+      0,
+      'Stop discards recording without transcription',
+    );
+    assert.equal(
+      providerCalls,
+      1,
+      'Starting and cancelling recording do not ask the model',
+    );
+
+    await host.activate('talk');
+    await contents.executeJavaScript(`(async()=>{
+      const end=Date.now()+5000;
+      while(![...document.querySelectorAll('button')].some(button=>button.textContent.trim()==='Stop and review')){
+        if(Date.now()>end)throw new Error('Second Talk did not record');
+        await new Promise(resolve=>setTimeout(resolve,25));
+      }
+      await new Promise(resolve=>setTimeout(resolve,400));
+    })()`);
+    await host.activate('talk'); // Recording toggle is Stop and review, never auto-submit.
+    const reviewed = await contents.executeJavaScript(`(async()=>{
+      const end=Date.now()+5000;
+      const field=()=>document.querySelector('#desktop-question');
+      while(!field() || field().readOnly || field().value!=='Explain the red square and blue rectangle.'){
+        if(Date.now()>end)throw new Error('Recorded transcript did not become editable: '+JSON.stringify({requests:window.__captureVoiceCheck.requests,status:[...document.querySelectorAll('[role=status]')].map(element=>element.textContent)}));
+        await new Promise(resolve=>setTimeout(resolve,25));
+      }
+      return {
+        microphoneRequests:window.__captureVoiceCheck.requests,
+        tracksEnded:window.__captureVoiceCheck.streams.every(stream=>stream.getTracks().every(track=>track.readyState==='ended')),
+      };
+    })()`);
+    assert.equal(reviewed.microphoneRequests, 2);
+    assert.equal(reviewed.tracksEnded, true);
+    assert.equal(
+      transcribeCalls,
+      1,
+      'Finish uploads once, including the final recorder chunk',
+    );
+    assert.ok(recordedBytes > 0);
+    assert.equal(
+      providerCalls,
+      1,
+      'Stop and review preserves explicit question submission',
+    );
+    const followup = await contents.executeJavaScript(`(async()=>{
+      const button=[...document.querySelectorAll('button')].find(button=>button.textContent.trim()==='Ask VSual');
+      if(!button || button.disabled)throw new Error('Reviewed question is not ready to submit');
+      button.click();
+      const end=Date.now()+10000;
+      while(!document.querySelector('.answer-text') || ![...document.querySelectorAll('button')].some(button=>button.textContent.trim()==='Retry answer audio')){
+        if(Date.now()>end)throw new Error('Reviewed voice question did not receive its synthetic answer');
+        await new Promise(resolve=>setTimeout(resolve,25));
+      }
+      window.__captureVoiceCheck.generators.forEach(generator=>generator.stop());
+      await window.__captureVoiceCheck.context.close();
+      return document.querySelector('.answer-text').textContent;
+    })()`);
+    assert.equal(
+      followup,
+      'Synthetic test response; no live model was called.',
+    );
+    assert.equal(
+      providerCalls,
+      2,
+      'One model request per explicitly submitted question',
+    );
+    assert.equal(speechCalls, 2, 'One audio attempt per accepted answer');
     host.dispose();
     fixture.destroy();
     clearTimeout(timer);
@@ -277,6 +443,14 @@ void app.whenReady().then(async () => {
         firstSignInPreservesTarget: true,
         automaticSpeechRequest: true,
         voiceFailurePreservesAnswer: true,
+        talkActivationViaPreload: true,
+        duplicateTalkDeduplicated: true,
+        stopReleasesRecording: true,
+        stopAndReviewUploadsOnce: true,
+        nativeMediaRecorder: true,
+        microphoneDevice: 'synthetic_audio_stream_no_hardware',
+        transcription: 'mocked',
+        recordedBytes,
         auth: 'mocked',
         provider: 'mocked',
         activation: interactive ? 'registered_shortcut' : 'host_method',
