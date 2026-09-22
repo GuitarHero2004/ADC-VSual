@@ -1039,6 +1039,47 @@ manual; use the sequence below. Mixed/unaccented/explicit-language model decisio
 are covered by controlled contract tests and instructions, not a live language
 evaluation suite.
 
+### Price pronunciation in English and Vietnamese
+
+The existing `/api/voice/speak` endpoint prepares a separate spoken copy for
+desktop, extension and web read-back. Displayed answers, transcripts and evidence
+retain their original text. This is deterministic text preparation, not model
+training or voice cloning; it makes no additional AI request.
+
+| Supplied text      | English speech copy                                    | Vietnamese speech copy                          |
+| ------------------ | ------------------------------------------------------ | ----------------------------------------------- |
+| `USD55`            | fifty-five US dollars                                  | năm mươi lăm đô la Mỹ                           |
+| `USD55/seat/month` | fifty-five US dollars per seat per month               | năm mươi lăm đô la Mỹ mỗi chỗ mỗi tháng         |
+| `1.250.000 VND`    | one million two hundred fifty thousand Vietnamese dong | một triệu hai trăm năm mươi nghìn đồng Việt Nam |
+
+Supported labels are `USD`, `US$`, `VND` and `₫`, before or after an unsigned
+amount. Supported rates include seat/user and day/week/month/year/hour. Clear
+one- or two-digit decimals retain each decimal digit without rounding. Ambiguous
+single separators (`USD1,250`), malformed amounts, bare `$`, dates, identifiers,
+marked code and URLs are left unchanged. Other abbreviations and unsupported
+rate expressions are not guessed. Amounts are bounded to twelve integer digits.
+
+Preparation follows the supplied speech language (`en`/`vi`); companion answers
+already supply their resolved language. If language is absent, including Auto on
+the manual `/voice` page, text passes through unchanged. Both original and expanded
+copies must fit the existing 1,000-Unicode-character limit. Expansion overflow is
+rejected before usage reservation or synthesis, without truncation; shorten the
+text in `/voice`, or ask for a shorter answer in the companion.
+
+The configured ElevenLabs voice/model and existing playback rate are preserved.
+No new environment variables, dependencies or database changes are needed. The
+model-specific [Flash v2.5 documentation](https://elevenlabs.io/docs/overview/models)
+describes its number-normalisation limits; this feature does not enable a paid
+normalisation option. Vietnamese accent and intelligibility still depend on the
+selected voice and require a human listening check.
+
+To test locally, run `npm run dev:web`, open `http://127.0.0.1:3000/voice`, sign in,
+enable app speech and choose English or Vietnamese explicitly. Type the examples
+above and select **Read back**. Check **Stop** and **Repeat**, then try a desktop
+answer containing a price against this backend. Cached Repeat must make no new
+TTS request. Automated formatter, HTTP and SDK-payload tests use provider mocks;
+live pronunciation and NVDA checks for this change have not been performed.
+
 ## Install and run
 
 Use **Node.js 24.x and npm 11.x** (`.nvmrc`, `packageManager` and engine checks
@@ -1676,7 +1717,8 @@ recordings and text are sent to ElevenLabs under its
    Play/Repeat and every speed. Network tools should show no new `/speak` request
    for Repeat/speed changes. Editing text/language must require fresh synthesis.
    Test `09/10/2026`, `1.250,50 ₫`, `1,250.50 USD`, `Q3` and mixed-language text.
-   The application preserves digits; assess provider pronunciation manually.
+   Displayed text retains its digits. With English/Vietnamese selected, clear
+   currency amounts receive a spoken copy as described above; assess pronunciation manually.
 7. Sign out while recording, requesting permission, generating and speaking.
    Pending work/audio must clear, including other open extension setup documents.
 

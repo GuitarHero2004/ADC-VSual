@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   AUDIO_MAX_BYTES,
+  unicodeLength,
   voiceErrorResponseSchema,
+  type SpeechSynthesisInput,
   type UsageLimit,
 } from '@adc/contracts';
 import { createVoiceHandler, voicePreflight } from './http.ts';
@@ -10,7 +12,12 @@ import { VoiceError } from './errors.ts';
 
 const requestId = '11111111-1111-4111-8111-111111111111';
 function setup() {
-  const calls = { auth: 0, reserve: 0, provider: 0 };
+  const calls = {
+    auth: 0,
+    reserve: 0,
+    provider: 0,
+    speechInputs: [] as SpeechSynthesisInput[],
+  };
   const dependencies = {
     async verifyVoiceUser() {
       calls.auth++;
@@ -25,8 +32,9 @@ function setup() {
       assert.equal(file.name, 'recording.webm');
       return { transcript: 'Q3: 1.250,50 ₫', detected_language: 'vie' };
     },
-    async synthesiseSpeech() {
+    async synthesiseSpeech(input: SpeechSynthesisInput) {
       calls.provider++;
+      calls.speechInputs.push(input);
       return new Uint8Array([1, 2, 3]);
     },
   };
@@ -175,6 +183,65 @@ test('speak validates Unicode consistently and returns uncached playable audio',
   assert.equal(response.headers.get('content-type'), 'audio/mpeg');
   assert.equal(response.headers.get('x-request-id'), requestId);
   assert.equal(calls.provider, 1);
+});
+
+test('speak prepares only a speech copy in the requested language before provider dispatch', async () => {
+  for (const [language, expected] of [
+    ['en', 'fifty-five US dollars per seat per month'],
+    ['vi', 'năm mươi lăm đô la Mỹ mỗi chỗ mỗi tháng'],
+  ] as const) {
+    const input = { text: 'USD55/seat/month', language };
+    const { calls, dependencies } = setup();
+    const response = await createVoiceHandler(
+      'speak',
+      dependencies,
+    )(json(input));
+    assert.equal(response.status, 200);
+    assert.deepEqual(calls.speechInputs, [{ text: expected, language }]);
+    assert.equal(input.text, 'USD55/seat/month');
+    assert.equal(calls.auth, 1);
+    assert.equal(calls.reserve, 1);
+    assert.equal(calls.provider, 1);
+  }
+});
+
+test('speech expansion overflow is rejected before usage reservation or provider calls', async () => {
+  const input = { text: 'USD55 '.repeat(100), language: 'en' };
+  assert.ok(unicodeLength(input.text) <= 1000);
+  const { calls, dependencies } = setup();
+  const response = await createVoiceHandler('speak', dependencies)(json(input));
+  assert.equal(response.status, 413);
+  const body = voiceErrorResponseSchema.parse(await response.json());
+  assert.equal(body.error.code, 'INPUT_TOO_LARGE');
+  assert.equal(calls.auth, 1);
+  assert.equal(calls.reserve, 0);
+  assert.equal(calls.provider, 0);
+});
+
+test('expanded speech uses the exact Unicode code-point boundary without truncation', async () => {
+  const expanded = 'fifty-five US dollars';
+  const padding = '😀'.repeat(1000 - unicodeLength(expanded) - 1);
+  const text = `${padding} USD55`;
+  const expected = `${padding} ${expanded}`;
+  const { calls, dependencies } = setup();
+  const response = await createVoiceHandler(
+    'speak',
+    dependencies,
+  )(json({ text, language: 'en' }));
+  assert.equal(response.status, 200);
+  assert.equal(unicodeLength(expected), 1000);
+  assert.deepEqual(calls.speechInputs, [{ text: expected, language: 'en' }]);
+  assert.equal(calls.reserve, 1);
+  assert.equal(calls.provider, 1);
+
+  const over = setup();
+  const rejected = await createVoiceHandler(
+    'speak',
+    over.dependencies,
+  )(json({ text: `😀${text}`, language: 'en' }));
+  assert.equal(rejected.status, 413);
+  assert.equal(over.calls.reserve, 0);
+  assert.equal(over.calls.provider, 0);
 });
 test('same-origin browser calls use the destination Host when Next reconstructs an internal URL', async () => {
   const { dependencies } = setup();

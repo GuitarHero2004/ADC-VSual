@@ -1,10 +1,7 @@
 import 'server-only';
-import {
-  AUDIO_MAX_BYTES,
-  recognitionLanguageSchema,
-  speechSynthesisInputSchema,
-} from '@adc/contracts';
+import { AUDIO_MAX_BYTES, recognitionLanguageSchema } from '@adc/contracts';
 import { VoiceError } from './errors.ts';
+import { prepareSpeechInput } from './speech-text.ts';
 
 // 3 MiB audio + 64 KiB multipart overhead stays below Vercel's 4.5 MB body limit.
 const MULTIPART_MAX = AUDIO_MAX_BYTES + 64 * 1024;
@@ -66,9 +63,8 @@ export async function readSpeechInput(request: Request) {
     if (error instanceof VoiceError || request.signal.aborted) throw error;
     throw invalid();
   }
-  const parsed = speechSynthesisInputSchema.safeParse(value);
-  if (!parsed.success) throw invalid();
-  return parsed.data;
+  // Prepare the spoken copy before reserving usage, including its expanded size.
+  return prepareSpeechInput(value);
 }
 
 export async function readAudioInput(request: Request) {
