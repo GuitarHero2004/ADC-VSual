@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./speech-pronunciation": "./src/speech-pronunciation.ts",
     "./styles.css": "./src/styles.css"
   },
   "scripts": {

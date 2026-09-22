@@ -120,6 +120,21 @@ test('English and absent TTS language remain server-controlled supported options
   });
 });
 
+test('ElevenLabs receives Visual for the brand in English, Vietnamese and automatic language', async () => {
+  createFetchResponse = mp3Response;
+  for (const language of ['en', 'vi', undefined] as const) {
+    const input = Object.freeze({
+      text: 'VSual can help.',
+      ...(language ? { language } : {}),
+    });
+    await synthesiseSpeech(input);
+    const payload = await capturedRequests.at(-1)!.json();
+    assert.equal(payload.text, 'Visual can help.');
+    assert.equal(payload.language_code, language);
+    assert.equal(input.text, 'VSual can help.');
+  }
+});
+
 test('TTS expands explicit English and Vietnamese prices in the actual SDK payload without mutating the answer', async () => {
   createFetchResponse = mp3Response;
   for (const [language, expected] of [

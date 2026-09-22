@@ -3,6 +3,27 @@ import { test } from 'node:test';
 import { normaliseSpeechText, prepareSpeechInput } from './speech-text.ts';
 import { VoiceError } from './errors.ts';
 
+test('brand pronunciation applies in EN, VI and Auto while protected content and original text stay unchanged', () => {
+  const text =
+    'VSual: `VSual` https://example.test?q=VSual reader@VSual.test ADC-VSual';
+  for (const language of ['en', 'vi', undefined] as const) {
+    assert.equal(
+      normaliseSpeechText(text, language),
+      'Visual: `VSual` https://example.test?q=VSual reader@VSual.test ADC-VSual',
+    );
+    const input = Object.freeze({
+      text: 'VSual',
+      ...(language ? { language } : {}),
+    });
+    assert.equal(prepareSpeechInput(input).text, 'Visual');
+    assert.equal(input.text, 'VSual');
+  }
+  assert.throws(
+    () => prepareSpeechInput({ text: 'VSual ' + 'x'.repeat(994) }),
+    (error) => error instanceof VoiceError && error.code === 'INPUT_TOO_LARGE',
+  );
+});
+
 test('explicit currency prices and bounded billing units have English and Vietnamese spoken copies', () => {
   const examples = [
     ['USD55', 'fifty-five US dollars', 'năm mươi lăm đô la Mỹ'],

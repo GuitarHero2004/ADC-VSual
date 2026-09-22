@@ -1,4 +1,5 @@
 import type { UiLanguage } from '@adc/contracts';
+import { pronounceBrand } from '@adc/voice-ui/speech-pronunciation';
 import type { DesktopBridge, DesktopShortcut } from '../bridge.ts';
 import type { DesktopSessionState } from '../session-types.ts';
 import { COMPANION_PLAYBACK_RATE } from '../../../../packages/voice-ui/src/controller.ts';
@@ -255,7 +256,7 @@ export class DesktopGuideController {
         this.update('unavailable');
         return;
       }
-      const utterance = this.dependencies.createUtterance(text);
+      const utterance = this.dependencies.createUtterance(pronounceBrand(text));
       utterance.voice = voice;
       utterance.lang = voice.lang;
       utterance.rate = COMPANION_PLAYBACK_RATE;

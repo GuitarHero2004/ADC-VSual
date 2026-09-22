@@ -5,6 +5,7 @@ import {
   type SpeechLanguage,
   type SpeechSynthesisInput,
 } from '@adc/contracts';
+import { pronounceBrand } from '@adc/voice-ui/speech-pronunciation';
 import { VoiceError } from './errors.ts';
 import { speakNumber } from './speech-numbers.ts';
 
@@ -140,18 +141,18 @@ function expandPrices(text: string, language: SpeechLanguage) {
 
 /** A speech copy only. Do not alter source text or infer a locale from UI language. */
 export function normaliseSpeechText(text: string, language?: SpeechLanguage) {
-  if (!language) return text;
+  const prepareProse = (value: string) =>
+    pronounceBrand(language ? expandPrices(value, language) : value);
   // Preserve explicitly marked code, tags and complete web/email tokens verbatim.
   const protectedSpans =
     /```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\r\n]*(?:`|(?=\r?\n)|$)|<[^>\r\n]*>|(?:https?:\/\/|www\.)[^\s<>]+|[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+/giu;
   let cursor = 0;
   let result = '';
   for (const match of text.matchAll(protectedSpans)) {
-    result +=
-      expandPrices(text.slice(cursor, match.index), language) + match[0];
+    result += prepareProse(text.slice(cursor, match.index)) + match[0];
     cursor = match.index + match[0].length;
   }
-  return result + expandPrices(text.slice(cursor), language);
+  return result + prepareProse(text.slice(cursor));
 }
 
 /** Used before quota reservation and again at the provider boundary; expansion is idempotent. */

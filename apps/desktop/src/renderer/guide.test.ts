@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { DESKTOP_SHORTCUTS, DESKTOP_STOP_SHORTCUT } from '../bridge.ts';
 import {
   DesktopGuideController,
+  guideCopy,
   guideSpeechText,
   type GuideDependencies,
 } from './guide.ts';
@@ -81,6 +82,28 @@ test('welcome starts after sign-in without requiring workspace or provider acces
   assert.deepEqual(h.calls.speech, []);
   assert.equal(h.calls.captures, 0);
   assert.equal(h.calls.transcriptions, 0);
+});
+
+test('Windows automatic and replay narration pronounce the brand as Visual while written guidance retains VSual', async () => {
+  for (const language of ['en', 'vi'] as const) {
+    const h = fixture();
+    h.setVoices([voice(language === 'en' ? 'en-US' : 'vi-VN')]);
+    const text = guideSpeechText(
+      language,
+      'Control+Alt+Space',
+      DESKTOP_STOP_SHORTCUT,
+      true,
+    );
+    await h.controller.automatic(text, language);
+    assert.match(h.utterances[0]!.text, /Visual/);
+    assert.doesNotMatch(h.utterances[0]!.text, /VSual/);
+    assert.match(text, /VSual/);
+    assert.match(guideCopy[language].title, /VSual/);
+    h.utterances[0]!.onend?.({} as SpeechSynthesisEvent);
+    await h.controller.replay(text, language);
+    assert.equal(h.utterances[1]!.text, h.utterances[0]!.text);
+    assert.deepEqual(h.calls.speech, []);
+  }
 });
 
 test('automatic narration reserves once per run; explicit replay uses the local default voice', async () => {

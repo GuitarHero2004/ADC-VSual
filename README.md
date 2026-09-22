@@ -1046,6 +1046,11 @@ desktop, extension and web read-back. Displayed answers, transcripts and evidenc
 retain their original text. This is deterministic text preparation, not model
 training or voice cloning; it makes no additional AI request.
 
+The written brand **VSual** is pronounced like **Visual**. The speech copy uses
+`Visual` for the standalone name in ElevenLabs answers/read-back and the local
+Windows introduction, including automatic language mode. Visible branding and
+evidence retain `VSual`; protected code, URLs and identifiers are not renamed.
+
 | Supplied text      | English speech copy                                    | Vietnamese speech copy                          |
 | ------------------ | ------------------------------------------------------ | ----------------------------------------------- |
 | `USD55`            | fifty-five US dollars                                  | năm mươi lăm đô la Mỹ                           |
@@ -1061,7 +1066,7 @@ rate expressions are not guessed. Amounts are bounded to twelve integer digits.
 
 Preparation follows the supplied speech language (`en`/`vi`); companion answers
 already supply their resolved language. If language is absent, including Auto on
-the manual `/voice` page, text passes through unchanged. Both original and expanded
+the manual `/voice` page, currency wording passes through unchanged. Both original and expanded
 copies must fit the existing 1,000-Unicode-character limit. Expansion overflow is
 rejected before usage reservation or synthesis, without truncation; shorten the
 text in `/voice`, or ask for a shorter answer in the companion.
