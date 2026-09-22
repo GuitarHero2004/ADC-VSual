@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   fingerprintVisualSnapshot,
   type VisualRequest,
@@ -17,7 +18,10 @@ import type { OrdersContext, OrdersInvalidation } from './page-context.ts';
 
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 async function until(predicate: () => boolean) {
-  for (let count = 0; !predicate() && count < 100; count++) await flush();
+  // Snapshot fingerprints use asynchronous WebCrypto. Event-loop turns can run
+  // out before its worker gets time in the parallel suite; await the condition.
+  const deadline = performance.now() + 5_000;
+  while (!predicate() && performance.now() < deadline) await delay(5);
   assert.ok(predicate(), 'Expected mocked task stage to be reached');
 }
 function deferred<T>() {
@@ -414,9 +418,10 @@ test('duplicate Ask and cancellation during capture never send late image payloa
   assert.equal(controller.claimAutomaticSpeech(), null);
   controller.dispose();
 });
-test('cancel, source changes, logout and account cleanup reject a late visual answer', async () => {
+test('cancel, source changes, logout and account cleanup reject a late visual answer', async (t) => {
   for (const action of ['cancel', 'source', 'logout', 'account'] as const) {
     const { controller, calls, hooks, response, invalidate } = await setup();
+    t.after(() => controller.dispose());
     controller.setVisualNoticeAccepted(true);
     const pending = deferred<CompanionResponse>();
     let input!: CompanionRequest;
