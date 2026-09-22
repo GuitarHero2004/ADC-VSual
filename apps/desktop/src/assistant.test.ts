@@ -318,6 +318,135 @@ test('one screenshot dispatch uses a fixed originless bearer route, binds source
   assert.equal(f.requests.length, 1);
 });
 
+test('follow-up context comes only from the latest native-owned accepted exchange and a fresh capture', async () => {
+  const f = fixture();
+  const first = await f.prepared();
+  const answer = await f.assistant.readScreen(first);
+  f.assistant.suspend(); // Hiding the panel cancels work, not the accepted exchange.
+  assert.equal(
+    (await f.assistant.sourceForNative('window:7:1'))?.id,
+    answer.source_id,
+  );
+  const second = {
+    ...(await f.prepared()),
+    question: 'What does that area show?',
+    followUpRequestId: first.requestId,
+  };
+  await f.assistant.readScreen(second);
+  const request = desktopRequestSchema.parse(await f.requests[1]!.json());
+  assert.deepEqual(request.follow_up_context, {
+    request_id: first.requestId,
+    source_id: answer.source_id,
+    question: first.question,
+    answer: answer.text,
+  });
+  assert.notEqual(request.snapshot.snapshot_id, answer.snapshot_id);
+  assert.equal(request.images[0].base64, jpeg);
+  wiped(second.bytes);
+  const stale = { ...(await f.prepared()), followUpRequestId: first.requestId };
+  await assert.rejects(
+    f.assistant.readScreen(stale),
+    isCode('SOURCE_UNAVAILABLE'),
+  );
+  wiped(stale.bytes);
+  assert.equal(f.requests.length, 2);
+  const newQuestion = await f.prepared();
+  await f.assistant.readScreen(newQuestion);
+  assert.equal(
+    desktopRequestSchema.parse(await f.requests[2]!.json()).follow_up_context,
+    undefined,
+  );
+  f.assistant.dispose();
+});
+
+test('forged context or a wrong previous request cannot reach the backend', async () => {
+  const f = fixture();
+  const first = await f.prepared();
+  await f.assistant.readScreen(first);
+  const forged = {
+    ...(await f.prepared()),
+    followUpRequestId: first.requestId,
+    follow_up_context: { answer: 'Renderer-invented answer' },
+  };
+  await assert.rejects(f.assistant.readScreen(forged));
+  wiped(forged.bytes);
+  const wrong = {
+    ...(await f.prepared()),
+    followUpRequestId: crypto.randomUUID(),
+  };
+  await assert.rejects(
+    f.assistant.readScreen(wrong),
+    isCode('SOURCE_UNAVAILABLE'),
+  );
+  wiped(wrong.bytes);
+  assert.equal(f.requests.length, 1);
+  f.assistant.dispose();
+});
+
+test('switching away and back or changing the source title invalidates follow-up context', async () => {
+  for (const change of ['source', 'title'] as const) {
+    const f = fixture();
+    const first = await f.prepared();
+    await f.assistant.readScreen(first);
+    if (change === 'source') {
+      f.setSources([
+        { id: 'window:7:0', name: 'Synthetic document' },
+        { id: 'window:8:0', name: 'Another synthetic document' },
+      ]);
+      assert.ok(await f.assistant.sourceForNative('window:8:1'));
+      assert.ok(await f.assistant.sourceForNative('window:7:1'));
+    } else {
+      f.setSources([
+        { id: 'window:7:0', name: 'A renamed synthetic document' },
+      ]);
+    }
+    const followUp = {
+      ...(await f.prepared()),
+      followUpRequestId: first.requestId,
+    };
+    await assert.rejects(
+      f.assistant.readScreen(followUp),
+      isCode('SOURCE_UNAVAILABLE'),
+    );
+    wiped(followUp.bytes);
+    assert.equal(f.requests.length, 1);
+    f.assistant.dispose();
+  }
+});
+
+test('account, workspace and session reset cannot reuse the previous account context', async () => {
+  for (const change of ['epoch', 'account', 'workspace', 'reset'] as const) {
+    const f = fixture();
+    const first = await f.prepared();
+    await f.assistant.readScreen(first);
+    if (change === 'epoch') f.setState({ epoch: crypto.randomUUID() });
+    if (change === 'account')
+      f.setState({
+        account: { id: crypto.randomUUID(), email: 'other@example.test' },
+      });
+    if (change === 'workspace') {
+      const previous = f.dependencies.configuration();
+      assert.ok(previous.ok);
+      const workspaceId = crypto.randomUUID();
+      f.dependencies.configuration = () => ({
+        ok: true,
+        value: { ...previous.value, workspaceId },
+      });
+    }
+    if (change === 'reset') f.assistant.reset();
+    const followUp = {
+      ...(await f.prepared()),
+      followUpRequestId: first.requestId,
+    };
+    await assert.rejects(
+      f.assistant.readScreen(followUp),
+      isCode('SOURCE_UNAVAILABLE'),
+    );
+    assert.equal(f.requests.length, 1);
+    f.assistant.dispose();
+  }
+});
+
 test('ungranted and malformed screenshot submissions wipe bytes before returning', async () => {
   const f = fixture();
   const input = await f.prepared(false);
@@ -379,7 +508,87 @@ test('Stop and replacement selection suppress late screenshot answers with no du
     await rejected;
     wiped(input.bytes);
     assert.equal(f.requests.length, 1);
+    const followUp = {
+      ...(await f.prepared()),
+      followUpRequestId: input.requestId,
+    };
+    await assert.rejects(
+      f.assistant.readScreen(followUp),
+      isCode('SOURCE_UNAVAILABLE'),
+    );
+    wiped(followUp.bytes);
+    assert.equal(f.requests.length, 1);
+    f.assistant.dispose();
   }
+});
+
+test('a window renamed during processing cannot publish an answer or retain follow-up context', async () => {
+  const f = fixture();
+  const input = await f.prepared();
+  const started = deferred<void>();
+  const response = deferred<Response>();
+  let captured!: DesktopRequest;
+  f.setResponse(async (request) => {
+    captured = desktopRequestSchema.parse(await request.json());
+    started.resolve();
+    return response.promise;
+  });
+  const pending = f.assistant.readScreen(input);
+  const rejected = assert.rejects(pending, isCode('SOURCE_UNAVAILABLE'));
+  await started.promise;
+  f.setSources([{ id: 'window:7:0', name: 'A different document' }]);
+  response.resolve(Response.json(responseFor(captured)));
+  await rejected;
+  wiped(input.bytes);
+  const followUp = {
+    ...(await f.prepared()),
+    followUpRequestId: input.requestId,
+  };
+  await assert.rejects(
+    f.assistant.readScreen(followUp),
+    isCode('SOURCE_UNAVAILABLE'),
+  );
+  assert.equal(f.requests.length, 1);
+  f.assistant.dispose();
+});
+
+test('cancelled follow-up does not replace the last accepted native context', async () => {
+  const f = fixture();
+  const first = await f.prepared();
+  await f.assistant.readScreen(first);
+  const second = {
+    ...(await f.prepared()),
+    question: 'Explain the area.',
+    followUpRequestId: first.requestId,
+  };
+  const started = deferred<void>();
+  const response = deferred<Response>();
+  let captured!: DesktopRequest;
+  f.setResponse(async (request) => {
+    captured = desktopRequestSchema.parse(await request.json());
+    started.resolve();
+    return response.promise;
+  });
+  const pending = f.assistant.readScreen(second);
+  const rejected = assert.rejects(pending, isCode('CANCELLED'));
+  await started.promise;
+  f.assistant.cancel(second.requestId);
+  response.resolve(Response.json(responseFor(captured)));
+  await rejected;
+  f.setResponse(async (request) =>
+    Response.json(
+      responseFor(desktopRequestSchema.parse(await request.json())),
+    ),
+  );
+  const third = {
+    ...(await f.prepared()),
+    followUpRequestId: first.requestId,
+  };
+  await f.assistant.readScreen(third);
+  const body = desktopRequestSchema.parse(await f.requests[2]!.json());
+  assert.equal(body.follow_up_context?.request_id, first.requestId);
+  assert.equal(body.follow_up_context?.question, first.question);
+  f.assistant.dispose();
 });
 
 test('forged screenshot response identities and evidence cannot reach the renderer', async () => {

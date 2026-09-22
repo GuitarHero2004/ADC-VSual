@@ -90,6 +90,7 @@ export interface DesktopScreenInput {
   captureId: string;
   requestId: string;
   question: string;
+  followUpRequestId?: string;
   bytes: ArrayBuffer;
   width: number;
   height: number;
