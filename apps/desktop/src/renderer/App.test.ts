@@ -11,6 +11,8 @@ import type {
   DesktopPreferences,
   DesktopState,
 } from '../bridge.ts';
+import type { AssistantDependencies } from './assistant-controller.ts';
+import { assistantHarness, deferred, session, settle } from './test-helpers.ts';
 
 const initialState: DesktopState = {
   preferences: { language: 'en', shortcut: 'Control+Alt+Space' },
@@ -19,7 +21,10 @@ const initialState: DesktopState = {
   issue: null,
 };
 
-async function renderDesktop(overrides: Partial<DesktopBridge> = {}) {
+async function renderDesktop(
+  overrides: Partial<DesktopBridge> = {},
+  dependencies?: AssistantDependencies,
+) {
   const hook = registerHooks({
     load(url, context, next) {
       if (url.endsWith('.png'))
@@ -67,7 +72,15 @@ async function renderDesktop(overrides: Partial<DesktopBridge> = {}) {
   const stateListeners = new Set<(state: DesktopState) => void>();
   const activationListeners = new Set<() => void>();
   const calls = { hide: 0, quit: 0, saves: [] as DesktopPreferences[] };
+  const fixture = assistantHarness();
   const bridge: DesktopBridge = {
+    ...fixture.bridge,
+    getSession: async () => ({
+      ...session,
+      phase: 'signed_out',
+      account: null,
+      workspace: 'unknown',
+    }),
     getState: async () => initialState,
     updatePreferences: async (preferences) => {
       calls.saves.push(preferences);
@@ -96,7 +109,16 @@ async function renderDesktop(overrides: Partial<DesktopBridge> = {}) {
   const root = createRoot(container);
   let unmounted = false;
   await act(async () => {
-    root.render(createElement(StrictMode, {}, createElement(App, { bridge })));
+    root.render(
+      createElement(
+        StrictMode,
+        {},
+        createElement(App, {
+          bridge,
+          assistantDependencies: dependencies ?? fixture.dependencies,
+        }),
+      ),
+    );
   });
   function button(label: string) {
     const result = Array.from(
@@ -139,7 +161,7 @@ async function renderDesktop(overrides: Partial<DesktopBridge> = {}) {
     unmount,
     text: () => dom.window.document.body.textContent ?? '',
     status: () =>
-      dom.window.document.querySelector('[role="status"]')?.textContent ?? '',
+      dom.window.document.querySelector('.desktop-status')?.textContent ?? '',
     async dispose() {
       await unmount();
       dom.window.close();
@@ -156,17 +178,21 @@ test('desktop labels real controls, saves language explicitly, reports failures 
   const page = await renderDesktop();
   const document = page.dom.window.document;
   try {
-    assert.match(page.text(), /Desktop foundation/);
+    assert.match(page.text(), /Desktop assistant/);
     assert.match(
       page.text(),
-      /Screen reading and voice are not connected in this desktop build\./,
+      /Ask about one selected window using a screenshot\./,
     );
-    assert.match(page.text(), /No account is needed/);
+    assert.ok(page.button('Sign in'));
+    assert.ok(page.button('Hide to tray'));
+    const guide = document.querySelector('.desktop-quickstart');
+    assert.equal(guide?.querySelectorAll('ol > li').length, 3);
+    assert.match(guide?.textContent ?? '', /Ctrl \+ Alt \+ Space/);
     assert.match(page.text(), /Ctrl \+ Alt \+ Space/);
     assert.match(page.text(), /Shortcut is ready/);
     assert.equal(document.activeElement?.id, 'desktop-title');
-    assert.equal(document.querySelector('textarea, input, audio, video'), null);
-    assert.equal(document.querySelectorAll('[role="status"]').length, 1);
+    assert.equal(document.querySelector('textarea, audio, video'), null);
+    assert.equal(document.querySelectorAll('.desktop-status').length, 1);
     assert.equal(
       page.stateListeners.size,
       1,
@@ -188,6 +214,7 @@ test('desktop labels real controls, saves language explicitly, reports failures 
     await page.choose('desktop-language', 'vi');
     await page.choose('desktop-shortcut', 'Control+Alt+V');
     assert.equal(document.documentElement.lang, 'vi');
+    assert.match(guide?.textContent ?? '', /Hướng dẫn bắt đầu/);
     assert.equal(
       page.calls.saves.length,
       0,
@@ -387,5 +414,249 @@ test('desktop keeps a newer state event when the initial read finishes late', as
     assert.doesNotMatch(page.status(), /Loading/);
   } finally {
     await page.dispose();
+  }
+});
+
+test('signed-in desktop captures explicitly, exposes evidence, keeps audio across focus changes and clears on logout', async () => {
+  const h = assistantHarness();
+  const page = await renderDesktop(h.bridge, h.dependencies);
+  const document = page.dom.window.document;
+  try {
+    assert.match(
+      page.text(),
+      /Private information is not automatically masked/,
+    );
+    assert.match(page.text(), /does not read the window’s DOM/);
+    assert.equal(h.calls.captures, 0);
+    assert.equal(h.sessionListeners.size, 1);
+    assert.equal(h.suspendListeners.size, 1);
+    assert.match(
+      document.querySelector('.desktop-current-source')?.textContent ?? '',
+      /Quarterly report/,
+    );
+    assert.match(page.text(), /press Ctrl \+ Alt \+ Space to open VSual/);
+    assert.equal(document.querySelector('#desktop-source'), null);
+    assert.equal(document.querySelector('.desktop-source-fallback'), null);
+    assert.equal(document.querySelector('input[type="checkbox"]'), null);
+    assert.match(page.text(), /Answers are spoken automatically/);
+    assert.match(page.text(), /NVDA is separate/);
+    assert.match(page.text(), /Maximum recording: 60 seconds/);
+    assert.doesNotMatch(page.text(), /30 seconds|Refresh windows/);
+    assert.equal(h.calls.captures, 0);
+    assert.ok(document.querySelector('label[for="desktop-question"]'));
+    await act(async () => page.button('Record question').click());
+    await act(async () => h.activity());
+    const countdown = document.querySelector('.desktop-countdown');
+    assert.match(countdown?.textContent ?? '', /5 seconds/);
+    assert.equal(countdown?.getAttribute('aria-live'), 'off');
+    assert.equal(countdown?.closest('[role="status"]'), null);
+    await act(async () => h.advance(1_500));
+    assert.match(countdown?.textContent ?? '', /4 seconds/);
+    assert.doesNotMatch(
+      Array.from(
+        document.querySelectorAll('[role="status"]'),
+        (node) => node.textContent,
+      ).join(' '),
+      /Sending after 4 seconds/,
+      'Numerical countdown must not interrupt local cues with a live announcement',
+    );
+    await act(async () => {
+      page.button('Stop and review').click();
+      await settle();
+    });
+    assert.equal(
+      document.querySelector('textarea')?.value,
+      'What is the revenue?',
+    );
+    assert.equal(h.calls.captures, 0);
+    await act(async () => {
+      page.button('Ask VSual').click();
+      await settle();
+    });
+    assert.equal(h.calls.captures, 1);
+    const answer = document.querySelector('.answer-text');
+    assert.equal(answer?.textContent, 'Revenue is 1,200.');
+    assert.equal(answer?.getAttribute('lang'), 'en');
+    assert.equal(answer?.closest('[aria-live], [role="status"]'), null);
+    assert.match(page.text(), /Revenue appears in the report summary/);
+    assert.match(page.text(), /Request reference/);
+    assert.equal(h.calls.speech.length, 1);
+    const pauses = h.playbacks[0]!.pauses;
+    page.dom.window.dispatchEvent(new page.dom.window.Event('blur'));
+    document.dispatchEvent(new page.dom.window.Event('visibilitychange'));
+    assert.equal(
+      h.playbacks[0]!.pauses,
+      pauses,
+      'Ordinary app focus changes do not stop accepted audio',
+    );
+    const stop = page.button('Stop answer audio');
+    stop.focus();
+    await act(async () => stop.click());
+    assert.equal(
+      document.activeElement,
+      stop,
+      'Stop remains mounted and focused',
+    );
+    assert.equal(stop.getAttribute('aria-disabled'), 'true');
+    await act(async () => page.button('Play / Repeat answer').click());
+    assert.equal(h.calls.speech.length, 1);
+    await act(async () => {
+      for (const listener of h.suspendListeners) listener();
+    });
+    assert.equal(
+      document.querySelector('textarea')?.value,
+      'What is the revenue?',
+    );
+    assert.ok(h.playbacks[0]!.pauses > pauses);
+    await act(async () => page.button('Sign out').click());
+    assert.equal(document.querySelector('textarea'), null);
+    assert.equal(document.querySelector('.answer-text'), null);
+    assert.ok(page.button('Sign in'));
+    assert.equal(h.suspendListeners.size, 0);
+    assert.equal(
+      h.activationListeners.size,
+      1,
+      'Sign-out removes the source activation listener while preserving shell focus',
+    );
+    assert.equal(h.playbacks[0]!.releases, 1);
+    await page.unmount();
+    assert.equal(h.sessionListeners.size, 0);
+    assert.equal(h.activationListeners.size, 0);
+  } finally {
+    await page.dispose();
+  }
+});
+
+test('activation without a foreground source requires returning to the app and using the shortcut', async () => {
+  const h = assistantHarness();
+  const page = await renderDesktop(h.bridge, h.dependencies);
+  try {
+    assert.match(
+      page.dom.window.document.querySelector('.desktop-current-source')
+        ?.textContent ?? '',
+      /Quarterly report/,
+    );
+    h.bridge.getActiveSource = async () => null;
+    // The injected bridge is the object captured by the component.
+    page.bridge.getActiveSource = h.bridge.getActiveSource;
+    await act(async () => {
+      for (const listener of h.activationListeners) listener();
+      await settle();
+    });
+    assert.match(page.text(), /No window is selected/);
+    assert.match(page.text(), /press the VSual shortcut again/);
+    assert.doesNotMatch(
+      page.dom.window.document.querySelector('.desktop-current-source')
+        ?.textContent ?? '',
+      /Quarterly report/,
+    );
+    assert.equal(
+      page.dom.window.document.querySelector('#desktop-source'),
+      null,
+    );
+    assert.equal(
+      page.dom.window.document.querySelector('.desktop-source-fallback'),
+      null,
+    );
+    assert.equal(page.button('Record question').disabled, true);
+    assert.equal(h.calls.captures, 0);
+    assert.equal(h.calls.transcriptions, 0);
+    assert.equal(h.calls.speech.length, 0);
+  } finally {
+    await page.dispose();
+  }
+});
+
+test('desktop duration-limit status says 60 seconds and leaves the transcript for review', async () => {
+  const h = assistantHarness();
+  const transcript =
+    deferred<Awaited<ReturnType<DesktopBridge['transcribe']>>>();
+  h.bridge.transcribe = () => transcript.promise;
+  const page = await renderDesktop(h.bridge, h.dependencies);
+  try {
+    await act(async () => page.button('Record question').click());
+    await act(async () => h.advance(59_999));
+    assert.ok(page.button('Stop and review'));
+    await act(async () => {
+      h.advance(1);
+      await settle();
+    });
+    assert.match(
+      page.text(),
+      /60-second limit reached\. Transcribing for review/,
+    );
+    assert.doesNotMatch(page.text(), /30-second limit/);
+    await act(async () => {
+      transcript.resolve({
+        request_id: crypto.randomUUID(),
+        transcript: 'Review this question.',
+      });
+      await settle();
+    });
+    assert.equal(
+      page.dom.window.document.querySelector('textarea')?.value,
+      'Review this question.',
+    );
+    assert.equal(h.calls.captures, 0);
+  } finally {
+    transcript.resolve({ request_id: crypto.randomUUID(), transcript: '' });
+    await page.dispose();
+  }
+});
+
+test('screen failures show safe request details and never describe the model failure as a voice failure', async () => {
+  for (const captureFailed of [false, true]) {
+    const h = assistantHarness();
+    if (captureFailed)
+      h.dependencies.capture = async () => {
+        throw { code: 'CAPTURE_DENIED' };
+      };
+    else
+      h.bridge.readScreen = async () => {
+        throw { code: 'PROVIDER_FAILURE' };
+      };
+    const page = await renderDesktop(h.bridge, h.dependencies);
+    try {
+      await act(async () => page.button('Record question').click());
+      await act(async () => {
+        page.button('Stop and review').click();
+        await settle();
+      });
+      await act(async () => {
+        page.button('Ask VSual').click();
+        await settle();
+      });
+      const details = page.dom.window.document.querySelector(
+        '.desktop-request-details',
+      );
+      assert.ok(details);
+      assert.match(
+        details.textContent ?? '',
+        /Request details.*Last step.*Error code.*Request reference/s,
+      );
+      assert.match(
+        details.textContent ?? '',
+        captureFailed ? /capture_denied/ : /provider_failure/,
+      );
+      assert.equal(details.closest('[role=status], [aria-live]'), null);
+      assert.equal(
+        details.textContent?.includes('The screen image was not sent'),
+        captureFailed,
+      );
+      assert.match(
+        page.text(),
+        captureFailed
+          ? /Screen capture was not allowed/
+          : /screen-reading service could not complete/,
+      );
+      assert.doesNotMatch(page.text(), /The voice service could not finish/);
+      assert.equal(
+        page.dom.window.document.querySelector('textarea')?.value,
+        'What is the revenue?',
+      );
+      assert.equal(h.calls.speech.length, 0);
+    } finally {
+      await page.dispose();
+    }
   }
 });
