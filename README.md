@@ -21,17 +21,21 @@ The desktop prototype always reads new answers aloud, with immediate Stop and ca
 
 ## Windows desktop screen assistant
 
-`feat/desktop-screen-assistant` builds on the desktop foundation merged into
-`dev` at `220be4f`. `apps/desktop` uses Electron and React, the existing Supabase
+`feat/desktop-guided-voice` starts from updated `dev` at `dbc59c0`, after the
+desktop screen assistant merge. `apps/desktop` uses Electron and React, the existing Supabase
 account/workspace checks, Avis visual adapter, ElevenLabs endpoints and shared
 voice controller. The browser companion's reading methods remain unchanged.
 
-The desktop journey is **sign in → use another app → press VSual's shortcut → type or record
-a question → Ask VSual → answer and screenshot evidence → Stop/Repeat**. It sends
+The desktop journey is **sign in → hear the introduction → use another app → press
+VSual's Talk shortcut → speak → pause five seconds → answer and screenshot evidence
+→ Stop/Repeat**. Stop and review retains the editable transcript instead of submitting.
+Typing and selecting Ask VSual remains available. It sends
 one current-view screenshot per question. It does not read DOM/accessibility trees,
 retrieve full documents, scroll windows, calculate arbitrary pictured tables,
-operate applications or listen for wake words. Opening the app, using its hotkey
-or detecting the active window does not capture pixels or call an AI provider.
+operate applications or listen for wake words. Passive launch/tray opening and window
+detection never capture pixels, start recording or call a provider. The deliberate
+Talk shortcut now starts recording when authenticated and ready; silence submission
+then invokes the existing transcription and screenshot-answer flow.
 
 **Privacy:** desktop capture has no automatic masking of private fields. Choose a
 non-sensitive window for testing. VSual's own window cannot be selected as the source.
@@ -91,28 +95,45 @@ npm run test:capture --workspace=@adc/desktop -- --interactive
 npm run check
 ```
 
-The default **Ctrl + Alt + Space** opens/focuses VSual from another application;
-it selects that foreground window automatically, without capturing pixels or
-starting recording. The current source title is shown above the question. The
+The default **Ctrl + Alt + Space** selects the foreground application, opens VSual
+and starts listening after account/workspace and source readiness checks. Wait for
+the short local listening tone before speaking. The current source title is shown above the question. The
 desktop has no window dropdown. Windows detection uses a bounded, hidden PowerShell call to
 [GetForegroundWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getforegroundwindow)
 before VSual takes focus, matching its handle against Electron's native sources.
-The first launch uses the same lookup. First sign-in preserves this selected
+The first passive launch uses the same lookup without recording. First sign-in preserves this selected
 window's metadata; logout/account loss clears it and all sensitive work. Repeated
 activation shares one lookup, and only a native match with VSual itself retains
 the preceding target. Electron's cached focus state is not used to select a source.
+Own-window matching compares the native HWND independently of Electron's Chromium
+suffix (which can be `:2` or higher), so Talk from VSual retains the correct target.
 This can add a short activation delay. Missing/blocked detection clears the target
 and asks you to switch to the desired app and press the shortcut again; it never
 guesses from window order or title. Clicking an already-visible VSual window does
 not select the previously focused app; use the shortcut from that app. Tray
 activation can target the Windows shell instead, so use the shortcut from the
 desired app for automatic selection. Settings offers bounded shortcut choices and EN/VI.
-The tray provides a fallback for a conflicting shortcut. **Hide to tray**, close
+The tray and Record question button provide a fallback for a conflicting Talk shortcut.
+**Ctrl + Alt + Backspace** stops current work without hiding VSual. Settings reports
+Talk and Stop availability separately; VSual never claims an unregistered shortcut works.
+
+| Talk shortcut state                                                            | Result                                                                |
+| ------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| Idle/answer ready                                                              | Resolve the active app, then start recording once                     |
+| Recording                                                                      | Stop and review; disarm silence submission immediately                |
+| Waiting for microphone, transcribing, capturing, answering or preparing speech | Cancel; do not start another recording                                |
+| Answer playing                                                                 | Stop speech, resolve the active app and start listening               |
+| Signed out/access unavailable                                                  | Show sign-in/access guidance; require a fresh shortcut after recovery |
+
+Typed intent IDs, a preload readiness handshake and controller generations prevent
+duplicate or late activations. Recording review is handled before awaiting Windows
+metadata, so a slow lookup cannot keep the silence timer armed. Stop/Hide/logout and
+renderer loss discard pending work. **Hide to tray**, close
 and Escape stop pending capture/requests, recording and playback, then hide VSual.
-They preserve the signed-in session and draft. Reactivation cancels unfinished work
+They preserve the signed-in session and draft. Passive reopening cancels unfinished work
 and clears the old answer while resolving the current target. Switching to another
 app without hiding VSual does not stop accepted-answer speech. **Quit VSual**
-clears the memory-only session and releases the shortcut. A second launch reuses
+clears the memory-only session and releases both shortcuts. A second launch reuses
 the existing instance; there is no installer or automatic Windows startup yet.
 On Windows the displayed companion reapplies Electron's `pop-up-menu` topmost
 level after focus: the default `floating` level was demoted by taskbar ordering
@@ -131,8 +152,31 @@ always enabled; old desktop speech-OFF records are no longer read. Browser speec
 preferences are unchanged. Tokens never enter browser
 sync, renderer storage or files. Restarting VSual requires signing in again.
 
-A short three-step guide appears on arrival, available to keyboard and screen-reader
-users. Desktop recording lasts up to **60 seconds** (browser recording stays at
+After sign-in, a readable three-step guide and **Instructions and hotkeys** link
+explain the journey. The guide and all Talk states stay expanded. The reference lists
+the actual saved Talk shortcut and Stop shortcut with registration status, plus
+**Escape**, **Tab / Shift+Tab**, and **Enter / Space** with their scope. Alternatives
+remain in Settings. **Back to your question** restores focus to the companion; the
+Hide/Quit controls have a separate footer with spacing. The guide is absent on the
+signed-out screen and remains available to signed-in users without workspace access.
+
+Instruction narration uses a **local Windows speech voice**, preferring the default
+voice for the selected English/Vietnamese language. It makes no ElevenLabs request,
+uses no credits, and does not read account or screen content. The welcome runs once
+per app launch after sign-in; the old first-use disk marker no longer suppresses it.
+Opening again or changing settings does not replay it. **Hear instructions again**
+stops assistant work and repeats the local guide. **Stop introduction**, Talk,
+Hide, logout and Stop interrupt it, including delayed voice loading. If no matching
+local voice is installed, the guide reports that and remains fully readable.
+Answer narration still uses the existing ElevenLabs configuration. Both read at 0.9×.
+
+**Known issue before review:** the user reports that the introduction is still not
+audible on their Windows device. Mocked narration tests do not resolve that report.
+Written instructions and hotkeys remain available; check **Hear instructions again**,
+the displayed narration status, installed Windows voices and per-app output before
+treating the spoken welcome as verified. This issue remains open in the pull request.
+
+Desktop recording lasts up to **60 seconds** (browser recording stays at
 30 seconds). After speech, five seconds of silence submits once. Short local tones
 mark the countdown; speaking again resets it. A higher local tone marks submission.
 These cues use no provider credits. **Stop and review** cancels automatic submission;
@@ -159,20 +203,35 @@ fixture and press the shortcut printed in the terminal. It checks that the targe
 survives first sign-in before capturing any pixels. The default check stops safely
 if Windows refuses its programmatic focus request; it never captures another app.
 
-Verification on 2026-09-22: workspace typechecks, lint and tests passed, including
-119 desktop tests. The real Windows interactive capture check passed with an
-automation-delivered Ctrl+Alt+Space through the registered OS shortcut: native target
-selection, preservation through first sign-in, actual submitted image pixels, answer
-and evidence rendering, and one automatic speech request. Authentication, answers
-and the recoverable speech failure were mocked; no provider credits were used.
-Some interactive runs timed out when input automation lost its window; the observed
-shortcut runs before the topmost adjustment passed. The final topmost adjustment
-passed `test:smoke`, including a visibly shown/topmost window, renderer isolation,
-IPC, close-to-tray and 200% reflow. The final capture rerun could not deliver its
-shortcut, so capture with that window-level adjustment still needs a manual repeat.
-Live login/model/voice,
-microphone, pronunciation and NVDA checks remain required. Quit any older VSual
-instance from its tray before starting an updated build.
+Guided-voice verification on 2026-09-23: `npm run check` passed typechecks, lint,
+formatting, all 833 tests and web/extension/desktop builds. Its 145 desktop tests include cold
+activation, duplicate intent, signed-out recovery, pending permission cancellation,
+silence-boundary review and guide/recording exclusion. The real Windows
+`test:smoke` passed renderer isolation, readiness IPC, signed-out Talk focus,
+close-to-tray and 200% reflow. These historical checks do not verify the latest
+Windows welcome; the user's reported inaudible introduction remains unresolved.
+The interactive capture check passed through an automation-delivered registered
+shortcut, retaining the intended source through sign-in and subsequent Talk. It verified
+actual submitted synthetic pixels, native MediaRecorder on a generated silent stream,
+duplicate activation, Stop track cleanup, one recorded upload, Stop and review, explicit
+submission and preserved answer/evidence after mocked speech quota errors. Auth, STT,
+AI and TTS services were mocked; no provider credits or personal screen content were used.
+Windows rejected programmatic foreground selection in the non-interactive check;
+use `test:capture -- --interactive` when that happens. The test picks an available
+supported shortcut in its temporary profile if the default conflicts; the printed
+shortcut is authoritative. Talk initially conflicted with another running application;
+Stop registered successfully. Human keyboard operation, microphone permission,
+pronunciation, live provider/account and NVDA journeys still need manual testing.
+Quit any older VSual instance from its tray before starting an updated build.
+
+The earlier ElevenLabs-guide revision passed the full repository check and Windows
+layout checks; that evidence predates the requested switch back to Windows narration.
+For the latest small UI adjustment, verification is limited to focused guide/App tests,
+desktop typechecking, lint/formatting and a desktop build. Hardware speech, microphone
+and NVDA checks remain manual. Quit the old tray instance, run `npm run dev:desktop`
+(and `npm run dev:web` if using the local backend), sign in, and use **Instructions
+and hotkeys**. Check the expanded guide, footer spacing, **Hear instructions again**
+and **Stop introduction**. No guide narration should call `/api/voice/speak`.
 
 Desktop request failures now retain their safe error code across Electron's isolated
 bridge. **Request details** shows the attempt reference and last step (preparation,
@@ -185,22 +244,27 @@ check and the desktop unit/UI tests; it does not prove a live provider request w
 
 Manual Windows journey (real login/model/microphone/NVDA checks remain required):
 
-1. Start both apps. Read the short guide and sign in with an existing email/password
-   account that already has workspace access. Confirm the displayed account. A
-   Google-only account needs its supported password-recovery setup first.
+1. Quit the old VSual instance from its tray, then start both apps. Sign in with an
+   existing email/password account that already has workspace access and confirm
+   the displayed account. Check the welcome or select Hear instructions again;
+   test Stop introduction. A Google-only account needs its supported password-recovery
+   setup first. If no introduction is audible, report its visible status separately
+   from answer playback; this remains a known issue.
 2. Open a non-sensitive chart/image or test document, focus that app and press the
    displayed VSual shortcut. Confirm its name appears automatically. There is no
-   dropdown. If detection is unavailable, switch back to the intended app and press
-   the shortcut again. Activation alone must not capture or submit anything.
-3. Type a question and choose Ask VSual. Check the source, answer, evidence and request
+   dropdown. The listening tone should sound and recording should start without a
+   Record click. If detection is unavailable, no recording starts; switch back and retry.
+   Press Talk again for Stop and review. Edit the transcript or type a question.
+3. Choose Ask VSual. Check the source, answer, evidence and request
    reference. The answer reads automatically. Check Stop during preparation/playback
    and cached Repeat. Test EN/VI, including dates and amounts. Content outside the
    captured view must not be represented as read.
-4. Record question, allow the microphone, speak and pause. Listen for local countdown
+4. Return to the source app and press Talk, allow the microphone, speak and pause. Listen for local countdown
    tones and confirm one submission after five seconds. Resume speaking during the
    countdown to reset it. Stop and review must let you edit without auto-submission;
    Cancel must discard pending work. At 60 seconds the recording ends for review.
-5. Cancel during capture/answer preparation; no late answer/audio may appear. Hide
+5. Use Ctrl + Alt + Backspace during recording, capture and speech; no late answer/audio
+   may appear. Press Talk during processing to cancel, and during playback to start a new question. Hide
    and reopen; the account remains. Sign out during work; old account data clears.
    Quit/restart; sign-in is required again.
 6. Repeat with keyboard/NVDA: use the displayed global shortcut, Tab/Shift+Tab,
