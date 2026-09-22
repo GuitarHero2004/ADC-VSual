@@ -308,8 +308,13 @@ test('502 diagnostics log only bounded operational metadata and preserve the exi
   mock.method(console, 'warn', (line: string) => {
     logs.push(JSON.parse(line) as Record<string, unknown>);
   });
-  dependencies.answerVisualPage = async () => {
+  dependencies.answerVisualPage = async (_input, _signal, diagnostics) => {
     calls.provider++;
+    assert.ok(diagnostics);
+    diagnostics.provider_attempted = true;
+    diagnostics.provider_stage = 'answer_validation';
+    diagnostics.upstream_status = 200;
+    diagnostics.upstream_request_id = 'req_1234567890abcdef';
     throw new VisualFailure('redaction_overlap');
   };
   const response = await run(request(input));
@@ -321,12 +326,28 @@ test('502 diagnostics log only bounded operational metadata and preserve the exi
     'code',
     'duration_ms',
     'event',
+    'image_bytes',
+    'image_count',
+    'image_dimensions',
+    'provider_attempted',
+    'provider_stage',
     'reason',
     'request_id',
     'stage',
     'status',
+    'upstream_request_id',
+    'upstream_status',
   ]);
-  assert.equal(logs[0]!.stage, 'provider');
+  assert.equal(logs[0]!.stage, 'answer_validation');
+  assert.equal(logs[0]!.provider_attempted, true);
+  assert.equal(logs[0]!.upstream_status, 200);
+  assert.equal(logs[0]!.upstream_request_id, 'req_1234567890abcdef');
+  assert.equal(logs[0]!.image_count, 1);
+  assert.deepEqual(logs[0]!.image_dimensions, [[160, 160]]);
+  assert.equal(
+    logs[0]!.image_bytes,
+    Buffer.from(input.images[0]!.base64, 'base64').length,
+  );
   assert.equal(logs[0]!.reason, 'redaction_overlap');
   assert.equal(logs[0]!.request_id, input.request_id);
   assert.equal(logs[0]!.status, 502);
@@ -339,4 +360,25 @@ test('502 diagnostics log only bounded operational metadata and preserve the exi
   assert.ok(!JSON.stringify(logs).includes(input.question));
   assert.ok(!JSON.stringify(logs).includes(input.images[0]!.base64));
   assert.ok(!JSON.stringify(logs).includes(input.snapshot.origin));
+});
+
+test('pre-provider setup failure logs the request reference without claiming a dispatch', async () => {
+  const input = await visualFixture();
+  const { run, dependencies, calls } = setup();
+  const logs: Record<string, unknown>[] = [];
+  mock.method(console, 'warn', (line: string) => {
+    logs.push(JSON.parse(line) as Record<string, unknown>);
+  });
+  dependencies.prepareVisualInput = () => {
+    throw new VoiceError('SETUP_REQUIRED', 'Visual setup is required.', 503);
+  };
+  const response = await run(request(input));
+  const body = await error(response, 'SETUP_REQUIRED');
+  assert.equal(logs[0]!.request_id, body.request_id);
+  assert.equal(logs[0]!.stage, 'input_budget');
+  assert.equal(logs[0]!.provider_attempted, false);
+  assert.equal(logs[0]!.upstream_status, undefined);
+  assert.equal(calls.provider, 0);
+  assert.equal(calls.reserve, 0);
+  assert.equal('provider_attempted' in body, false);
 });

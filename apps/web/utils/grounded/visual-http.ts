@@ -11,7 +11,10 @@ import {
 import type { VoiceIdentity } from '../voice/access.ts';
 import { VoiceError } from '../voice/errors.ts';
 import { applicationLimitDetails, corsHeaders } from '../voice/http.ts';
-import { VisualFailure } from './visual-server.ts';
+import {
+  VisualFailure,
+  type VisualProviderDiagnostics,
+} from './visual-server.ts';
 
 type Dependencies = {
   verifyVoiceUser: (request: Request) => Promise<VoiceIdentity>;
@@ -27,6 +30,7 @@ type Dependencies = {
   answerVisualPage: (
     input: VisualRequest,
     signal: AbortSignal,
+    diagnostics?: VisualProviderDiagnostics,
   ) => Promise<VisualResponse>;
 };
 const invalid = (
@@ -126,6 +130,14 @@ function withinDeadline<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 export function createVisualHandler(dependencies: Dependencies) {
   return async (request: Request): Promise<Response> => {
     const started = performance.now();
+    const provider: VisualProviderDiagnostics = { provider_attempted: false };
+    let images:
+      | {
+          image_count: number;
+          image_dimensions: [number, number][];
+          image_bytes: number;
+        }
+      | undefined;
     let stage:
       | 'origin'
       | 'authentication'
@@ -178,6 +190,17 @@ export function createVisualHandler(dependencies: Dependencies) {
         signal,
       );
       signal.throwIfAborted();
+      images = {
+        image_count: input.images.length,
+        image_dimensions: input.snapshot.images.map((image) => [
+          image.width,
+          image.height,
+        ]),
+        image_bytes: input.images.reduce(
+          (bytes, image) => bytes + Buffer.byteLength(image.base64, 'base64'),
+          0,
+        ),
+      };
       stage = 'usage_reservation';
       await withinDeadline(
         dependencies.reserveVoiceRequest(identity, id),
@@ -186,7 +209,7 @@ export function createVisualHandler(dependencies: Dependencies) {
       signal.throwIfAborted();
       stage = 'provider';
       const result = await withinDeadline(
-        dependencies.answerVisualPage(input, signal),
+        dependencies.answerVisualPage(input, signal, provider),
         signal,
       );
       signal.throwIfAborted();
@@ -243,7 +266,8 @@ export function createVisualHandler(dependencies: Dependencies) {
           JSON.stringify({
             event: 'visual_request_failed',
             request_id: id,
-            stage,
+            stage:
+              stage === 'provider' ? (provider.provider_stage ?? stage) : stage,
             reason:
               error instanceof VisualFailure
                 ? error.reason
@@ -251,6 +275,8 @@ export function createVisualHandler(dependencies: Dependencies) {
             code: safe.code,
             status: safe.status,
             duration_ms: Math.round(performance.now() - started),
+            ...provider,
+            ...images,
           }),
         );
       }
