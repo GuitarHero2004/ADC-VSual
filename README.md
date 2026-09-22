@@ -43,6 +43,14 @@ arbitrary pictured numbers. Visual evidence has image IDs, bounded regions and
 readable descriptions; these are model interpretations, **not independent factual
 verification**. Source, capture time and omissions remain readable with Speech OFF.
 
+This is on-demand reading of the live browser: each submitted visual question takes
+a fresh capture. The model receives the actual image pixels with the question, so
+it can summarise readable content, explain a diagram or describe a chart's apparent
+pattern; it is not restricted to transcribing labels. It does not continuously
+watch changes. Scroll to the relevant content and ask again to read another view.
+The original source remains authoritative: valid image references establish where
+the interpretation points, not that every observation is correct.
+
 An explicit whole-page visual question can use up to four overlapping images only
 on positively identified finite document-like pages using the top-level vertical
 scroller. Interactive calendars, grids, presentations, videos, nested scrolling
@@ -92,8 +100,9 @@ answer metadata/evidence and the latest audio remain session-local. End/logout,
 resource navigation and invalidation cancel pending work; stale results cannot
 appear or speak. Accepted source-bound speech may still continue across tabs under
 the existing rules. Repeat reuses cached audio at 0.9×; Speech OFF makes no TTS call.
-Provider retention and Avis image-forwarding behaviour have not been independently
-established; no zero-retention claim is made.
+Provider retention remains unverified; no zero-retention claim is made. The bounded
+synthetic image-forwarding check below passed, but does not establish compatibility
+with every browser application or document.
 
 ### Visual configuration and current verification gate
 
@@ -113,12 +122,20 @@ successful printed hash locally or in the intended Vercel environment, then rest
 or redeploy. A changed URL/model/profile invalidates it. Do not fabricate a hash to
 bypass verification. Builds and structured readers work without this setting.
 
-On 22 September 2026 the single authorised live attempt was **inconclusive**: the
-smoke question's “Do not calculate anything” disclaimer tripped our calculation
-filter. The filter and prompt are corrected with regression coverage. No second
-live request was made during that review; successful image compatibility still
-needs separate live evidence. Automated provider/lifecycle and actual encoded-pixel tests use
-synthetic data and mocks; they do not establish Edge or provider compatibility.
+The initial 22 September 2026 compatibility attempt was **inconclusive**: the smoke
+question's “Do not calculate anything” disclaimer tripped our calculation filter.
+After the filter/prompt correction, one explicitly authorised follow-up request
+**passed** against the configured Avis `gpt-6-astra` route: two generated 600×240
+PNG images, unpredictable image-only labels, strict JSON, and matching evidence.
+Application request reference: `a9223562-cbaa-49a7-91b6-d10b69603dee`; upstream
+response ID: `resp_0d962352e98249a9016ab1f4c0f164819786e98934262ed773`; HTTP 200 in
+approximately six seconds. The adapter made exactly one request with retries off,
+4,130 bounded input tokens and the unchanged 768-token output cap. This establishes
+that synthetic route check, not website authentication, browser capture, Google
+Docs compatibility or speech. No environment files were changed. Do not repeat
+this paid check just to reconfirm the same route.
+Automated provider/lifecycle and actual encoded-pixel tests use synthetic data and
+mocks; they do not establish Edge compatibility.
 The completion review adds an integration test from question submission through real
 masking/resizing, HTTP validation and the Avis adapter. It inspects the exact JPEG
 sent to the provider mock at 2× and 4× pixel scales, checking excluded private pixels,
@@ -129,10 +146,10 @@ after capture, incidental iframe-loading updates, speech deadlines, overflowing
 private controls and non-orders table routing. Current-view cleanup never moves page
 scroll/focus; deliberate scrolling retains guarded restoration.
 
-The completion pass ran `npm run check` successfully: type checking, lint, formatting,
-**647 tests** (318 extension, 260 web, 69 voice) and both production builds. Two worker
-tests needed bounded condition waits for asynchronous hashing under parallel load;
-their cancellation assertions and production deadlines remain intact. The built
+The latest integration pass ran `npm run check` successfully: type checking, lint,
+formatting, **655 tests** (318 extension, 268 web, 69 voice) and both production builds.
+Asynchronous hashing tests use bounded condition waits under parallel load; their
+cancellation assertions and production deadlines remain intact. The built
 visual endpoint rejected anonymous same-origin requests with 401 and originless
 requests with 403, both with `no-store`. A scan of 29 browser-output files found none
 of the three configured server credential literals. These are local checks, not
@@ -149,20 +166,49 @@ provider failure.
 
 If a visual request fails, expand **Request details** for its reference ID. The
 local web terminal (or Vercel function logs) emits a `visual_request_failed` entry
-for server errors with only the request ID, stage, bounded reason/code, status and
-elapsed time. Use that entry to distinguish an upstream failure, output limit,
-malformed answer or invalid evidence. Do not share request headers, image bodies,
-document text or credentials. After updating, restart the web server, reload the
-extension, and refresh source tabs before retesting.
+for server errors with the application request ID, stage, bounded reason/code,
+status, elapsed time, dispatch flag, validated image dimensions/byte totals and
+safe provider metadata. Upstream HTTP status and allowlisted error/request IDs are
+included when available; the model response ID is separate from VSual's reference.
+`X-Client-Request-Id` associates the single upstream attempt with VSual's request.
+Use these fields to distinguish no dispatch, an upstream HTTP failure, output
+limit, malformed answer or evidence rejection after an HTTP 200. Diagnostics never
+copy raw error bodies, images, prompts, source URLs, credentials or arbitrary
+provider headers. Do not share request headers, image bodies, document text or
+credentials. After updating, restart the web server, reload the extension, and
+refresh source tabs before retesting.
+HTTP metadata is captured before the SDK parses the body, so malformed HTTP-200
+JSON/envelopes retain their status and are reported as `invalid_response` rather
+than looking like a request with no response. Both SDK response helpers share one
+cached request; regression tests assert one dispatch and cancellation precedence.
+
+The integration investigation confirmed Edge's registered unpacked path is
+`apps/extension/dist`, whose production-mode build points to `http://127.0.0.1:3000`.
+The matching workspace Next development server is reachable and compiles the
+latest diagnostics. However, Edge's in-memory extension revision and the version
+that handled the original 502 could not be proven: the original request reference
+is unavailable and no matching failure event is in the retained development log.
+Reload the extension before a new test. No claim is made that the historical
+Google Docs 502 is fixed; a new correlated browser request is still required.
+
+The user subsequently reported a successful browser test on the non-sensitive
+two-image fixture: the answer correctly identified `ALPHA-8533` and `BETA-9459` and
+acknowledged the unreadable redacted region. This is **user-reported synthetic
+browser success**, separate from the adapter check above. The browser version,
+request reference and evidence controls were not independently observed. Real
+Google Docs, chart interpretation and audible playback remain to be verified.
 
 ### Test visual reading locally
 
 1. Use Node 24 / npm 11. From the root: `npm ci --include=dev --include-workspace-root`,
    then `npm run dev:web`. In another terminal run
    `npm run build --workspace=@adc/extension`.
-2. Load/reload `apps/extension/dist` at `edge://extensions` (Developer mode → Load
-   unpacked), then refresh source tabs. Public backend configuration changes require
-   rebuilding and reloading. Sign in through VSual and confirm workspace access.
+2. Load/reload `apps/extension/dist` at `edge://extensions` or `chrome://extensions`
+   (Developer mode → Load unpacked), then refresh source tabs. Public backend
+   configuration changes require rebuilding and reloading. Check the actual
+   extension ID against `VOICE_ALLOWED_ORIGINS`; Google sign-in also needs that
+   ID's exact Supabase callback (see [Google configuration](#google-configuration-manual-not-applied-by-this-branch)). Sign in through VSual
+   and confirm workspace access.
 3. Complete the opt-in model check/configuration above before expecting visual answers.
    Use a synthetic/non-sensitive HTML page first. Activate VSual with its browser
    toolbar button, keep Speech OFF, type “Describe the current screen”, acknowledge
@@ -184,6 +230,21 @@ extension, and refresh source tabs before retesting.
    to a usable control after capture; only brief status is live-announced. Try
    English/Vietnamese questions and assess pronunciation separately.
 
+After the synthetic labels test, use non-sensitive content to test interpretation:
+
+- Document: “Summarise the main points visible on this screen and preserve any
+  qualifications.”
+- Chart: “Describe the apparent trend in this chart. Identify the labels supporting
+  your answer and anything too unclear to read. Do not calculate.”
+- Diagram: “Explain how the items in this diagram relate, using its visible labels.”
+- Table: “Read the visible column headings and describe any obvious missing values
+  or ambiguous units. Do not calculate or claim to check hidden rows.”
+
+Inspect the source time and supporting descriptions against the displayed content.
+Scroll to a different region and ask another question: it should capture that new
+view, not reuse the earlier screenshot. A successful labels test does not establish
+correct chart reasoning, complete-document coverage or exact spreadsheet analysis.
+
 Actual Edge matrix for this implementation session (no browser automation surface
 was available; all rows below are **not performed**, not claims of support):
 
@@ -199,8 +260,10 @@ was available; all rows below are **not performed**, not claims of support):
 | Ordinary HTTP(S) page     | Current view; eligible bounded scroll         | Permissions, zoom/geometry, user takeover         |
 
 `file://`, browser-internal pages and DOM-inaccessible viewers without a verified
-masking policy are unavailable. Live microphone, authentication-to-visual-answer,
-audible playback, pronunciation, keyboard/reflow and NVDA journeys are pending.
+masking policy are unavailable. Apart from the user-reported synthetic result above,
+independent browser authentication-to-visual-answer checks remain pending. Live
+microphone, audible playback, pronunciation, keyboard/reflow and NVDA checks are
+also pending.
 Subsequent milestones may add user-selected text-PDF parsing, bounded scanned-PDF
 rendering/OCR, separately authorised Google/Microsoft file retrieval, exact-range
 spreadsheet analysis with deterministic calculations, and authorised calendar/media
