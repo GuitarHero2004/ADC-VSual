@@ -87,20 +87,31 @@ export const browserDependencies: VoiceDependencies = {
   revokeObjectURL: (url) => URL.revokeObjectURL(url),
   schedule: (callback, delay) => window.setTimeout(callback, delay),
   unschedule: (timer) => window.clearTimeout(timer as number | undefined),
-  cue() {
+  cue(kind = 'start') {
     try {
       const context = new AudioContext();
+      // Never queue a suspended tone for later playback outside its VAD guard.
+      if (context.state !== 'running') {
+        void context.close().catch(() => {});
+        return;
+      }
       const oscillator = context.createOscillator();
       const gain = context.createGain();
-      oscillator.frequency.value = 660;
-      gain.gain.value = 0.08;
+      const countdown = kind === 'countdown';
+      const duration = countdown ? 0.06 : 0.12;
+      oscillator.frequency.value = countdown
+        ? 440
+        : kind === 'submit'
+          ? 880
+          : 660;
+      gain.gain.value = countdown ? 0.025 : 0.08;
       oscillator.connect(gain);
       gain.connect(context.destination);
       oscillator.onended = () => {
-        void context.close();
+        void context.close().catch(() => {});
       };
       oscillator.start();
-      oscillator.stop(context.currentTime + 0.12);
+      oscillator.stop(context.currentTime + duration);
     } catch {
       /* Recording remains usable when browser audio cues are unavailable. */
     }
