@@ -50,6 +50,8 @@ void app.whenReady().then(async () => {
   let speechCalls = 0;
   let transcribeCalls = 0;
   let recordedBytes = 0;
+  let previousRequestId: string | undefined;
+  const followUpQuestion = 'Describe the positions of the colored shapes.';
   try {
     fixture = new BrowserWindow({
       width: 760,
@@ -116,12 +118,17 @@ void app.whenReady().then(async () => {
         recordedBytes += audio.size;
         return Response.json({
           request_id: new Headers(init.headers).get('X-Request-ID'),
-          transcript: 'Explain the red square and blue rectangle.',
+          transcript: 'Option one.',
           detected_language: 'en',
         });
       }
       if (url.pathname === '/api/voice/speak') {
         speechCalls++;
+        const speech = JSON.parse(String(init?.body));
+        assert.ok(
+          speech.text.includes(followUpQuestion),
+          'The answer and its follow-up choice use one speech request',
+        );
         // Exercise recoverable voice failure without producing sound or spending credits.
         return Response.json(
           {
@@ -137,6 +144,27 @@ void app.whenReady().then(async () => {
       if (url.pathname === '/api/desktop-read') {
         providerCalls++;
         const body = JSON.parse(String(init?.body));
+        if (providerCalls === 1) {
+          assert.equal(body.follow_up_context, undefined);
+        } else if (providerCalls === 2) {
+          assert.equal(body.question, followUpQuestion);
+          assert.equal(body.follow_up_context?.request_id, previousRequestId);
+          assert.equal(
+            body.follow_up_context?.source_id,
+            body.snapshot.source_id,
+          );
+          assert.equal(
+            body.follow_up_context?.answer,
+            'Synthetic test response; no live model was called.',
+          );
+        } else {
+          assert.equal(
+            body.follow_up_context,
+            undefined,
+            'Ask something else starts without the prior exchange',
+          );
+        }
+        previousRequestId = body.request_id;
         const bytes = Buffer.from(body.images[0].base64, 'base64');
         const image = nativeImage.createFromBuffer(bytes);
         const bitmap = image.toBitmap();
@@ -165,6 +193,7 @@ void app.whenReady().then(async () => {
           status: 'answer',
           answer_language: 'en',
           text: 'Synthetic test response; no live model was called.',
+          follow_ups: [{ question: followUpQuestion, evidence_indices: [1] }],
           evidence: [
             {
               image_id: 'image-1',
@@ -384,7 +413,7 @@ void app.whenReady().then(async () => {
     const reviewed = await contents.executeJavaScript(`(async()=>{
       const end=Date.now()+5000;
       const field=()=>document.querySelector('#desktop-question');
-      while(!field() || field().readOnly || field().value!=='Explain the red square and blue rectangle.'){
+      while(!field() || field().readOnly || field().value!=='Option one.'){
         if(Date.now()>end)throw new Error('Recorded transcript did not become editable: '+JSON.stringify({requests:window.__captureVoiceCheck.requests,status:[...document.querySelectorAll('[role=status]')].map(element=>element.textContent)}));
         await new Promise(resolve=>setTimeout(resolve,25));
       }
@@ -429,6 +458,28 @@ void app.whenReady().then(async () => {
       'One model request per explicitly submitted question',
     );
     assert.equal(speechCalls, 2, 'One audio attempt per accepted answer');
+    const newTopic = await contents.executeJavaScript(`(async()=>{
+      const button=(label)=>[...document.querySelectorAll('button')].find(button=>button.textContent.trim()===label);
+      const other=button('Ask something else');
+      if(!other)throw new Error('New-question control is missing');
+      other.click();
+      await new Promise(resolve=>setTimeout(resolve,25));
+      const field=document.querySelector('#desktop-question');
+      if(field.value || document.activeElement!==field)throw new Error('New-question control must clear and focus the draft');
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(field,'Describe the visible shapes again.');
+      field.dispatchEvent(new Event('input',{bubbles:true}));
+      await new Promise(resolve=>setTimeout(resolve,25));
+      button('Ask VSual').click();
+      const end=Date.now()+10000;
+      while(!document.querySelector('.answer-text') || !button('Retry answer audio')){
+        if(Date.now()>end)throw new Error('New-question request did not finish');
+        await new Promise(resolve=>setTimeout(resolve,25));
+      }
+      return document.querySelectorAll('.desktop-evidence li').length;
+    })()`);
+    assert.equal(newTopic, 1);
+    assert.equal(providerCalls, 3);
+    assert.equal(speechCalls, 3);
     host.dispose();
     fixture.destroy();
     clearTimeout(timer);
@@ -448,6 +499,9 @@ void app.whenReady().then(async () => {
         stopReleasesRecording: true,
         stopAndReviewUploadsOnce: true,
         nativeMediaRecorder: true,
+        spokenFollowUpChoice: true,
+        priorExchangeBoundToSource: true,
+        newTopicClearsContext: true,
         microphoneDevice: 'synthetic_audio_stream_no_hardware',
         transcription: 'mocked',
         recordedBytes,
