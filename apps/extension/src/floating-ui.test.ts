@@ -555,6 +555,44 @@ test('floating compact and expanded views keep one session and release all work 
     );
 
     await t.test(
+      'compact Stop and review disarms silence submission while transcription is pending',
+      async () => {
+        transcription = deferred<TranscriptResponse>();
+        await collapse();
+        await settle(() => button('Start recording', '#compact').click());
+        await settle(() => (onAudioActivity as () => void)());
+        await settle(() => advance(5_000));
+        const requests = questions.length;
+        const generated = speech.length;
+        const submitted = uploads.length;
+        assert.equal(controls().question.getSnapshot().phase, 'transcribing');
+        assert.equal(button('Stop and review', '#compact').disabled, false);
+        await settle(() => button('Stop and review', '#compact').click());
+        await settle(() =>
+          transcription!.resolve({
+            transcript,
+            request_id: crypto.randomUUID(),
+          }),
+        );
+        assert.equal(controls().question.getSnapshot().text, transcript);
+        assert.equal(
+          uploads.length,
+          submitted,
+          'Final audio is submitted once',
+        );
+        assert.equal(
+          questions.length,
+          requests,
+          'Review never submits a question',
+        );
+        assert.equal(speech.length, generated);
+        transcription = null;
+        await expand();
+        assert.equal(button('Ask VSual', '#expanded').disabled, false);
+      },
+    );
+
+    await t.test(
       'ending the floating surface aborts pending speech and a late clip stays silent',
       async () => {
         synthesis = deferred<Blob>();

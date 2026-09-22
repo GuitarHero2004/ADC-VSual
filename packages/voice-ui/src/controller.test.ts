@@ -818,7 +818,7 @@ test('five seconds of silence after activity finishes one recording with its fin
     'Wait for the final recording chunk',
   );
   h.activity();
-  h.controller.finish();
+  h.controller.finish('silence');
   recorder.end(' final word');
   recorder.onstop();
   await settle();
@@ -840,6 +840,48 @@ test('five seconds of silence after activity finishes one recording with its fin
   assert.equal(h.observerStops, 1);
   assert.equal(h.observerSignal?.aborted, true);
   assert.equal(h.timerCount, 0);
+});
+
+test('Stop and review disarms a silence completion before the final chunk or during transcription', async () => {
+  for (const reviewAt of ['final-chunk', 'transcription'] as const) {
+    const response = deferred<{ transcript: string; request_id: string }>();
+    const h = silenceHarness({ transcribe: () => response.promise });
+    await h.controller.start();
+    const recorder = h.recorders[0]!;
+    recorder.ondata(new Blob(['first phrase;']));
+    h.activity();
+    h.advance(5_000);
+    assert.equal(h.controller.getSnapshot().notice, 'silence_reached');
+    assert.equal(recorder.stops, 1);
+    if (reviewAt === 'final-chunk') h.controller.finish();
+    recorder.end('final word');
+    if (reviewAt === 'transcription') h.controller.finish();
+    h.controller.finish();
+    h.controller.finish('silence');
+    recorder.onstop();
+    assert.equal(h.calls.transcripts.length, 1);
+    assert.equal(h.calls.transcripts[0]!.signal.aborted, false);
+    assert.equal(h.controller.getSnapshot().notice, 'transcribing');
+    assert.equal(
+      await h.calls.transcripts[0]!.blob.text(),
+      'first phrase;final word',
+    );
+    response.resolve({
+      transcript: 'Compare the current chart, including 1.25.',
+      request_id: 'review',
+    });
+    await settle();
+    assert.equal(
+      h.controller.getSnapshot().text,
+      'Compare the current chart, including 1.25.',
+    );
+    assert.equal(h.controller.getSnapshot().phase, 'ready');
+    assert.equal(h.controller.claimAutomaticQuestion(), null, reviewAt);
+    assert.equal(h.calls.transcripts.length, 1);
+    assert.equal(recorder.stops, 1);
+    assert.ok(h.trackStops > 0);
+    h.controller.dispose();
+  }
 });
 
 test('manual Finish and the 30-second cap preserve review without automatic submission', async () => {

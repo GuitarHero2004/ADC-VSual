@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import { getAuthHeaders } from './auth-client.ts';
 import { AuthPanel, useExtensionSession } from './auth-panel.tsx';
@@ -21,6 +22,7 @@ import {
   useFloatingStatus,
 } from './FloatingToolbar.tsx';
 import type { FloatingClient } from './floating-client.ts';
+import { visualText } from './visual-strings.ts';
 
 const configuration = getExtensionConfig();
 const setupTab = new URLSearchParams(location.search).has('microphone-setup');
@@ -131,6 +133,48 @@ export function App({
   const [controls, setControls] = useState<CompanionControls | null>(null);
   const controlsRef = useRef(controls);
   controlsRef.current = controls;
+  const captureSubscribe = useCallback(
+    (listener: () => void) =>
+      controls?.controller.subscribe(listener) ?? (() => {}),
+    [controls],
+  );
+  const captureSnapshot = useCallback(() => {
+    const state = controls?.controller.getSnapshot();
+    return state?.reader === 'visual_page' && state.phase === 'reading';
+  }, [controls]);
+  const visualCapturing = useSyncExternalStore(
+    captureSubscribe,
+    captureSnapshot,
+  );
+  const captureCancel = useRef<HTMLButtonElement>(null);
+  const beforeCaptureFocus = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (visualCapturing) {
+      beforeCaptureFocus.current =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      captureCancel.current?.focus({ preventScroll: true });
+    } else if (document.activeElement === captureCancel.current) {
+      const previous = beforeCaptureFocus.current;
+      const fallback = [
+        ...document.querySelectorAll<HTMLElement>(
+          '#floating-expanded textarea:not(:disabled), #floating-expanded h2[tabindex]',
+        ),
+        ...document.querySelectorAll<HTMLElement>(
+          '.panel-header button:not(:disabled), .floating-toolbar button:not(:disabled)',
+        ),
+      ].find((element) => !element.closest('[hidden]'));
+      const destination =
+        previous?.isConnected &&
+        !previous.matches(':disabled') &&
+        !previous.closest('[hidden]')
+          ? previous
+          : fallback;
+      destination?.focus({ preventScroll: true });
+      beforeCaptureFocus.current = null;
+    }
+  }, [visualCapturing]);
   const [remoteSpeech, setRemoteSpeech] = useState(false);
   const remoteStopButton = useRef<HTMLButtonElement>(null);
   const remoteStopFocus = useRef(false);
@@ -472,7 +516,7 @@ export function App({
           companion: 'Trợ lý trình duyệt',
           welcome: 'Bắt đầu với VSual',
           guidance:
-            'Đăng nhập, rồi kích hoạt VSual từ thanh công cụ trên bài viết hoặc trang đơn hàng mẫu. Bạn có thể nhập hoặc ghi âm câu hỏi.',
+            'Đăng nhập, rồi kích hoạt VSual từ thanh công cụ tại trang web bạn muốn hỏi. Bạn có thể nhập hoặc ghi âm câu hỏi. Đọc hình ảnh cần máy chủ được xác minh và quyền truy cập phù hợp.',
           stop: 'Hủy thao tác hiện tại',
           demo: 'Mở bảng đơn hàng mẫu',
         }
@@ -482,7 +526,7 @@ export function App({
           companion: 'Browser companion',
           welcome: 'Get started with VSual',
           guidance:
-            'Sign in, then activate VSual from the browser toolbar on an article or the sample orders page. You can type or record a question.',
+            'Sign in, then activate VSual from the browser toolbar on the webpage you want to ask about. Type or record a question. Visual reading requires verified server setup and appropriate browser access.',
           stop: 'Cancel current operation',
           demo: 'Open sample orders',
         };
@@ -525,7 +569,31 @@ export function App({
           </span>
         </div>
       )}
-      <header className="panel-header" hidden={launcher}>
+      <section
+        hidden={!visualCapturing}
+        className="visual-capture-controls"
+        aria-label={visualText[language].capturing}
+      >
+        <strong>VSual</strong>
+        <p role="status" aria-atomic="true">
+          {visualCapturing ? visualText[language].capturing : ''}
+        </p>
+        <button
+          ref={captureCancel}
+          type="button"
+          onClick={() => controls?.controller.cancel()}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              event.stopPropagation();
+              controls?.controller.cancel();
+            }
+          }}
+        >
+          {visualText[language].cancel}
+        </button>
+      </section>
+      <header className="panel-header" hidden={launcher || visualCapturing}>
         <div className="companion-brand">
           {floating && (
             <span className="companion-mark" aria-hidden="true">
@@ -583,7 +651,7 @@ export function App({
         </button>
       </header>
       {floating && (
-        <div className="notice" hidden={!remoteSpeech}>
+        <div className="notice" hidden={!remoteSpeech || visualCapturing}>
           <p role="status" aria-atomic="true">
             {remoteSpeech
               ? language === 'vi'
@@ -603,7 +671,7 @@ export function App({
         </div>
       )}
       {floating && (
-        <div hidden={expanded || launcher}>
+        <div hidden={expanded || launcher || visualCapturing}>
           {session.allowed && controls ? (
             <FloatingToolbar
               controls={controls}
@@ -626,7 +694,10 @@ export function App({
           )}
         </div>
       )}
-      <main id="floating-expanded" hidden={!!floating && !expanded}>
+      <main
+        id="floating-expanded"
+        hidden={visualCapturing || (!!floating && !expanded)}
+      >
         <section
           id="companion-settings"
           hidden={!settingsOpen}

@@ -147,6 +147,11 @@ function VoiceSurface({
     'transcribing',
     'generating',
   ].includes(snapshot.phase);
+  const canStopAndReview =
+    mode === 'question' &&
+    (snapshot.phase === 'recording' ||
+      (snapshot.phase === 'transcribing' &&
+        snapshot.notice === 'silence_reached'));
 
   useEffect(() => onController?.(controller), [controller, onController]);
 
@@ -380,19 +385,15 @@ function VoiceSurface({
             ref={startRef}
             type="button"
             className={mode === 'test' ? 'voice-primary' : undefined}
-            disabled={
-              disabled ||
-              (busy && !(mode === 'question' && snapshot.phase === 'recording'))
-            }
+            disabled={disabled || (busy && !canStopAndReview)}
             aria-describedby={`${id}-microphone`}
             onClick={() => {
-              if (mode === 'question' && snapshot.phase === 'recording')
-                controller.finish();
+              if (canStopAndReview) controller.finish();
               else void controller.start();
             }}
           >
             {mode === 'question'
-              ? snapshot.phase === 'recording'
+              ? canStopAndReview
                 ? t.questionStop
                 : t.questionRecord
               : t.start}

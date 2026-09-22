@@ -2,6 +2,8 @@ import type { UiLanguage } from '@adc/contracts';
 import { questionNoticeText, voiceErrorText, voiceLabels } from '@adc/voice-ui';
 import { useCallback, useSyncExternalStore } from 'react';
 import type { CompanionControls } from './GroundedPanel.tsx';
+import { canAskPage } from './reading-method.ts';
+import { visualError, visualText } from './visual-strings.ts';
 import {
   companionError,
   companionText,
@@ -94,9 +96,10 @@ export function useFloatingStatus(controls: CompanionControls | null) {
     )
       return 'active';
     if (question.errorCode || speech.errorCode || page.error) return 'error';
-    if (page.context?.permission === 'required') return 'setup';
-    if (page.context && !page.context.supported) return 'unsupported';
-    if (!page.context?.supported) return 'setup';
+    if (!canAskPage(page.context) && page.context?.permission === 'required')
+      return 'setup';
+    if (page.context && !canAskPage(page.context)) return 'unsupported';
+    if (!canAskPage(page.context)) return 'setup';
     if (page.result && !page.stale) return 'answer';
     if (question.text.trim()) return 'review';
     return 'ready';
@@ -127,6 +130,9 @@ export function FloatingToolbar({
   const structured = page.context?.sourceKind === 'structured_page';
   const g = companionText(language, structured);
   const recording = voice.phase === 'recording';
+  const reviewable =
+    recording ||
+    (voice.phase === 'transcribing' && voice.notice === 'silence_reached');
   const voiceBusy = ['requesting_permission', 'transcribing'].includes(
     voice.phase,
   );
@@ -135,7 +141,9 @@ export function FloatingToolbar({
   const status = voice.errorCode
     ? voiceErrorText(language, voice.errorCode)
     : page.error
-      ? companionError(language, page.error, structured)
+      ? ((page.reader === 'visual_page'
+          ? visualError(language, page.error)
+          : null) ?? companionError(language, page.error, structured))
       : recording || voiceBusy
         ? questionNoticeText(language, voice.notice)
         : speaking
@@ -143,8 +151,10 @@ export function FloatingToolbar({
             ? g.speechPending
             : g.speechPlaying
           : answering
-            ? g[page.phase === 'reading' ? 'reading' : 'understanding']
-            : !page.context?.supported
+            ? page.reader === 'visual_page' && page.phase === 'reading'
+              ? visualText[language].capturing
+              : g[page.phase === 'reading' ? 'reading' : 'understanding']
+            : !canAskPage(page.context)
               ? structured
                 ? page.context?.permission === 'required'
                   ? structuredText[language].activation
@@ -166,11 +176,11 @@ export function FloatingToolbar({
         </button>
         <button
           type="button"
-          disabled={voiceBusy || answering}
+          disabled={(voiceBusy && !reviewable) || answering}
           data-floating-record
           onClick={() => {
             onActivity();
-            if (recording) question.finish();
+            if (reviewable) question.finish(false);
             else {
               controller.discardAutomaticSpeech();
               speech.stopPlayback();
@@ -178,7 +188,7 @@ export function FloatingToolbar({
             }
           }}
         >
-          {recording ? v.questionStop : v.start}
+          {reviewable ? v.questionStop : v.start}
         </button>
         <button
           type="button"

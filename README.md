@@ -4,18 +4,278 @@ Hackathon project by **In Motion or Element**, for blind and low-vision users.
 The assistant complements existing screen readers.
 
 VSual answers bounded questions about **structured HTML articles/information pages**
-and the rendered **synthetic `/orders` dashboard**.
+and the rendered **synthetic `/orders` dashboard**. This branch also implements
+**captured browser-view questions**, with live use gated on model-route verification.
 Type and select **Ask VSual**, or deliberately record a question
 and pause for five seconds to submit automatically. The configured model through
 Avis answers from captured article excerpts. For orders comparisons, it interprets
 the question and application code calculates from the captured rows. English and Vietnamese are
-supported. Screenshots, Google resource access, arbitrary spreadsheet calculations,
-browser actions, automatic arrival summaries and wake words are outside this feature.
+supported. Google/Microsoft file retrieval, arbitrary spreadsheet calculations,
+browser actions, automatic arrival summaries and wake words remain outside this feature.
 
 The separate **`/voice` setup** remains a labelled speech test: its read-back repeats
 supplied text. In the companion, **Read answer** speaks the validated answer instead.
 Companion answer speech defaults ON for new preferences; recording cues and the
 standalone voice test remain optional. Text and evidence work with Speech OFF.
+
+## Visual page reading
+
+`feat/visual-page-read` starts from updated `dev` at `60d0b13` (structured-page-read
+PR #13). It reuses the trusted floating frame/side panel, authentication, workspace
+checks, usage reservations, question controller, Avis integration and speech player.
+There are no new browser permissions, database migrations or hosted services.
+
+An explicit **Ask VSual** chooses a local reading method. Supported article prose
+and orders questions keep their existing readers. Questions about visual content,
+or eligible HTTP(S) views without supported article structure, use one viewport
+image. Opening, expanding or checking the companion never takes a screenshot or
+calls a provider. Visual processing is available by default on a deliberate Ask,
+just like structured text; there is no separate **Use page images** approval button
+or stored processing grant. A brief notice and expandable details explain
+transmission through Avis, private/unsaved content, exclusions, temporary scrolling
+and retention. Browser access remains separate from this application behaviour.
+Use the browser-toolbar button on the source tab if capture access is missing;
+granting access preserves the question and requires a fresh deliberate Ask.
+
+The primary visual path does not require `main`/`article` or a still DOM. It describes
+one captured moment, including legible labels and apparent patterns. It cannot
+retrieve a whole workbook/document, watch a video, open files, or calculate from
+arbitrary pictured numbers. Visual evidence has image IDs, bounded regions and
+readable descriptions; these are model interpretations, **not independent factual
+verification**. Source, capture time and omissions remain readable with Speech OFF.
+
+This is on-demand reading of the live browser: each submitted visual question takes
+a fresh capture. The model receives the actual image pixels with the question, so
+it can summarise readable content, explain a diagram or describe a chart's apparent
+pattern; it is not restricted to transcribing labels. It does not continuously
+watch changes. Scroll to the relevant content and ask again to read another view.
+The original source remains authoritative: valid image references establish where
+the interpretation points, not that every observation is correct.
+Reading-method selection uses the existing local page-capability and question
+rules, keeping one model call per question. The model interprets the permitted
+evidence; it does not grant browser access, execute page JavaScript or inspect
+arbitrary application internals. Ambiguous questions on mixed text/visual pages
+may need to name the chart, table or image they concern.
+
+An explicit whole-page visual question can use up to four overlapping images only
+on positively identified finite document-like pages using the top-level vertical
+scroller. Interactive calendars, grids, presentations, videos, nested scrolling
+and virtualised views are not auto-scrolled. Oversized scope is refused before
+capture; **Read current view** and, where eligible, **Read first portion** are separate
+deliberate actions. Nothing silently truncates into a claimed full-file answer.
+Scrolling, pointer/touch or navigation keys from the user cancel temporary capture;
+cleanup does not pull the user back after takeover. Passive clocks/canvas updates
+do not require a current-view task to wait for DOM stability.
+
+The worker checks source/window/tab before and after every screenshot, including
+away-and-back races. During capture, one compact Cancel surface replaces private
+companion content while keeping controllers mounted. Known private controls,
+unsupported frames and VSual regions are blacked out in the encoded pixels, with
+a 6 CSS-pixel outward margin. Chromium closed-shadow inspection prevents the
+companion iframe escaping masking when a page removes its host marker. Intended
+document editors require a structural policy, not a hostname exception. Inspection
+is bounded to 20,000 nodes and 200 mask rectangles and fails closed when unavailable.
+These measures do not guarantee removal of every private fact from page content.
+
+`VISUAL_LIMITS` defines: one default/four maximum images, 20% overlap, at least one
+second between screenshot starts and one capture batch per extension. Preparation
+is capped at 2 seconds, scroll settling at 1 second, each screenshot call at 2
+seconds and capture at 15 seconds. Raw images are capped at 24 MP; each output at
+2 MP, 2,000 px on its longest edge and 512 KiB. Total outputs are capped at 8 MP /
+2 MiB and serialized requests at 3 MiB. Encoding uses JPEG quality 0.85 once; there
+is no repeated quality ladder. Backend time is capped at 25 seconds, model at 20,
+initial speech preparation at 15 and the submitted task at 60 seconds (STT is
+separate). One model call and at most one initial TTS call; no automatic paid retries.
+
+The verified-profile budget is at most 8,192 total input tokens, including at most
+6,144 image tokens, and 768 output tokens. The existing `gpt-6-astra` route uses
+explicit `original` image detail and its documented 32-pixel patch calculation /
+1.2 multiplier; text uses a conservative UTF-8 byte bound plus framing allowance.
+See [official image token accounting](https://developers.openai.com/api/docs/guides/images-vision).
+The lower applicable bound wins, so a request can fail before its image-count
+ceiling. Answer/speech text remains capped at 1,000 Unicode code points. The backend
+decodes raster bytes using Sharp and validates actual format, dimensions, hashes,
+coverage and evidence references before accepting results. URLs are never fetched.
+Capture preflight checks projected image tokens before scrolling; an explicit first
+portion uses the smaller affordable tile count. The backend additionally checks the
+complete question/instruction/schema budget, which may require a still smaller view.
+
+Images remain transient in the capture/request path, never in rendered page DOM,
+conversation state, browser storage, database, buckets or routine logs. Accepted
+answer metadata/evidence and the latest audio remain session-local. End/logout,
+resource navigation and invalidation cancel pending work; stale results cannot
+appear or speak. Accepted source-bound speech may still continue across tabs under
+the existing rules. Repeat reuses cached audio at 0.9×; Speech OFF makes no TTS call.
+Provider retention remains unverified; no zero-retention claim is made. The bounded
+synthetic image-forwarding check below passed, but does not establish compatibility
+with every browser application or document.
+
+### Visual configuration and current verification gate
+
+Reuse `AVIS_API_KEY`, `AVIS_API_BASE_URL`, `AVIS_AI_MODEL`, Supabase, restricted
+database/workspace and `VOICE_ALLOWED_ORIGINS` in `apps/web/.env.local`. The extension
+keeps its existing `VITE_API_BASE_URL`; it never receives provider keys. One added
+server-only configuration value is `AVIS_VISUAL_VERIFIED_ROUTE`, a non-secret hash
+printed only after the opt-in synthetic check passes:
+
+```sh
+npm run check:avis:visual --workspace=@adc/web
+```
+
+This spends quota on **one** request containing two generated test images, with no
+retry. It is not a real-browser/authentication test and never runs in CI. Set the
+successful printed hash locally or in the intended Vercel environment, then restart
+or redeploy. A changed URL/model/profile invalidates it. Do not fabricate a hash to
+bypass verification. Builds and structured readers work without this setting.
+
+The initial 22 September 2026 compatibility attempt was **inconclusive**: the smoke
+question's “Do not calculate anything” disclaimer tripped our calculation filter.
+After the filter/prompt correction, one explicitly authorised follow-up request
+**passed** against the configured Avis `gpt-6-astra` route: two generated 600×240
+PNG images, unpredictable image-only labels, strict JSON, and matching evidence.
+Application request reference: `a9223562-cbaa-49a7-91b6-d10b69603dee`; upstream
+response ID: `resp_0d962352e98249a9016ab1f4c0f164819786e98934262ed773`; HTTP 200 in
+approximately six seconds. The adapter made exactly one request with retries off,
+4,130 bounded input tokens and the unchanged 768-token output cap. This establishes
+that synthetic route check, not website authentication, browser capture, Google
+Docs compatibility or speech. No environment files were changed. Do not repeat
+this paid check just to reconfirm the same route.
+Automated provider/lifecycle and actual encoded-pixel tests use synthetic data and
+mocks; they do not establish Edge compatibility.
+The completion review adds an integration test from question submission through real
+masking/resizing, HTTP validation and the Avis adapter. It inspects the exact JPEG
+sent to the provider mock at 2× and 4× pixel scales, checking excluded private pixels,
+retained document text and absence of payload logging. This is controlled geometry,
+not an actual Edge zoom test. Browser APIs, authentication and providers are mocked.
+Regression fixes cover Stop and review after the silence timer fires, worker loss
+after capture, incidental iframe-loading updates, speech deadlines, overflowing
+private controls and non-orders table routing. Current-view cleanup never moves page
+scroll/focus; deliberate scrolling retains guarded restoration.
+
+The latest integration pass ran `npm run check` successfully: type checking, lint,
+formatting, **657 tests** (320 extension, 268 web, 69 voice) and both production builds.
+Asynchronous hashing tests use bounded condition waits under parallel load; their
+cancellation assertions and production deadlines remain intact. The built
+visual endpoint rejected anonymous same-origin requests with 401 and originless
+requests with 403, both with `no-store`. An earlier scan of 29 browser-output files found none
+of the three configured server credential literals. These are local checks, not
+Vercel or authenticated visual acceptance. The extension build retains the existing
+non-failing shared-component `use client` bundler warnings.
+
+The Google Docs follow-up fixes a failed structured-page probe dropping independently
+checked screenshot-access metadata. Missing structured document metadata also no
+longer invalidates an otherwise unchanged visual source. Actual document/resource
+changes and access loss still invalidate work. Completed request errors remain
+visible after later context checks instead of becoming a misleading cancellation.
+The reported historical 502 has not been reproduced or attributed to a specific
+provider failure.
+
+If a visual request fails, expand **Request details** for its reference ID. The
+local web terminal (or Vercel function logs) emits a `visual_request_failed` entry
+for server errors with the application request ID, stage, bounded reason/code,
+status, elapsed time, dispatch flag, validated image dimensions/byte totals and
+safe provider metadata. Upstream HTTP status and allowlisted error/request IDs are
+included when available; the model response ID is separate from VSual's reference.
+`X-Client-Request-Id` associates the single upstream attempt with VSual's request.
+Use these fields to distinguish no dispatch, an upstream HTTP failure, output
+limit, malformed answer or evidence rejection after an HTTP 200. Diagnostics never
+copy raw error bodies, images, prompts, source URLs, credentials or arbitrary
+provider headers. Do not share request headers, image bodies, document text or
+credentials. After updating, restart the web server, reload the extension, and
+refresh source tabs before retesting.
+HTTP metadata is captured before the SDK parses the body, so malformed HTTP-200
+JSON/envelopes retain their status and are reported as `invalid_response` rather
+than looking like a request with no response. Both SDK response helpers share one
+cached request; regression tests assert one dispatch and cancellation precedence.
+
+The integration investigation confirmed Edge's registered unpacked path is
+`apps/extension/dist`, whose production-mode build points to `http://127.0.0.1:3000`.
+The matching workspace Next development server is reachable and compiles the
+latest diagnostics. However, Edge's in-memory extension revision and the version
+that handled the original 502 could not be proven: the original request reference
+is unavailable and no matching failure event is in the retained development log.
+Reload the extension before a new test. No claim is made that the historical
+Google Docs 502 is fixed; a new correlated browser request is still required.
+
+The user subsequently reported a successful browser test on the non-sensitive
+two-image fixture: the answer correctly identified `ALPHA-8533` and `BETA-9459` and
+acknowledged the unreadable redacted region. This is **user-reported synthetic
+browser success**, separate from the adapter check above. The browser version,
+request reference and evidence controls were not independently observed. Real
+Google Docs, chart interpretation and audible playback remain to be verified.
+
+### Test visual reading locally
+
+1. Use Node 24 / npm 11. From the root: `npm ci --include=dev --include-workspace-root`,
+   then `npm run dev:web`. In another terminal run
+   `npm run build --workspace=@adc/extension`.
+2. Load/reload `apps/extension/dist` at `edge://extensions` or `chrome://extensions`
+   (Developer mode → Load unpacked), then refresh source tabs. Public backend
+   configuration changes require rebuilding and reloading. Check the actual
+   extension ID against `VOICE_ALLOWED_ORIGINS`; Google sign-in also needs that
+   ID's exact Supabase callback (see [Google configuration](#google-configuration-manual-not-applied-by-this-branch)). Sign in through VSual
+   and confirm workspace access.
+3. Complete the opt-in model check/configuration above before expecting visual answers.
+   Use a synthetic/non-sensitive HTML page first. Activate VSual with its browser
+   toolbar button, keep Speech OFF and type “Describe the current screen”. There
+   should be no extra processing-approval button. Opening the image-processing
+   details must send nothing; the first deliberate Ask captures and submits once.
+4. Check source/capture time, readable image evidence and explicit omitted-content
+   information. Then enable Speech, ask once, Stop during generation/playback and
+   Repeat. Repeat must add no TTS request. Typed answers must survive audio failure.
+5. On a finite long article, ask about the “entire page screenshot”. Check preflight
+   refusal when too long; choose a narrower option deliberately. Cancel or interact
+   during scrolling and verify position restoration/takeover and preserved draft.
+6. Test a tab switch and away/back during capture, resource query/hash navigation,
+   End, logout and account changes. No old answer/audio may become current. Test
+   shortcut cancellation during capture and access recovery without recording.
+7. Test recording with five-second silence, continued-speech timer reset and Stop
+   and review, including immediately after automatic transcription starts: the
+   transcript must remain editable without submitting. Recheck `/orders`
+   deterministic comparison and `/reading-demo` prose/table routing.
+8. Repeat with keyboard only, NVDA, 200% text and narrow layout. Check focus returns
+   to a usable control after capture; only brief status is live-announced. Try
+   English/Vietnamese questions and assess pronunciation separately.
+
+After the synthetic labels test, use non-sensitive content to test interpretation:
+
+- Document: “Summarise the main points visible on this screen and preserve any
+  qualifications.”
+- Chart: “Describe the apparent trend in this chart. Identify the labels supporting
+  your answer and anything too unclear to read. Do not calculate.”
+- Diagram: “Explain how the items in this diagram relate, using its visible labels.”
+- Table: “Read the visible column headings and describe any obvious missing values
+  or ambiguous units. Do not calculate or claim to check hidden rows.”
+
+Inspect the source time and supporting descriptions against the displayed content.
+Scroll to a different region and ask another question: it should capture that new
+view, not reuse the earlier screenshot. A successful labels test does not establish
+correct chart reasoning, complete-document coverage or exact spreadsheet analysis.
+
+Actual Edge matrix for this implementation session (no browser automation surface
+was available; all rows below are **not performed**, not claims of support):
+
+| Target                    | Intended coverage                             | Outstanding check                                 |
+| ------------------------- | --------------------------------------------- | ------------------------------------------------- |
+| YouTube                   | One current frame/page view; no video summary | Moving content, overlay masks, source freshness   |
+| Google / Outlook Calendar | Current visible calendar                      | Labels/occlusions; no automatic scrolling         |
+| Drive / OneDrive          | Current file-list/view                        | No automatic file opening or file retrieval       |
+| Google Docs / Word web    | Capturable current document region            | Editor policy, unsaved text notice, privacy masks |
+| Sheets / Excel web        | Visible cells/chart labels                    | Virtualised grids; no arbitrary arithmetic        |
+| Slides / PowerPoint web   | Visible slide                                 | No traversal of the presentation                  |
+| HTTPS PDF viewer          | Only if capture and masking are available     | Viewer injection may be blocked; fail honestly    |
+| Ordinary HTTP(S) page     | Current view; eligible bounded scroll         | Permissions, zoom/geometry, user takeover         |
+
+`file://`, browser-internal pages and DOM-inaccessible viewers without a verified
+masking policy are unavailable. Apart from the user-reported synthetic result above,
+independent browser authentication-to-visual-answer checks remain pending. Live
+microphone, audible playback, pronunciation, keyboard/reflow and NVDA checks are
+also pending.
+Subsequent milestones may add user-selected text-PDF parsing, bounded scanned-PDF
+rendering/OCR, separately authorised Google/Microsoft file retrieval, exact-range
+spreadsheet analysis with deterministic calculations, and authorised calendar/media
+retrieval. Screenshot support does not implement any of those capabilities or
+guarantee access to YouTube transcripts.
 
 ## Structured page reading
 
@@ -57,9 +317,9 @@ content and VSual's interface are excluded. Tables, frames, canvas, diagrams,
 collapsed content and detectable pagination/unloaded content are disclosed as
 limitations; the reader does not expand or traverse them. Unrecognised application
 internals, closed shadow roots and content not present in the DOM are not read.
-Google Docs/Sheets/Slides, Gmail and PDF pages receive specific explanations when
-their structure is unsupported. This branch does not add their resource readers,
-OCR or visual interpretation; another permission click cannot enable those features.
+Google Docs/Sheets/Slides, Gmail and PDF views can have unsupported structured text.
+The visual fallback above is separate and bounded; it does not add their resource
+readers or whole-file OCR. Another permission click cannot enable file retrieval.
 The snapshot may include text below the viewport and is never described as a
 screenshot, full website, full file or proof of all visible content.
 
@@ -231,6 +491,15 @@ preparing speech in the original floating frame. The new tab exposes that remote
 speech's status and **Stop speech** without copying its answer/evidence into the
 new source. A new Ask, recording or explicit Read action takes over and stops the
 old speech. Returning to the original tab does not replay or submit anything.
+An accepted answer also keeps its one-shot automatic read-back if the tab becomes
+hidden just before the UI starts preparing audio. Mocked controller and rendered
+UI regressions cover that boundary plus tab hiding during preparation/playback;
+they do not prove that a particular browser kept an audible clip playing.
+The additional two-App regression uses real companion/client controllers with
+mocked browser ports, authentication, provider and audio boundaries. New-surface
+mounting and unchanged authentication retain existing audio; remote Stop, a new
+question and logout still stop it. The reported mid-speech browser interruption
+has not been reproduced: an actual-browser retest is still needed after reloading.
 Navigation, relevant changes to the original source, closing/discarding that tab,
 End, logout and account changes stop and clear its work. Closing the owning frame
 or reconnecting its worker also ends audio: no background audio host is introduced.
@@ -1170,8 +1439,8 @@ submission path. Its answer controller sends only validated answer text through 
 `/api/voice/speak` transport. This is the bounded integration point for later
 reasoning work. Model/page content never grants action authority.
 
-Review this work on `feat/structured-page-read`, based on updated `dev` at floating-companion
-merge `8500f0d` (PR #12), which includes automatic voice replies. Merge a reviewed feature before starting a separate follow-up branch
+Review this work on `feat/visual-page-read`, based on updated `dev` at structured-page-read
+merge `60d0b13` (PR #13), which includes floating companion and automatic voice replies. Merge a reviewed feature before starting a separate follow-up branch
 for broader scope or pending acceptance. When committing a completed feature,
 split changes into focused commits with concise messages that explain their purpose
 to technical and non-technical readers. Keep related tests with their implementation.

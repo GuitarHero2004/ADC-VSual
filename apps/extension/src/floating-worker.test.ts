@@ -65,6 +65,9 @@ function setup(
   url = tab.url!,
   structured?: Pick<StructuredPageAccess, 'context' | 'activate' | 'prepare'>,
   session?: Record<string, unknown>,
+  visualContext?: (
+    tab: chrome.tabs.Tab,
+  ) => Promise<NonNullable<OrdersContext['visual']>>,
 ) {
   const connected = new Events<[chrome.runtime.Port]>();
   const updated = new Events<[number, chrome.tabs.OnUpdatedInfo]>();
@@ -119,6 +122,7 @@ function setup(
     origin,
     (sender) => revoked.push(sender),
     structured,
+    visualContext,
   );
   const host = makePort('floating-host', {
     ...hostSender,
@@ -832,6 +836,60 @@ test('a failed fresh check cannot report an earlier supported source as verified
   app.host.port.disconnect();
 });
 
+test('a failed structured check rechecks independent visual access without capturing or inventing a grant', async () => {
+  for (const visualPermission of ['granted', 'required'] as const) {
+    const permission = accessFixture();
+    let accessChecks = 0;
+    const app = setup(
+      permission.url,
+      permission.access,
+      undefined,
+      async () => {
+        accessChecks++;
+        return { eligible: true, permission: visualPermission };
+      },
+    );
+    app.register();
+    const frame = app.frame();
+    app.worker.activate({ ...tab, url: permission.url }, false);
+    await flush();
+    let fail!: () => void;
+    permission.wait(
+      new Promise<void>((_resolve, reject) => {
+        fail = () => reject(new Error('Text probe unavailable'));
+      }),
+    );
+    const before = accessChecks;
+    const id = crypto.randomUUID();
+    frame.messages.emit({ type: 'floating:check-page', id });
+    await flush();
+    fail();
+    await flush();
+    const checked = frame.posted.find(
+      (value) =>
+        (value as { type: string; id?: string }).type ===
+          'floating:context-checked' && (value as { id: string }).id === id,
+    ) as { context: OrdersContext };
+    assert.ok(accessChecks > before, 'Visual access must be freshly checked');
+    assert.equal(checked.context.supported, false);
+    assert.equal(checked.context.permission, 'required');
+    assert.equal(checked.context.capability, 'unchecked');
+    assert.deepEqual(checked.context.visual, {
+      eligible: true,
+      permission: visualPermission,
+    });
+    assert.ok(
+      app.sources
+        .flatMap((source) => source.posted)
+        .every(
+          (value) => (value as { type: string }).type === 'structured:probe',
+        ),
+      'Recovery only inspects metadata; it does not capture or submit',
+    );
+    app.host.port.disconnect();
+  }
+});
+
 test('floating standby cannot grant or capture an ordinary page; browser activation opens only a metadata probe', async () => {
   const permission = accessFixture();
   const app = setup(permission.url, permission.access);
@@ -1215,4 +1273,83 @@ test('a fresh URL lookup rejects query navigation before the update event arrive
   await flush();
   assert.equal(app.sources.length, 0);
   assert.equal(app.worker.trusted(frame.sender), false);
+});
+
+test('visual observations ignore transient structured mutations but resource navigation still stops accepted speech', async () => {
+  const permission = accessFixture();
+  const app = setup(permission.url, permission.access);
+  app.register();
+  const frame = app.frame();
+  await flush();
+  app.worker.activate({ ...tab, url: permission.url }, false);
+  await flush();
+  assert.equal(app.sources.length, 1);
+  frame.messages.emit({ type: 'floating:visual-mode', active: true });
+  frame.messages.emit({ type: 'floating:speech-state', active: true });
+  const start = frame.posted.length;
+  app.sources[0]!.messages.emit({
+    type: 'structured:changed',
+    document_key: crypto.randomUUID(),
+  });
+  await flush();
+  assert.equal(
+    frame.posted
+      .slice(start)
+      .some(
+        (value) => (value as { type: string }).type === 'structured:changed',
+      ),
+    false,
+  );
+  assert.equal(
+    frame.posted
+      .slice(start)
+      .some(
+        (value) => (value as { type: string }).type === 'floating:speech-stop',
+      ),
+    false,
+  );
+  app.updated.emit(tab.id!, { url: permission.url + '?resource=another' });
+  assert.equal(
+    frame.posted
+      .slice(start)
+      .some(
+        (value) => (value as { type: string }).type === 'floating:speech-stop',
+      ),
+    true,
+  );
+  assert.equal(app.worker.trusted(frame.sender), false);
+});
+
+test('visual eligibility is independent from article support and later metadata cannot overwrite the source capability', async () => {
+  const permission = accessFixture();
+  let release!: () => void;
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const app = setup(permission.url, permission.access, undefined, async () => {
+    await wait;
+    return { eligible: true, permission: 'granted' };
+  });
+  app.register();
+  const frame = app.frame();
+  await flush();
+  app.worker.activate({ ...tab, url: permission.url }, false);
+  await flush();
+  release();
+  await flush();
+  const contexts = frame.posted.filter(
+    (value) => (value as { type: string }).type === 'floating:context',
+  ) as { context: OrdersContext }[];
+  assert.ok(contexts.length);
+  assert.equal(contexts.at(-1)!.context.documentId, sourceDocument);
+  assert.deepEqual(contexts.at(-1)!.context.visual, {
+    eligible: true,
+    permission: 'granted',
+  });
+  assert.equal(
+    app.sources
+      .flatMap((source) => source.posted)
+      .some((value) => (value as { type: string }).type.includes('capture')),
+    false,
+  );
 });
