@@ -123,7 +123,6 @@ interface Recording {
   silenceDeadline: number | null;
   activityRequest: AbortController;
   stopActivity: (() => void) | undefined;
-  finishReason: 'manual' | 'duration' | 'silence';
 }
 
 const QUESTION_SILENCE_MS = 5_000;
@@ -204,6 +203,7 @@ export class VoiceController {
   private readonly fixedPlaybackRate: number | undefined;
   private readonly silenceAutoFinish: boolean;
   private automaticQuestion: string | null = null;
+  private automaticQuestionGeneration: number | null = null;
 
   constructor(
     transport: VoiceTransport,
@@ -348,6 +348,7 @@ export class VoiceController {
 
   cancel = () => {
     this.automaticQuestion = null;
+    this.automaticQuestionGeneration = null;
     this.generation += 1;
     this.request?.abort();
     this.request = undefined;
@@ -474,7 +475,6 @@ export class VoiceController {
         silenceDeadline: null,
         activityRequest: new AbortController(),
         stopActivity: undefined,
-        finishReason: 'manual',
       };
       this.recording = recording;
       recorder.ondata = (chunk) => {
@@ -529,12 +529,7 @@ export class VoiceController {
         }
         if (this.silenceAutoFinish && this.snapshot.audioFeedback)
           this.dependencies.cue();
-        void this.transcribe(
-          blob,
-          audioFilename(recorder.mimeType),
-          id,
-          recording.finishReason === 'silence',
-        );
+        void this.transcribe(blob, audioFilename(recorder.mimeType), id);
       };
       recorder.start();
       recording.timer = this.dependencies.schedule(
@@ -558,11 +553,23 @@ export class VoiceController {
   };
 
   finish = (automatic: boolean | 'silence' = false) => {
+    if (automatic === false) {
+      // A deliberate review wins even if the silence timer already stopped the
+      // recorder. Keep its final chunk and any pending transcription, but disarm
+      // the later companion submission before publishing another state update.
+      this.automaticQuestion = null;
+      this.automaticQuestionGeneration = null;
+      if (
+        this.snapshot.phase === 'transcribing' &&
+        this.snapshot.notice === 'silence_reached'
+      )
+        this.update({ notice: 'transcribing' });
+    }
     const recording = this.recording;
     if (!recording || recording.finished || !this.current(recording.id)) return;
     recording.finished = true;
-    recording.finishReason =
-      automatic === 'silence' ? 'silence' : automatic ? 'duration' : 'manual';
+    this.automaticQuestionGeneration =
+      automatic === 'silence' ? recording.id : null;
     this.stopActivity(recording);
     this.dependencies.unschedule(recording.timer);
     this.update({
@@ -586,12 +593,7 @@ export class VoiceController {
     }
   };
 
-  private async transcribe(
-    blob: Blob,
-    filename: string,
-    id: number,
-    autoSubmit = false,
-  ) {
+  private async transcribe(blob: Blob, filename: string, id: number) {
     const request = new AbortController();
     this.request = request;
     try {
@@ -605,7 +607,10 @@ export class VoiceController {
       this.releaseAudio();
       if (!this.current(id)) return;
       this.automaticQuestion =
-        autoSubmit && response.transcript.trim() ? response.transcript : null;
+        this.automaticQuestionGeneration === id && response.transcript.trim()
+          ? response.transcript
+          : null;
+      this.automaticQuestionGeneration = null;
       // Preserve the provider transcript exactly, including whitespace and digits.
       this.update({
         text: response.transcript,

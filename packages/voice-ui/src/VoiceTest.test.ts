@@ -302,6 +302,34 @@ test('question composer retains text, focus and explicit actions across recordin
     assert.equal(document.activeElement, textarea);
     assert.equal(textarea.getAttribute('aria-invalid'), null);
 
+    // A silence completion must not remove the review choice while STT runs.
+    const beforeReviewUploads = uploads.length;
+    await act(async () => button('Record question').click());
+    await act(async () => resolvePermission(stream));
+    const review = button('Stop and review');
+    await act(async () => {
+      review.focus();
+      controller.finish('silence');
+    });
+    assert.equal(controller.getSnapshot().phase, 'transcribing');
+    assert.equal(button('Stop and review'), review);
+    assert.equal(review.disabled, false);
+    assert.equal(document.activeElement, review);
+    await act(async () => review.click());
+    await act(async () =>
+      resolveTranscript({
+        transcript: 'Inspect this chart after I review the transcript.',
+        request_id: 'silence-review',
+      }),
+    );
+    assert.equal(uploads.length, beforeReviewUploads + 1);
+    assert.equal(await uploads.at(-1)!.text(), 'final chunk');
+    assert.equal(
+      textarea.value,
+      'Inspect this chart after I review the transcript.',
+    );
+    assert.equal(controller.claimAutomaticQuestion(), null);
+
     // Standalone voice setup also announces asynchronous outcomes without stealing focus.
     await render('en', 'test');
     await act(async () => button('Start recording').click());
