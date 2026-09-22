@@ -21,14 +21,14 @@ The desktop prototype always reads new answers aloud, with immediate Stop and ca
 
 ## Windows desktop screen assistant
 
-`feat/desktop-guided-voice` starts from updated `dev` at `dbc59c0`, after the
-desktop screen assistant merge. `apps/desktop` uses Electron and React, the existing Supabase
+`feat/desktop-follow-up-guidance` starts from updated `dev` at `ff12674`, after
+the guided-voice merge (PR #18). `apps/desktop` uses Electron and React, the existing Supabase
 account/workspace checks, Avis visual adapter, ElevenLabs endpoints and shared
 voice controller. The browser companion's reading methods remain unchanged.
 
 The desktop journey is **sign in → hear the introduction → use another app → press
 VSual's Talk shortcut → speak → pause five seconds → answer and screenshot evidence
-→ Stop/Repeat**. Stop and review retains the editable transcript instead of submitting.
+→ Stop/Repeat → choose a follow-up or ask something else**. Stop and review retains the editable transcript instead of submitting.
 Typing and selecting Ask VSual remains available. It sends
 one current-view screenshot per question. It does not read DOM/accessibility trees,
 retrieve full documents, scroll windows, calculate arbitrary pictured tables,
@@ -67,8 +67,9 @@ in **`apps/web/.env.local`**, with the existing restricted database role/workspa
 and `ELEVENLABS_*` settings. Do not invent the verification hash or repeat a paid
 compatibility check when the configured route is already verified. No new tables,
 keys, CORS origins or migrations are required for desktop native bearer requests.
-A deployed backend must contain `/api/desktop-read`; the previous deployment does
-not gain this endpoint until this branch is deployed separately.
+A deployed backend must contain this branch's `/api/desktop-read` contract before
+testing follow-ups. For local verification, run the current web app and desktop
+build together; no deployment or remote configuration change is needed.
 
 Start these in two terminals at the repository root:
 
@@ -131,7 +132,8 @@ metadata, so a slow lookup cannot keep the silence timer armed. Stop/Hide/logout
 renderer loss discard pending work. **Hide to tray**, close
 and Escape stop pending capture/requests, recording and playback, then hide VSual.
 They preserve the signed-in session and draft. Passive reopening cancels unfinished work
-and clears the old answer while resolving the current target. Switching to another
+and retains the accepted answer only if the selected window identity and title still match.
+It does not automatically replay that answer. Switching to another
 app without hiding VSual does not stop accepted-answer speech. **Quit VSual**
 clears the memory-only session and releases both shortcuts. A second launch reuses
 the existing instance; there is no installer or automatic Windows startup yet.
@@ -191,6 +193,61 @@ and **Play / Repeat answer** reuses the cached audio. Autoplay denial exposes Pl
 provider errors expose a deliberate retry, never a paid retry loop. Starting recording
 interrupts answer speech. VSual does not control NVDA or system speech. Cancellation
 is local and does not guarantee the provider stopped processing or refunded a request.
+
+### Desktop follow-up guidance
+
+An answer may include **up to three numbered questions** about legible content in
+its screenshot. Each suggestion must reference existing screenshot evidence; these
+references establish the source, not independent verification of a model's interpretation.
+The model may return fewer choices or none when the image cannot support them.
+The same Avis request produces the answer and suggestions. This does not add a
+separate planning request, increase usage limits or enable application actions.
+
+Select a numbered question with Tab and Enter/Space, or press Talk and say
+**“Option one”**, **“Option two”**, **“Option three”** (Vietnamese:
+**“Lựa chọn một/hai/ba”**). Recording still requires deliberate activation; VSual
+does not listen while reading choices. Five seconds of silence submits normally;
+Stop and review lets you edit the choice or question first. The chosen question
+appears in the editable field. An unavailable choice prompts correction locally,
+without a screenshot or model call. Natural typed/spoken follow-ups also work.
+**Ask something else** clears the draft and previous conversation context and
+focuses the question field; it does not submit anything.
+
+Every follow-up takes a **new screenshot** of the selected window. The native
+owner supplies only the previous accepted question and answer, bound to that
+window, account and workspace. Earlier screenshots, audio and a growing chat
+history are not sent as context. Previous text is background only: the new image
+is the evidence, and changes or missing information must be acknowledged.
+Rechecking a different window identity/title clears old choices and requires a
+fresh question. A change inside a window with the same title is not reliable
+document identification; use Ask something else when starting another topic.
+The unchanged input budget includes the previous exchange; a large image plus
+long prior text may be rejected before provider dispatch. Use a smaller window,
+a shorter question or Ask something else rather than repeatedly submitting it.
+Logout, account changes and quitting clear this in-memory context. Nothing is
+saved to a conversation table or file.
+
+The answer and available numbered choices share **one initial ElevenLabs request**
+within the existing 1,000-code-point limit. The same 0.9× player handles Stop and
+cached Repeat. Text/evidence remain usable if speech fails. Choosing a suggestion
+does not calculate arbitrary tables, click a button, navigate or open a file.
+No new dependencies, environment variables, provider permissions or migrations
+are required. The reported inaudible Windows introduction remains a separate issue.
+
+Follow-up verification on 2026-09-23: `npm run check` passed typechecking, lint,
+formatting, **852 automated tests** and desktop/extension/web builds. Providers are
+mocked in those tests. They cover source/account context boundaries, numbered
+EN/VI choices, fresh capture requests, silence submission, duplicate clicks,
+cancelled/late responses, failed-follow-up Repeat and keyboard focus recovery.
+The real Windows `test:smoke` passed renderer/IPC isolation and 200% reflow.
+Both global shortcuts were unavailable to that temporary profile; physical
+shortcut operation was not tested. The extended `test:capture` stopped before
+capture because Windows refused to focus the synthetic fixture. Use
+`npm run test:capture --workspace=@adc/desktop -- --interactive`, activate its
+synthetic window and press the shortcut printed by the test. The extended path
+checks a spoken option, a fresh image and prior-exchange binding, but its native
+run remains pending. Live provider, hardware microphone, pronunciation and NVDA
+checks for this feature remain pending. No provider calls were made for verification.
 
 The opt-in Windows runtime checks use temporary profiles and no AI credits.
 `test:capture` captures a synthetic window through the actual Electron capture/IPC
@@ -267,7 +324,15 @@ Manual Windows journey (real login/model/microphone/NVDA checks remain required)
    may appear. Press Talk during processing to cancel, and during playback to start a new question. Hide
    and reopen; the account remains. Sign out during work; old account data clears.
    Quit/restart; sign-in is required again.
-6. Repeat with keyboard/NVDA: use the displayed global shortcut, Tab/Shift+Tab,
+6. With this branch's backend running, ask about a non-sensitive view that contains
+   several legible details. Check that numbered follow-ups are relevant and read
+   with the answer. Select one with the keyboard, then test Talk → “Option one”
+   (or “Lựa chọn một”) → silence submission. Test Stop and review before submitting
+   a spoken choice. Each follow-up should show a new capture time and evidence;
+   Repeat must not create another `/api/voice/speak` request. Choose Ask something
+   else and check that focus returns to an empty question. Switch to a differently
+   titled app and activate VSual: old choices must disappear, with no automatic request.
+7. Repeat with keyboard/NVDA: use the displayed global shortcut, Tab/Shift+Tab,
    Enter/Space and Escape. Use Stop when needed while exploring text and evidence.
    Check visible focus, a narrow window and 200% zoom. NVDA and app speech may overlap;
    VSual does not mute or pause your screen reader.

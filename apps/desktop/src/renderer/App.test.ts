@@ -14,7 +14,14 @@ import type {
 } from '../bridge.ts';
 import type { AssistantDependencies } from './assistant-controller.ts';
 import type { GuideDependencies } from './guide.ts';
-import { assistantHarness, deferred, session, settle } from './test-helpers.ts';
+import {
+  answerFor,
+  assistantHarness,
+  deferred,
+  session,
+  settle,
+} from './test-helpers.ts';
+import type { DesktopResponse } from '@adc/contracts';
 
 const initialState: DesktopState = {
   preferences: { language: 'en', shortcut: 'Control+Alt+Space' },
@@ -561,6 +568,75 @@ test('signed-in desktop captures explicitly, exposes evidence, keeps audio acros
     await page.unmount();
     assert.equal(h.sessionListeners.size, 0);
     assert.equal(h.activationListeners.size, 0);
+  } finally {
+    await page.dispose();
+  }
+});
+
+test('follow-up controls preserve focus, remain outside live regions and reset to an empty question without capture', async () => {
+  const h = assistantHarness();
+  h.bridge.readScreen = async (input) => {
+    h.calls.reads.push(input);
+    return {
+      ...answerFor(input.requestId),
+      follow_ups: [
+        {
+          question: 'Which label accompanies this figure?',
+          evidence_indices: [1],
+        },
+      ],
+    };
+  };
+  const page = await renderDesktop(h.bridge, h.dependencies);
+  const document = page.dom.window.document;
+  try {
+    await act(async () => page.button('Record question').click());
+    await act(async () => {
+      page.button('Stop and review').click();
+      await settle();
+    });
+    await act(async () => {
+      page.button('Ask VSual').click();
+      await settle();
+    });
+    const choice = page.button('1. Which label accompanies this figure?');
+    assert.equal(choice.closest('[aria-live], [role="status"]'), null);
+    assert.equal(choice.getAttribute('lang'), 'en');
+    const delayed = deferred<DesktopResponse>();
+    let requestId = '';
+    page.bridge.readScreen = async (input) => {
+      requestId = input.requestId;
+      return delayed.promise;
+    };
+    choice.focus();
+    await act(async () => {
+      choice.click();
+      await settle();
+    });
+    assert.equal(document.activeElement, choice);
+    assert.equal(choice.getAttribute('aria-disabled'), 'true');
+    assert.match(page.text(), /Previous answer/);
+    assert.equal(page.button('Play / Repeat answer').disabled, true);
+    await act(async () => {
+      choice.click();
+      await settle();
+    });
+    assert.equal(h.calls.captures, 2);
+    await act(async () => {
+      delayed.resolve(answerFor(requestId));
+      await settle();
+    });
+    assert.equal(
+      document.activeElement?.id,
+      'desktop-question',
+      'A removed choice restores focus to the question',
+    );
+    const captures = h.calls.captures;
+    await act(async () => page.button('Ask something else').click());
+    assert.equal(document.activeElement?.id, 'desktop-question');
+    assert.equal(document.querySelector('textarea')?.value, '');
+    assert.equal(document.querySelector('.answer-text'), null);
+    assert.equal(h.calls.captures, captures);
   } finally {
     await page.dispose();
   }

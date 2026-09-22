@@ -88,6 +88,42 @@ test('native bearer desktop request validates real pixels before reservation and
   assert.deepEqual(calls, ['auth', 'prepare', 'decode', 'reserve', 'provider']);
 });
 
+test('follow-up context is checked before usage reservation or provider dispatch', async () => {
+  const input = await desktopFixture();
+  const context = {
+    request_id: crypto.randomUUID(),
+    source_id: input.snapshot.source_id,
+    question: 'Describe the visible chart.',
+    answer: 'The chart has a green bar.',
+  };
+  for (const follow_up_context of [
+    { ...context, source_id: crypto.randomUUID() },
+    { ...context, request_id: input.request_id },
+    { ...context, answer: '😀'.repeat(1001) },
+    { ...context, question: ' ' },
+    { ...context, history: ['Unexpected additional context'] },
+  ]) {
+    const f = setup();
+    await error(
+      await f.run(request({ ...input, follow_up_context })),
+      'INVALID_INPUT',
+    );
+    assert.deepEqual(f.calls, ['auth']);
+  }
+  const f = setup();
+  const response = await f.run(
+    request({ ...input, follow_up_context: context }),
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(f.calls, [
+    'auth',
+    'prepare',
+    'decode',
+    'reserve',
+    'provider',
+  ]);
+});
+
 test('desktop schema forbids browser identity, additional images and masking claims', async () => {
   const input = await desktopFixture();
   for (const value of [

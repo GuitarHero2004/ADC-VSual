@@ -75,19 +75,71 @@ export async function fingerprintDesktopSnapshot(
   ).join('');
 }
 
-export const desktopRequestSchema = z.strictObject({
+export const desktopFollowUpContextSchema = z.strictObject({
   request_id: z.uuid(),
+  source_id: z.uuid(),
   question: boundedText(VISUAL_LIMITS.questionCodePoints),
-  consent: z.literal(true),
-  snapshot: desktopSnapshotSchema,
-  images: z.tuple([
-    visualImagePayloadSchema.extend({ id: z.literal('image-1') }),
-  ]),
+  answer: boundedText(VISUAL_LIMITS.answerCodePoints),
 });
+export type DesktopFollowUpContext = z.infer<
+  typeof desktopFollowUpContextSchema
+>;
+
+export const desktopRequestSchema = z
+  .strictObject({
+    request_id: z.uuid(),
+    question: boundedText(VISUAL_LIMITS.questionCodePoints),
+    consent: z.literal(true),
+    snapshot: desktopSnapshotSchema,
+    images: z.tuple([
+      visualImagePayloadSchema.extend({ id: z.literal('image-1') }),
+    ]),
+    follow_up_context: desktopFollowUpContextSchema.optional(),
+  })
+  .superRefine((request, context) => {
+    const previous = request.follow_up_context;
+    if (
+      previous &&
+      (previous.source_id !== request.snapshot.source_id ||
+        previous.request_id === request.request_id)
+    )
+      context.addIssue({
+        code: 'custom',
+        message:
+          'Follow-up context must refer to an earlier request for this source.',
+      });
+  });
 export type DesktopRequest = z.infer<typeof desktopRequestSchema>;
 
-export const desktopResponseSchema = visualModelResponseSchema
+export const desktopFollowUpSchema = z.strictObject({
+  question: boundedText(160),
+  // One-based positions in this answer's validated evidence collection.
+  evidence_indices: z.array(z.number().int().min(1).max(8)).min(1).max(3),
+});
+export type DesktopFollowUp = z.infer<typeof desktopFollowUpSchema>;
+
+/** Required on the model route; legacy backend answers can still display without it. */
+export const desktopModelResponseSchema = visualModelResponseSchema.extend({
+  follow_ups: z.array(desktopFollowUpSchema).max(3),
+});
+
+export function desktopSpeechText(response: {
+  text: string;
+  answer_language: 'en' | 'vi';
+  follow_ups: DesktopFollowUp[];
+}) {
+  if (!response.follow_ups.length) return response.text;
+  const options = response.follow_ups
+    .map((option, index) => `${index + 1}. ${option.question}`)
+    .join(' ');
+  return response.answer_language === 'vi'
+    ? `${response.text} Bạn có thể hỏi tiếp: ${options} Nhấn phím tắt Nói rồi nói số lựa chọn hoặc hỏi câu khác.`
+    : `${response.text} You can ask next: ${options} Press the Talk shortcut and say an option number, or ask something else.`;
+}
+
+export const desktopResponseSchema = desktopModelResponseSchema
   .extend({
+    follow_ups: z.array(desktopFollowUpSchema).max(3).default([]),
     source_kind: z.literal('desktop_window'),
     request_id: z.uuid(),
     snapshot_id: z.uuid(),
@@ -98,8 +150,15 @@ export const desktopResponseSchema = visualModelResponseSchema
   .superRefine((response, context) => {
     if (
       !response.text.trim() ||
-      Array.from(response.text).length > VISUAL_LIMITS.answerCodePoints ||
+      Array.from(desktopSpeechText(response)).length >
+        VISUAL_LIMITS.answerCodePoints ||
       (response.status === 'answer' && response.evidence.length === 0) ||
+      (response.status === 'unsupported' && response.follow_ups.length > 0) ||
+      response.follow_ups.some((option) =>
+        option.evidence_indices.some(
+          (index) => index > response.evidence.length,
+        ),
+      ) ||
       response.evidence.some(
         (item) =>
           item.image_id !== 'image-1' ||

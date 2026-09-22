@@ -37,6 +37,7 @@ export function answerFor(
     status: 'answer',
     answer_language: 'en',
     text,
+    follow_ups: [],
     evidence: [
       {
         image_id: 'image-1',

@@ -54,6 +54,7 @@ export const desktopModelAnswer = {
   status: 'answer' as const,
   answer_language: 'en' as const,
   text: 'The captured window shows a green area.',
+  follow_ups: [],
   evidence: [
     {
       image_id: 'image-1' as const,

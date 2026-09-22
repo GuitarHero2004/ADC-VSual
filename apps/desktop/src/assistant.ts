@@ -73,9 +73,21 @@ export interface NativeSource {
 }
 type PendingCapture = DesktopCaptureTicket & {
   nativeId: string;
+  userId: string;
+  workspaceId: string | undefined;
   expiresAt: number;
   granted: boolean;
   startedAt: number;
+};
+type PreviousExchange = {
+  requestId: string;
+  sourceId: string;
+  title: string;
+  epoch: string;
+  userId: string;
+  workspaceId: string | undefined;
+  question: string;
+  answer: string;
 };
 type AuthOwner = Pick<DesktopAuth, 'authorized' | 'snapshot'>;
 export interface AssistantDependencies {
@@ -96,6 +108,7 @@ export class DesktopAssistant {
   >();
   private readonly used = new Set<string>();
   private pending: PendingCapture | undefined;
+  private previousExchange: PreviousExchange | undefined;
   private generation = 0;
   private disposed = false;
   private readonly fetcher: typeof fetch;
@@ -125,6 +138,11 @@ export class DesktopAssistant {
       const id = previous.get(source.id) ?? randomUUID();
       this.sources.set(id, { id: source.id, name: sourceTitle(source.name) });
     }
+    if (this.previousExchange) {
+      const previous = this.sources.get(this.previousExchange.sourceId);
+      if (!previous || previous.name !== this.previousExchange.title)
+        this.clearContext();
+    }
     return [...this.sources].map(([id, source]) => ({
       id,
       title: source.name,
@@ -134,14 +152,23 @@ export class DesktopAssistant {
   async sourceForNative(
     nativeId: string | null,
   ): Promise<DesktopSource | null> {
-    if (!nativeId || !/^window:[1-9][0-9]*:[01]$/.test(nativeId)) return null;
+    if (!nativeId || !/^window:[1-9][0-9]*:[01]$/.test(nativeId)) {
+      this.clearContext();
+      return null;
+    }
     const sources = await this.listSources();
-    return (
+    const selected =
       sources.find((source) => {
         const native = this.sources.get(source.id);
         return native && sameWindow(native.id, nativeId);
-      }) ?? null
-    );
+      }) ?? null;
+    if (
+      this.previousExchange &&
+      (selected?.id !== this.previousExchange.sourceId ||
+        selected.title !== this.previousExchange.title)
+    )
+      this.clearContext();
+    return selected;
   }
   async prepareCapture(
     sourceId: string,
@@ -149,6 +176,8 @@ export class DesktopAssistant {
   ): Promise<DesktopCaptureTicket> {
     if (!uuid.safeParse(sourceId).success || !uuid.safeParse(requestId).success)
       throw invalid();
+    if (this.previousExchange && sourceId !== this.previousExchange.sourceId)
+      this.clearContext();
     const operation = this.begin(requestId, 'screen');
     try {
       const identity = await this.dependencies.auth.authorized(
@@ -169,11 +198,13 @@ export class DesktopAssistant {
         !present ||
         sameWindow(present.id, this.dependencies.excludedSourceId()) ||
         sourceTitle(present.name) !== source.name
-      )
+      ) {
+        this.clearContext();
         throw new DesktopRequestError(
           'SOURCE_UNAVAILABLE',
           'The selected window changed or closed. Switch to the intended app and press the VSual shortcut again.',
         );
+      }
       const ticket: PendingCapture = {
         id: sourceId,
         title: source.name,
@@ -181,6 +212,8 @@ export class DesktopAssistant {
         requestId,
         epoch: identity.epoch,
         nativeId: source.id,
+        userId: identity.userId,
+        workspaceId: this.workspaceId(),
         expiresAt: this.now() + VISUAL_LIMITS.captureStageTimeoutMs,
         granted: false,
         startedAt: this.now(),
@@ -250,6 +283,7 @@ export class DesktopAssistant {
         captureId: uuid,
         requestId: uuid,
         question: z.string().min(1).max(4000),
+        followUpRequestId: uuid.optional(),
         bytes: z.instanceof(ArrayBuffer),
         width: z.number().int().positive().max(VISUAL_LIMITS.longestSide),
         height: z.number().int().positive().max(VISUAL_LIMITS.longestSide),
@@ -265,13 +299,28 @@ export class DesktopAssistant {
       ticket.requestId !== input.requestId ||
       !active ||
       ticket.expiresAt < this.now() ||
-      ticket.epoch !== this.dependencies.auth.snapshot().epoch
+      !this.isCurrentIdentity(ticket)
     )
       throw cancelled();
     this.pending = undefined; // pixels can be dispatched only once for this ticket
     const signal = active.controller.signal;
     const bytes = Buffer.from(input.bytes);
     try {
+      const previous = this.previousExchange;
+      if (
+        input.followUpRequestId &&
+        (!previous ||
+          previous.requestId !== input.followUpRequestId ||
+          previous.sourceId !== ticket.id ||
+          previous.title !== ticket.title ||
+          previous.epoch !== ticket.epoch ||
+          previous.userId !== ticket.userId ||
+          previous.workspaceId !== ticket.workspaceId)
+      )
+        throw new DesktopRequestError(
+          'SOURCE_UNAVAILABLE',
+          'This follow-up belongs to an earlier answer or window. Ask a new question about the current window.',
+        );
       if (
         !bytes.length ||
         bytes.length > VISUAL_LIMITS.imageBytes ||
@@ -292,11 +341,13 @@ export class DesktopAssistant {
             source.id === ticket.nativeId &&
             sourceTitle(source.name) === ticket.title,
         )
-      )
+      ) {
+        this.clearContext();
         throw new DesktopRequestError(
           'SOURCE_UNAVAILABLE',
           'The selected window changed or closed. Capture it again.',
         );
+      }
       const metadata = {
         id: 'image-1' as const,
         sha256: createHash('sha256').update(bytes).digest('hex'),
@@ -328,6 +379,16 @@ export class DesktopAssistant {
             base64: bytes.toString('base64'),
           },
         ],
+        ...(input.followUpRequestId && previous
+          ? {
+              follow_up_context: {
+                request_id: previous.requestId,
+                source_id: previous.sourceId,
+                question: previous.question,
+                answer: previous.answer,
+              },
+            }
+          : {}),
       });
       const response = desktopResponseSchema.parse(
         await this.post(
@@ -345,9 +406,35 @@ export class DesktopAssistant {
         response.source_id !== ticket.id ||
         response.fingerprint !== snapshot.fingerprint ||
         response.captured_at !== snapshot.captured_at ||
-        this.dependencies.auth.snapshot().epoch !== ticket.epoch
+        !this.isCurrentIdentity(ticket)
       )
         throw cancelled();
+      const currentSources = await this.dependencies.sources();
+      signal.throwIfAborted();
+      if (
+        !this.isCurrentIdentity(ticket) ||
+        !currentSources.some(
+          (source) =>
+            source.id === ticket.nativeId &&
+            sourceTitle(source.name) === ticket.title,
+        )
+      ) {
+        this.clearContext();
+        throw new DesktopRequestError(
+          'SOURCE_UNAVAILABLE',
+          'The selected window changed or closed. Ask again about the current window.',
+        );
+      }
+      this.previousExchange = {
+        requestId: input.requestId,
+        sourceId: ticket.id,
+        title: ticket.title,
+        epoch: ticket.epoch,
+        userId: ticket.userId,
+        workspaceId: ticket.workspaceId,
+        question: body.question,
+        answer: response.text,
+      };
       return response;
     } finally {
       bytes.fill(0);
@@ -444,6 +531,7 @@ export class DesktopAssistant {
     this.generation++;
     this.suspend();
     this.sources.clear();
+    this.previousExchange = undefined;
   }
   dispose() {
     this.disposed = true;
@@ -451,6 +539,8 @@ export class DesktopAssistant {
   }
   private requireSession() {
     const state = this.dependencies.auth.snapshot();
+    if (this.previousExchange && !this.isCurrentIdentity(this.previousExchange))
+      this.clearContext();
     if (
       this.disposed ||
       state.phase !== 'signed_in' ||
@@ -460,6 +550,29 @@ export class DesktopAssistant {
         'UNAUTHENTICATED',
         'Sign in and check workspace access before reading a window.',
       );
+  }
+  private workspaceId() {
+    const configuration = this.dependencies.configuration();
+    return configuration.ok ? configuration.value.workspaceId : undefined;
+  }
+  private isCurrentIdentity(identity: {
+    epoch: string;
+    userId: string;
+    workspaceId: string | undefined;
+  }) {
+    const state = this.dependencies.auth.snapshot();
+    return (
+      state.phase === 'signed_in' &&
+      state.workspace === 'allowed' &&
+      state.epoch === identity.epoch &&
+      state.account?.id === identity.userId &&
+      this.workspaceId() === identity.workspaceId
+    );
+  }
+  private clearContext() {
+    this.previousExchange = undefined;
+    for (const [id, operation] of this.operations)
+      if (operation.kind === 'screen') this.cancel(id);
   }
   private begin(id: string, kind: string) {
     this.requireSession();

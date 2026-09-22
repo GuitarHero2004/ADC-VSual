@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
@@ -378,6 +379,17 @@ export function AssistantControls({
   const tooLong =
     Array.from(question.text).length > VISUAL_LIMITS.questionCodePoints;
   const answer = state.answer;
+  const chosenControl = useRef<HTMLButtonElement | null>(null);
+  useLayoutEffect(() => {
+    // Restore only focus lost because a selected option disappeared; never steal it from another control.
+    if (
+      chosenControl.current &&
+      !chosenControl.current.isConnected &&
+      document.activeElement === document.body
+    )
+      document.getElementById('desktop-question')?.focus();
+    chosenControl.current = null;
+  }, [answer?.response.request_id]);
   const speechStatus =
     speech.notice === 'autoplay_blocked'
       ? text.audioBlocked
@@ -440,6 +452,7 @@ export function AssistantControls({
           disabled={
             busy ||
             recording ||
+            state.loadingSources ||
             !state.sourceId ||
             !question.text.trim() ||
             tooLong
@@ -455,7 +468,9 @@ export function AssistantControls({
         ) : (
           <button
             type="button"
-            disabled={busy || recording || !state.sourceId}
+            disabled={
+              busy || recording || state.loadingSources || !state.sourceId
+            }
             onClick={() => void controller.startRecording()}
           >
             {text.record}
@@ -537,6 +552,7 @@ export function AssistantControls({
           aria-labelledby="desktop-answer-title"
         >
           <h2 id="desktop-answer-title">{text[answer.response.status]}</h2>
+          {busy && <p className="desktop-help">{text.previousAnswer}</p>}
           <p className="answer-text" lang={answer.response.answer_language}>
             {answer.response.text}
           </p>
@@ -554,6 +570,8 @@ export function AssistantControls({
               type="button"
               disabled={
                 recording ||
+                busy ||
+                state.loadingSources ||
                 speech.phase === 'generating' ||
                 speech.phase === 'speaking'
               }
@@ -634,6 +652,46 @@ export function AssistantControls({
               {text.reference}: <code>{answer.response.request_id}</code>
             </p>
           </details>
+          <section
+            className="desktop-follow-ups"
+            aria-labelledby="desktop-follow-ups-title"
+          >
+            <h3 id="desktop-follow-ups-title">{text.followUps}</h3>
+            <p className="desktop-help">
+              {answer.response.follow_ups.length
+                ? text.followUpHelp
+                : text.followUpEmpty}
+            </p>
+            <div className="desktop-follow-up-choices">
+              {answer.response.follow_ups.map((option, index) => (
+                <button
+                  key={index}
+                  type="button"
+                  lang={answer.response.answer_language}
+                  aria-disabled={busy || recording || state.loadingSources}
+                  onClick={(event) => {
+                    if (busy || recording || state.loadingSources) return;
+                    chosenControl.current = event.currentTarget;
+                    void controller.chooseFollowUp(
+                      index,
+                      answer.response.request_id,
+                    );
+                  }}
+                >
+                  {index + 1}. {option.question}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                controller.askSomethingElse();
+                document.getElementById('desktop-question')?.focus();
+              }}
+            >
+              {text.askSomethingElse}
+            </button>
+          </section>
         </section>
       )}
 

@@ -95,10 +95,13 @@ export function prepareCapturedVisualInput(
   input: CapturedVisualInput,
   source: unknown,
   instructions: string,
+  format: OpenAI.Responses.ResponseFormatTextJSONSchemaConfig = zodTextFormat(
+    visualModelResponseSchema,
+    'visual_page_answer',
+  ),
 ) {
   const configuration = requireVisualConfiguration();
   const modelInput = JSON.stringify({ question: input.question, source });
-  const format = zodTextFormat(visualModelResponseSchema, 'visual_page_answer');
   const imageTokenBound = input.snapshot.images.reduce(
     (sum, image) => sum + visualImageTokenBound(image.width, image.height),
     0,
