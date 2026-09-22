@@ -1,0 +1,25 @@
+{
+  "name": "@adc/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "dev": "npm run build && npm start",
+    "start": "electron .",
+    "build": "node scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test src/*.test.ts src/renderer/*.test.ts",
+    "test:smoke": "node scripts/smoke.ts"
+  },
+  "dependencies": {
+    "@adc/contracts": "*",
+    "@adc/voice-ui": "*",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "electron": "44.4.3",
+    "vite": "8.3.0"
+  }
+}
