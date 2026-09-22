@@ -1,10 +1,10 @@
-# VSual — RMIT ADC browser companion
+# VSual — RMIT ADC accessibility companion
 
 Hackathon project by **In Motion or Element**, for blind and low-vision users.
 The assistant complements existing screen readers.
 
-VSual answers bounded questions about **structured HTML articles/information pages**
-and the rendered **synthetic `/orders` dashboard**. This branch also implements
+The browser companion answers bounded questions about **structured HTML articles/information pages**
+and the rendered **synthetic `/orders` dashboard**. It also implements
 **captured browser-view questions**, with live use gated on model-route verification.
 Type and select **Ask VSual**, or deliberately record a question
 and pause for five seconds to submit automatically. The configured model through
@@ -17,6 +17,83 @@ The separate **`/voice` setup** remains a labelled speech test: its read-back re
 supplied text. In the companion, **Read answer** speaks the validated answer instead.
 Companion answer speech defaults ON for new preferences; recording cues and the
 standalone voice test remain optional. Text and evidence work with Speech OFF.
+
+## Windows desktop foundation
+
+`feat/desktop-foundation` starts from updated `dev` at `0f9f68e`, which includes
+the visual-reading merge and Vercel dependency fix `4f94002`.
+
+**Branch purpose:** add a Windows desktop shell for VSual with a global hotkey,
+tray controls, saved language/shortcut settings and an accessible interface.
+`apps/desktop` uses Electron and React, reusing the existing logo, shared UI styles
+and language types. The existing browser companion and backend remain available.
+
+This is **stage 1**, not a desktop AI release. Desktop sign-in, microphone capture,
+screenshots, question answering, wake words and an installer are not connected in
+this build. The interface states that limitation instead of showing fake answers.
+Opening this local shell needs no account; it makes no network/provider requests.
+Existing Supabase login, workspace checks and billable endpoint protection are
+preserved. Desktop authentication will need its own secure session adapter when
+protected features are connected; browser cookies are not a desktop session.
+
+From the repository root with Node 24 and npm 11:
+
+```powershell
+npm ci --include=dev --include-workspace-root
+npm run dev:desktop
+```
+
+`dev:desktop` builds and opens the app; it does not run a hot-reload server. After
+editing, quit VSual and run it again. The first launch may download the pinned
+Electron runtime. Other commands:
+
+```powershell
+npm run build:desktop
+npm run start:desktop
+npm run typecheck --workspace=@adc/desktop
+npm run test --workspace=@adc/desktop
+npm run test:smoke --workspace=@adc/desktop
+```
+
+The app opens a light, enlarged-text window above ordinary application windows.
+Its default **Ctrl + Alt + Space** shortcut opens/focuses it from another app.
+**Settings** offers three bounded shortcut choices and English/Vietnamese. A
+conflicting shortcut produces a recoverable explanation and keeps an existing
+working shortcut. **Hide to tray**, the window close button and Escape hide the
+window; the tray icon or registered shortcut restores it. **Quit VSual** fully
+exits and releases its shortcut. Launching it twice reuses the existing instance.
+It does not start with Windows automatically and cannot activate while quit.
+
+Only language and shortcut are stored in Electron's VSual Desktop user-data
+directory (`preferences.json`). No tokens, captured content or credentials are
+stored by this foundation. No desktop environment file or provider key is needed.
+The UI uses a local `vsual://desktop` origin, a sandboxed isolated renderer and a
+small validated IPC bridge; remote content, navigation, microphone and display
+capture permissions are denied in this stage. Screen-reader use needs no ElevenLabs.
+
+Desktop unit/UI tests use the existing Node test runner. The opt-in smoke check
+starts the real Electron runtime with a temporary profile; it is not part of
+headless Linux CI and makes no AI calls. Actual hotkey keypresses from another
+application, Windows tray interaction and NVDA remain manual acceptance checks.
+
+Local verification passed: `npm run check`, 20 desktop unit/UI tests, and the real
+Electron smoke check for renderer isolation, IPC, blocked network access, shortcut
+registration, close-to-tray lifecycle and 200% reflow. The smoke check deliberately
+rejects one invalid preferences request; its validation error is expected. These
+automated checks do not establish physical shortcut, tray or NVDA usability.
+
+Manual Windows check:
+
+1. Start VSual, use Tab/Shift+Tab to reach each control, and inspect the foundation
+   limitation with NVDA if available. No sign-in should be required.
+2. Switch to another application, press the displayed shortcut, and check that
+   VSual opens with visible focus on its heading. No microphone/capture starts.
+3. Save another shortcut and Vietnamese. Hide/reopen, then quit/restart: settings
+   should persist. If a shortcut is taken, use the tray to recover.
+4. Hide with Escape or close; restore from the tray. Start another instance and
+   confirm only one companion remains. Quit and confirm its shortcut is released.
+5. Use the View menu to zoom to 200% and narrow the window: controls must remain
+   reachable with scrolling and without horizontal clipping.
 
 ## Visual page reading
 
