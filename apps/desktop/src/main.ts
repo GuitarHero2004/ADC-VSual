@@ -1,5 +1,12 @@
 import { app, dialog, Menu, protocol } from 'electron';
 import { createDesktopHost } from './host.ts';
+import { loadEnvFile } from 'node:process';
+import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+
+// Runtime-only desktop settings; never load the backend's private provider keys.
+const environmentFile = join(__dirname, '..', '.env.local');
+if (existsSync(environmentFile)) loadEnvFile(environmentFile);
 
 app.setName('VSual Desktop');
 protocol.registerSchemesAsPrivileged([
@@ -13,10 +20,10 @@ if (!app.requestSingleInstanceLock()) {
   let host: Awaited<ReturnType<typeof createDesktopHost>> | undefined;
   let quitting = false;
   app.on('second-instance', () => {
-    // A launch during initialization is covered by the initial show below.
-    host?.show();
+    // A launch during initialization is covered by initial activation below.
+    void host?.activate();
   });
-  app.on('activate', () => host?.show());
+  app.on('activate', () => void host?.activate());
   app.on('before-quit', () => {
     quitting = true;
     host?.dispose();
@@ -30,7 +37,7 @@ if (!app.requestSingleInstanceLock()) {
         {
           label: 'VSual',
           submenu: [
-            { label: 'Open VSual', click: () => host?.show() },
+            { label: 'Open VSual', click: () => void host?.activate() },
             { label: 'Hide to tray', click: () => host?.hide() },
             { type: 'separator' },
             { role: 'quit', label: 'Quit VSual' },
@@ -56,7 +63,7 @@ if (!app.requestSingleInstanceLock()) {
       if (quitting) host.dispose();
       else {
         // Explicit app launch opens the window; it never starts other work.
-        host.show();
+        await host.activate();
       }
     } catch {
       if (!quitting)

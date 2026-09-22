@@ -4,6 +4,7 @@ export * from './grounded.ts';
 export * from './auth.ts';
 export * from './structured.ts';
 export * from './visual.ts';
+export * from './desktop.ts';
 
 // API-07 bounds request_text. Task submission is not implemented yet.
 export const REQUEST_TEXT_MAX_LENGTH = 4000;

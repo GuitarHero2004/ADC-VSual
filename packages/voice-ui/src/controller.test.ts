@@ -158,8 +158,11 @@ async function settle() {
   await Promise.resolve();
 }
 
-function silenceHarness(overrides: Partial<VoiceTransport> = {}) {
-  const h = harness(overrides, { silenceAutoFinish: true });
+function silenceHarness(
+  overrides: Partial<VoiceTransport> = {},
+  options: VoiceControllerOptions = {},
+) {
+  const h = harness(overrides, { silenceAutoFinish: true, ...options });
   let now = 0;
   let nextTimer = 0;
   const timers = new Map<number, { at: number; run(): void }>();
@@ -903,6 +906,210 @@ test('manual Finish and the 30-second cap preserve review without automatic subm
     assert.equal(h.observerStops, 1);
     assert.equal(h.timerCount, 0);
   }
+});
+
+test('an opted-in 60-second cap preserves the default 30-second deadline elsewhere', async () => {
+  for (const maxRecordingMs of [undefined, 60_000]) {
+    const h = silenceHarness({}, maxRecordingMs ? { maxRecordingMs } : {});
+    await h.controller.start();
+    const recorder = h.recorders[0]!;
+    const duration = maxRecordingMs ?? RECORDING_MAX_MS;
+    h.advance(duration - 1);
+    assert.equal(recorder.stops, 0);
+    assert.equal(h.controller.getSnapshot().phase, 'recording');
+    h.advance(1);
+    assert.equal(recorder.stops, 1);
+    assert.equal(h.controller.getSnapshot().notice, 'duration_reached');
+    recorder.end('exact typed transcript stays unchanged');
+    await settle();
+    assert.equal(h.calls.transcripts.length, 1);
+    assert.equal(h.controller.claimAutomaticQuestion(), null);
+    assert.equal(h.timerCount, 0);
+    h.controller.dispose();
+  }
+});
+
+test('recording duration configuration rejects values outside the bounded integer range', () => {
+  for (const maxRecordingMs of [
+    0,
+    -1,
+    60_001,
+    1.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+  ])
+    assert.throws(() => harness({}, { maxRecordingMs }), RangeError);
+});
+
+test('opted-in silence cues count 5 through 1 once each and ignore their own speaker activity', async () => {
+  const transcript = 'Keep the exact words, 1.25, and punctuation.';
+  const h = silenceHarness(
+    { transcribe: async () => ({ transcript, request_id: 'cue' }) },
+    {
+      silenceCountdownCues: true,
+      maxRecordingMs: 60_000,
+    },
+  );
+  const cues: {
+    kind: string | undefined;
+    second: number | null;
+    at: number;
+  }[] = [];
+  h.dependencies.cue = (kind) => {
+    cues.push({
+      kind,
+      second: h.controller.getSnapshot().silenceSecondsRemaining,
+      at: h.dependencies.now!(),
+    });
+    if (kind === 'countdown') {
+      h.activity();
+      h.dependencies.schedule(() => h.activity(), 150);
+    } else assert.ok(h.trackStops > 0, 'Submit sound occurs after tracks stop');
+  };
+  h.controller.setAudioFeedback(true);
+  await h.controller.start();
+  h.advance(2_000);
+  assert.equal(cues.length, 0, 'Initial quiet is not a countdown');
+  // Sustained user speech must not cause repeated 5-second cue ticks.
+  for (let index = 0; index < 10; index++) {
+    h.activity();
+    h.advance(50);
+  }
+  assert.equal(cues.length, 0);
+  h.advance(4_950);
+  assert.deepEqual(
+    cues.map((cue) => cue.second),
+    [5, 4, 3, 2, 1],
+  );
+  assert.ok(
+    cues.every(
+      (cue, index) => index === 0 || cue.at - cues[index - 1]!.at >= 1_000,
+    ),
+  );
+  assert.equal(
+    h.recorders[0]!.stops,
+    1,
+    'Own tones never extend the silence deadline',
+  );
+  h.recorders[0]!.end('recorded words');
+  h.recorders[0]!.onstop();
+  await settle();
+  assert.equal(cues.filter((cue) => cue.kind === 'submit').length, 1);
+  assert.equal(h.calls.transcripts.length, 1);
+  assert.equal(h.controller.getSnapshot().text, transcript);
+  assert.equal(h.controller.claimAutomaticQuestion(), transcript);
+  assert.equal(h.controller.claimAutomaticQuestion(), null);
+  assert.equal(h.timerCount, 0);
+  h.controller.dispose();
+});
+
+test('real speech after a countdown tone resets the timer without duplicate or rapid cues', async () => {
+  const h = silenceHarness({}, { silenceCountdownCues: true });
+  const cues: { second: number | null; at: number }[] = [];
+  h.dependencies.cue = (kind) => {
+    if (kind === 'countdown')
+      cues.push({
+        second: h.controller.getSnapshot().silenceSecondsRemaining,
+        at: h.dependencies.now!(),
+      });
+  };
+  h.controller.setAudioFeedback(true);
+  await h.controller.start();
+  h.activity();
+  h.advance(1_500);
+  assert.deepEqual(
+    cues.map((cue) => cue.second),
+    [5, 4],
+  );
+  h.activity();
+  h.activity();
+  assert.equal(h.controller.getSnapshot().silenceSecondsRemaining, 5);
+  h.advance(4_999);
+  assert.equal(h.recorders[0]!.stops, 0);
+  h.advance(1);
+  assert.equal(h.recorders[0]!.stops, 1);
+  assert.deepEqual(
+    cues.map((cue) => cue.second),
+    [5, 4, 5, 4, 3, 2, 1],
+  );
+  assert.ok(
+    cues.every(
+      (cue, index) => index === 0 || cue.at - cues[index - 1]!.at >= 1_000,
+    ),
+  );
+  h.controller.cancel();
+});
+
+test('countdown sounds require both opt-ins and feedback can be disabled mid-countdown', async () => {
+  for (const options of [{}, { silenceCountdownCues: true }]) {
+    const h = silenceHarness({}, options);
+    const cues: unknown[] = [];
+    h.dependencies.cue = (kind) => cues.push(kind);
+    if (!options.silenceCountdownCues) h.controller.setAudioFeedback(true);
+    await h.controller.start();
+    h.activity();
+    h.advance(5_000);
+    assert.equal(cues.length, 0);
+    h.controller.cancel();
+  }
+  const h = silenceHarness({}, { silenceCountdownCues: true });
+  const cues: unknown[] = [];
+  h.dependencies.cue = (kind) => cues.push(kind);
+  h.controller.setAudioFeedback(true);
+  await h.controller.start();
+  h.activity();
+  h.advance(150);
+  assert.equal(cues.length, 1);
+  h.controller.setAudioFeedback(false);
+  h.advance(5_000);
+  h.recorders[0]!.end();
+  await settle();
+  assert.equal(cues.length, 1);
+  h.controller.dispose();
+});
+
+test('Stop and review or cancellation clear cue timers and never play a submit tone', async () => {
+  for (const action of ['finish', 'cancel', 'dispose'] as const) {
+    const h = silenceHarness({}, { silenceCountdownCues: true });
+    const cues: unknown[] = [];
+    h.dependencies.cue = (kind) => cues.push(kind);
+    h.controller.setAudioFeedback(true);
+    await h.controller.start();
+    h.activity();
+    h.advance(150);
+    assert.equal(cues.length, 1);
+    h.controller[action]();
+    h.activity();
+    h.advance(60_000);
+    h.recorders[0]!.end('review this exact question');
+    h.recorders[0]!.onstop();
+    await settle();
+    assert.equal(cues.length, 1, action);
+    assert.equal(h.controller.claimAutomaticQuestion(), null);
+    assert.equal(h.calls.transcripts.length, action === 'finish' ? 1 : 0);
+    assert.equal(h.timerCount, 0);
+    h.controller.dispose();
+  }
+});
+
+test('subscriber cancellation at a countdown update prevents a late tone or timer', async () => {
+  const h = silenceHarness({}, { silenceCountdownCues: true });
+  let cues = 0;
+  h.dependencies.cue = () => {
+    cues++;
+  };
+  h.controller.setAudioFeedback(true);
+  await h.controller.start();
+  h.activity();
+  const remove = h.controller.subscribe(() => {
+    if (h.controller.getSnapshot().silenceSecondsRemaining === 5)
+      h.controller.cancel();
+  });
+  h.advance(150);
+  assert.equal(cues, 0);
+  assert.equal(h.timerCount, 0);
+  remove();
+  h.controller.dispose();
 });
 
 test('Cancel discards a silent recording and ignores detector and recorder callbacks', async () => {

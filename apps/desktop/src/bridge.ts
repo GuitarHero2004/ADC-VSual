@@ -1,4 +1,10 @@
-import type { UiLanguage } from '@adc/contracts';
+import type {
+  UiLanguage,
+  RecognitionLanguage,
+  TranscriptResponse,
+  DesktopResponse,
+} from '@adc/contracts';
+import type { DesktopSessionState } from './session-types.ts';
 
 export const DESKTOP_SHORTCUTS = [
   'Control+Alt+Space',
@@ -44,6 +50,52 @@ export interface DesktopBridge {
   quit(): Promise<void>;
   onState(listener: (state: DesktopState) => void): () => void;
   onActivate(listener: () => void): () => void;
+  getSession(): Promise<DesktopSessionState>;
+  signIn(email: string, password: string): Promise<DesktopSessionState>;
+  retrySession(): Promise<DesktopSessionState>;
+  signOut(): Promise<DesktopSessionState>;
+  onSession(listener: (state: DesktopSessionState) => void): () => void;
+  onSuspend(listener: () => void): () => void;
+  getActiveSource(): Promise<DesktopSource | null>;
+  prepareCapture(
+    sourceId: string,
+    requestId: string,
+  ): Promise<DesktopCaptureTicket>;
+  readScreen(input: DesktopScreenInput): Promise<DesktopResponse>;
+  transcribe(input: DesktopTranscribeInput): Promise<TranscriptResponse>;
+  speak(input: DesktopSpeakInput): Promise<ArrayBuffer>;
+  cancelOperation(requestId: string): Promise<void>;
+}
+
+export interface DesktopSource {
+  id: string;
+  title: string;
+}
+export interface DesktopCaptureTicket extends DesktopSource {
+  captureId: string;
+  requestId: string;
+  epoch: string;
+}
+export interface DesktopScreenInput {
+  captureId: string;
+  requestId: string;
+  question: string;
+  bytes: ArrayBuffer;
+  width: number;
+  height: number;
+  capturedAt: string;
+}
+export interface DesktopTranscribeInput {
+  requestId: string;
+  bytes: ArrayBuffer;
+  mimeType: string;
+  filename: string;
+  language: RecognitionLanguage;
+}
+export interface DesktopSpeakInput {
+  requestId: string;
+  text: string;
+  language: RecognitionLanguage;
 }
 
 declare global {

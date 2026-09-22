@@ -8,14 +8,13 @@ import {
   type DesktopState,
 } from '../bridge.ts';
 import logo from '../../../extension/src/assets/vsual-logo.png';
+import { DesktopAssistant } from './Assistant.tsx';
+import type { AssistantDependencies } from './assistant-controller.ts';
 
 const copy = {
   en: {
-    foundation: 'Desktop foundation',
-    introduction: 'A local home for VSual on Windows.',
-    limitation:
-      'Screen reading and voice are not connected in this desktop build.',
-    standalone: 'This desktop shell works on its own. No account is needed.',
+    foundation: 'Desktop assistant',
+    limitation: 'Ask about one selected window using a screenshot.',
     availability: 'On this device',
     shortcut: 'Show VSual',
     shortcutReady: 'Shortcut is ready.',
@@ -46,11 +45,8 @@ const copy = {
     retry: 'Try again',
   },
   vi: {
-    foundation: 'Nền tảng ứng dụng máy tính',
-    introduction: 'Không gian riêng của VSual trên Windows.',
-    limitation:
-      'Tính năng đọc màn hình và giọng nói chưa được kết nối trong bản ứng dụng máy tính này.',
-    standalone: 'Ứng dụng này hoạt động độc lập. Bạn không cần tài khoản.',
+    foundation: 'Trợ lý máy tính',
+    limitation: 'Hỏi về một cửa sổ đã chọn thông qua ảnh chụp màn hình.',
     availability: 'Trên thiết bị này',
     shortcut: 'Mở VSual',
     shortcutReady: 'Phím tắt đã sẵn sàng.',
@@ -100,8 +96,10 @@ function shortcutText(shortcut: DesktopShortcut) {
 
 export function App({
   bridge = window.vsualDesktop,
+  assistantDependencies,
 }: {
   bridge?: DesktopBridge;
+  assistantDependencies?: AssistantDependencies;
 }) {
   const [state, setState] = useState<DesktopState | null>(null);
   const [draft, setDraft] = useState<DesktopPreferences | null>(null);
@@ -279,33 +277,19 @@ export function App({
         </div>
       </header>
 
-      <section className="desktop-introduction" aria-label={text.foundation}>
-        <p className="desktop-lead">{text.introduction}</p>
-        <p className="desktop-limitation">{text.limitation}</p>
-        <p>{text.standalone}</p>
-      </section>
+      <p className="desktop-limitation">{text.limitation}</p>
 
-      {state && (
-        <section className="desktop-device" aria-labelledby="device-title">
-          <h2 id="device-title">{text.availability}</h2>
-          <dl>
-            <div>
-              <dt>{text.shortcut}</dt>
-              <dd>
-                <kbd>{shortcutText(state.preferences.shortcut)}</kbd>
-                <span>
-                  {state.shortcutRegistered
-                    ? text.shortcutReady
-                    : text.shortcutUnavailable}
-                </span>
-              </dd>
-            </div>
-          </dl>
-        </section>
-      )}
+      <DesktopAssistant
+        bridge={bridge}
+        language={draft?.language ?? state?.preferences.language ?? 'en'}
+        shortcut={state?.preferences.shortcut ?? 'Control+Alt+Space'}
+        {...(assistantDependencies
+          ? { dependencies: assistantDependencies }
+          : {})}
+      />
 
       <div className="desktop-actions">
-        <button className="primary" type="button" onClick={() => void hide()}>
+        <button type="button" onClick={() => void hide()}>
           {text.hide}
         </button>
         <button type="button" onClick={() => void quit()}>
@@ -334,6 +318,24 @@ export function App({
       {draft && (
         <details className="desktop-settings">
           <summary>{text.settings}</summary>
+          {state && (
+            <section className="desktop-device" aria-labelledby="device-title">
+              <h2 id="device-title">{text.availability}</h2>
+              <dl>
+                <div>
+                  <dt>{text.shortcut}</dt>
+                  <dd>
+                    <kbd>{shortcutText(state.preferences.shortcut)}</kbd>
+                    <span>
+                      {state.shortcutRegistered
+                        ? text.shortcutReady
+                        : text.shortcutUnavailable}
+                    </span>
+                  </dd>
+                </div>
+              </dl>
+            </section>
+          )}
           <p className="desktop-help">{text.settingsHelp}</p>
           <form onSubmit={(event) => void save(event)}>
             <label htmlFor="desktop-language">{text.language}</label>

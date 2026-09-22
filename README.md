@@ -15,37 +15,70 @@ browser actions, automatic arrival summaries and wake words remain outside this 
 
 The separate **`/voice` setup** remains a labelled speech test: its read-back repeats
 supplied text. In the companion, **Read answer** speaks the validated answer instead.
-Companion answer speech defaults ON for new preferences; recording cues and the
-standalone voice test remain optional. Text and evidence work with Speech OFF.
+Browser companion answer speech defaults ON for new preferences; recording cues and the
+standalone voice test remain optional. Browser text and evidence work with Speech OFF.
+The desktop prototype always reads new answers aloud, with immediate Stop and cached Repeat.
 
-## Windows desktop foundation
+## Windows desktop screen assistant
 
-`feat/desktop-foundation` starts from updated `dev` at `0f9f68e`, which includes
-the visual-reading merge and Vercel dependency fix `4f94002`.
+`feat/desktop-screen-assistant` builds on the desktop foundation merged into
+`dev` at `220be4f`. `apps/desktop` uses Electron and React, the existing Supabase
+account/workspace checks, Avis visual adapter, ElevenLabs endpoints and shared
+voice controller. The browser companion's reading methods remain unchanged.
 
-**Branch purpose:** add a Windows desktop shell for VSual with a global hotkey,
-tray controls, saved language/shortcut settings and an accessible interface.
-`apps/desktop` uses Electron and React, reusing the existing logo, shared UI styles
-and language types. The existing browser companion and backend remain available.
+The desktop journey is **sign in → use another app → press VSual's shortcut → type or record
+a question → Ask VSual → answer and screenshot evidence → Stop/Repeat**. It sends
+one current-view screenshot per question. It does not read DOM/accessibility trees,
+retrieve full documents, scroll windows, calculate arbitrary pictured tables,
+operate applications or listen for wake words. Opening the app, using its hotkey
+or detecting the active window does not capture pixels or call an AI provider.
 
-This is **stage 1**, not a desktop AI release. Desktop sign-in, microphone capture,
-screenshots, question answering, wake words and an installer are not connected in
-this build. The interface states that limitation instead of showing fake answers.
-Opening this local shell needs no account; it makes no network/provider requests.
-Existing Supabase login, workspace checks and billable endpoint protection are
-preserved. Desktop authentication will need its own secure session adapter when
-protected features are connected; browser cookies are not a desktop session.
+**Privacy:** desktop capture has no automatic masking of private fields. Choose a
+non-sensitive window for testing. VSual's own window cannot be selected as the source.
+The selected window's title and screenshot are sent through the existing
+authenticated backend to Avis; backend/provider retention remains as described
+under visual reading below. Local capture tracks stop immediately after one frame;
+recordings, answers and audio are transient, not written to Supabase.
 
-From the repository root with Node 24 and npm 11:
+With Node 24 and npm 11, install from the repository root:
 
 ```powershell
 npm ci --include=dev --include-workspace-root
+Copy-Item apps/desktop/.env.example apps/desktop/.env.local
+```
+
+Copy the example only if `.env.local` does not already exist. Edit it locally:
+
+| Desktop runtime setting          | Value                                                                        |
+| -------------------------------- | ---------------------------------------------------------------------------- |
+| `VSUAL_API_BASE_URL`             | `http://127.0.0.1:3000` locally; an exact HTTPS backend origin when deployed |
+| `VSUAL_SUPABASE_URL`             | Same public Supabase project URL as the web app                              |
+| `VSUAL_SUPABASE_PUBLISHABLE_KEY` | Same public publishable/anon key; never a service-role key                   |
+| `VSUAL_WORKSPACE_ID`             | Optional existing workspace UUID; omit to use the backend default            |
+
+Only `apps/desktop/.env.local` is loaded by the desktop main process. Changing it
+requires quitting/restarting the app. Keep database, Avis and ElevenLabs secrets
+in **`apps/web/.env.local`**, with the existing restricted database role/workspace,
+`AVIS_*` settings including a successfully verified `AVIS_VISUAL_VERIFIED_ROUTE`,
+and `ELEVENLABS_*` settings. Do not invent the verification hash or repeat a paid
+compatibility check when the configured route is already verified. No new tables,
+keys, CORS origins or migrations are required for desktop native bearer requests.
+A deployed backend must contain `/api/desktop-read`; the previous deployment does
+not gain this endpoint until this branch is deployed separately.
+
+Start these in two terminals at the repository root:
+
+```powershell
+npm run dev:web
+```
+
+```powershell
 npm run dev:desktop
 ```
 
-`dev:desktop` builds and opens the app; it does not run a hot-reload server. After
-editing, quit VSual and run it again. The first launch may download the pinned
-Electron runtime. Other commands:
+`dev:desktop` builds and opens Electron; it is not a hot-reload server. After code
+changes, quit and run it again. Installation downloads the pinned Electron runtime.
+Other checks and commands:
 
 ```powershell
 npm run build:desktop
@@ -53,47 +86,127 @@ npm run start:desktop
 npm run typecheck --workspace=@adc/desktop
 npm run test --workspace=@adc/desktop
 npm run test:smoke --workspace=@adc/desktop
+npm run test:capture --workspace=@adc/desktop
+npm run test:capture --workspace=@adc/desktop -- --interactive
+npm run check
 ```
 
-The app opens a light, enlarged-text window above ordinary application windows.
-Its default **Ctrl + Alt + Space** shortcut opens/focuses it from another app.
-**Settings** offers three bounded shortcut choices and English/Vietnamese. A
-conflicting shortcut produces a recoverable explanation and keeps an existing
-working shortcut. **Hide to tray**, the window close button and Escape hide the
-window; the tray icon or registered shortcut restores it. **Quit VSual** fully
-exits and releases its shortcut. Launching it twice reuses the existing instance.
-It does not start with Windows automatically and cannot activate while quit.
+The default **Ctrl + Alt + Space** opens/focuses VSual from another application;
+it selects that foreground window automatically, without capturing pixels or
+starting recording. The current source title is shown above the question. The
+desktop has no window dropdown. Windows detection uses a bounded, hidden PowerShell call to
+[GetForegroundWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getforegroundwindow)
+before VSual takes focus, matching its handle against Electron's native sources.
+The first launch uses the same lookup. First sign-in preserves this selected
+window's metadata; logout/account loss clears it and all sensitive work. Repeated
+activation shares one lookup, and only a native match with VSual itself retains
+the preceding target. Electron's cached focus state is not used to select a source.
+This can add a short activation delay. Missing/blocked detection clears the target
+and asks you to switch to the desired app and press the shortcut again; it never
+guesses from window order or title. Clicking an already-visible VSual window does
+not select the previously focused app; use the shortcut from that app. Tray
+activation can target the Windows shell instead, so use the shortcut from the
+desired app for automatic selection. Settings offers bounded shortcut choices and EN/VI.
+The tray provides a fallback for a conflicting shortcut. **Hide to tray**, close
+and Escape stop pending capture/requests, recording and playback, then hide VSual.
+They preserve the signed-in session and draft. Reactivation cancels unfinished work
+and clears the old answer while resolving the current target. Switching to another
+app without hiding VSual does not stop accepted-answer speech. **Quit VSual**
+clears the memory-only session and releases the shortcut. A second launch reuses
+the existing instance; there is no installer or automatic Windows startup yet.
+On Windows the displayed companion reapplies Electron's `pop-up-menu` topmost
+level after focus: the default `floating` level was demoted by taskbar ordering
+in native testing. This can place VSual above the taskbar; Hide/Escape remains
+available. It does not grant access to secure desktops or protected windows.
 
-Only language and shortcut are stored in Electron's VSual Desktop user-data
-directory (`preferences.json`). No tokens, captured content or credentials are
-stored by this foundation. No desktop environment file or provider key is needed.
-The UI uses a local `vsual://desktop` origin, a sandboxed isolated renderer and a
-small validated IPC bridge; remote content, navigation, microphone and display
-capture permissions are denied in this stage. Screen-reader use needs no ElevenLabs.
+Desktop email/password sign-in creates its own Supabase session. Website/extension
+cookies are not reused. Only the native main process owns tokens, refresh and
+authenticated HTTP; the isolated renderer receives account/access state through
+fixed validated IPC methods. Network uncertainty preserves credentials but blocks
+protected work until verification; logout clears local work immediately and uses
+session-local sign-out. Website/extension sessions remain separate. Google sign-in
+on the website is preserved but is not connected to this desktop prototype.
+Language/shortcut settings persist in `preferences.json`. Desktop answer speech is
+always enabled; old desktop speech-OFF records are no longer read. Browser speech
+preferences are unchanged. Tokens never enter browser
+sync, renderer storage or files. Restarting VSual requires signing in again.
 
-Desktop unit/UI tests use the existing Node test runner. The opt-in smoke check
-starts the real Electron runtime with a temporary profile; it is not part of
-headless Linux CI and makes no AI calls. Actual hotkey keypresses from another
-application, Windows tray interaction and NVDA remain manual acceptance checks.
+A short three-step guide appears on arrival, available to keyboard and screen-reader
+users. Desktop recording lasts up to **60 seconds** (browser recording stays at
+30 seconds). After speech, five seconds of silence submits once. Short local tones
+mark the countdown; speaking again resets it. A higher local tone marks submission.
+These cues use no provider credits. **Stop and review** cancels automatic submission;
+reaching the 60-second limit also transcribes for review. Cancel discards the recording.
+The 3 MiB audio limit remains enforced. Local tone echo is briefly excluded from
+activity detection; microphone/speaker behavior still requires a real device check.
 
-Local verification passed: `npm run check`, 20 desktop unit/UI tests, and the real
-Electron smoke check for renderer isolation, IPC, blocked network access, shortcut
-registration, close-to-tray lifecycle and 200% reflow. The smoke check deliberately
-rejects one invalid preferences request; its validation error is expected. These
-automated checks do not establish physical shortcut, tray or NVDA usability.
+Every new desktop answer automatically attempts speech once, with no speech toggle.
+Answers and evidence appear before audio generation and remain readable if it fails.
+Playback uses **0.9×**; **Stop answer audio** immediately cancels pending/playing audio,
+and **Play / Repeat answer** reuses the cached audio. Autoplay denial exposes Play;
+provider errors expose a deliberate retry, never a paid retry loop. Starting recording
+interrupts answer speech. VSual does not control NVDA or system speech. Cancellation
+is local and does not guarantee the provider stopped processing or refunded a request.
 
-Manual Windows check:
+The opt-in Windows runtime checks use temporary profiles and no AI credits.
+`test:capture` captures a synthetic window through the actual Electron capture/IPC
+path and checks the submitted image pixels; authentication and the answer provider
+are mocked. Its image is `apps/desktop/dist/capture-smoke.jpg`. `test:smoke` checks
+renderer isolation, blocked direct network access, IPC, close-to-tray and 200% reflow.
+These checks do not establish live login/model/voice success or NVDA usability.
+On Windows, `test:capture -- --interactive` waits for you to activate the synthetic
+fixture and press the shortcut printed in the terminal. It checks that the target
+survives first sign-in before capturing any pixels. The default check stops safely
+if Windows refuses its programmatic focus request; it never captures another app.
 
-1. Start VSual, use Tab/Shift+Tab to reach each control, and inspect the foundation
-   limitation with NVDA if available. No sign-in should be required.
-2. Switch to another application, press the displayed shortcut, and check that
-   VSual opens with visible focus on its heading. No microphone/capture starts.
-3. Save another shortcut and Vietnamese. Hide/reopen, then quit/restart: settings
-   should persist. If a shortcut is taken, use the tray to recover.
-4. Hide with Escape or close; restore from the tray. Start another instance and
-   confirm only one companion remains. Quit and confirm its shortcut is released.
-5. Use the View menu to zoom to 200% and narrow the window: controls must remain
-   reachable with scrolling and without horizontal clipping.
+Verification on 2026-09-22: workspace typechecks, lint and tests passed, including
+119 desktop tests. The real Windows interactive capture check passed with an
+automation-delivered Ctrl+Alt+Space through the registered OS shortcut: native target
+selection, preservation through first sign-in, actual submitted image pixels, answer
+and evidence rendering, and one automatic speech request. Authentication, answers
+and the recoverable speech failure were mocked; no provider credits were used.
+Some interactive runs timed out when input automation lost its window; the observed
+shortcut runs before the topmost adjustment passed. The final topmost adjustment
+passed `test:smoke`, including a visibly shown/topmost window, renderer isolation,
+IPC, close-to-tray and 200% reflow. The final capture rerun could not deliver its
+shortcut, so capture with that window-level adjustment still needs a manual repeat.
+Live login/model/voice,
+microphone, pronunciation and NVDA checks remain required. Quit any older VSual
+instance from its tray before starting an updated build.
+
+Desktop request failures now retain their safe error code across Electron's isolated
+bridge. **Request details** shows the attempt reference and last step (preparation,
+capture or answering); a reference before upload is not evidence of a backend call.
+Capture denial/unavailability is separate from answer-service errors. For a repeated
+failure, share only this code, reference and step, not screen content, tokens or keys.
+After rebuilding, use **Quit VSual** (closing only hides it), then launch again to load
+the updated preload. The error-transport fix is covered by the real Electron smoke
+check and the desktop unit/UI tests; it does not prove a live provider request works.
+
+Manual Windows journey (real login/model/microphone/NVDA checks remain required):
+
+1. Start both apps. Read the short guide and sign in with an existing email/password
+   account that already has workspace access. Confirm the displayed account. A
+   Google-only account needs its supported password-recovery setup first.
+2. Open a non-sensitive chart/image or test document, focus that app and press the
+   displayed VSual shortcut. Confirm its name appears automatically. There is no
+   dropdown. If detection is unavailable, switch back to the intended app and press
+   the shortcut again. Activation alone must not capture or submit anything.
+3. Type a question and choose Ask VSual. Check the source, answer, evidence and request
+   reference. The answer reads automatically. Check Stop during preparation/playback
+   and cached Repeat. Test EN/VI, including dates and amounts. Content outside the
+   captured view must not be represented as read.
+4. Record question, allow the microphone, speak and pause. Listen for local countdown
+   tones and confirm one submission after five seconds. Resume speaking during the
+   countdown to reset it. Stop and review must let you edit without auto-submission;
+   Cancel must discard pending work. At 60 seconds the recording ends for review.
+5. Cancel during capture/answer preparation; no late answer/audio may appear. Hide
+   and reopen; the account remains. Sign out during work; old account data clears.
+   Quit/restart; sign-in is required again.
+6. Repeat with keyboard/NVDA: use the displayed global shortcut, Tab/Shift+Tab,
+   Enter/Space and Escape. Use Stop when needed while exploring text and evidence.
+   Check visible focus, a narrow window and 200% zoom. NVDA and app speech may overlap;
+   VSual does not mute or pause your screen reader.
 
 ## Visual page reading
 

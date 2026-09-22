@@ -8,6 +8,10 @@ import { build } from 'vite';
 
 // Opt-in real Electron check, separate from mocked tests and headless CI.
 const directory = fileURLToPath(new URL('../dist', import.meta.url));
+const capture = process.argv.includes('--capture');
+const interactive = process.argv.includes('--interactive');
+if (interactive && !capture)
+  throw new Error('--interactive is supported only by the capture check.');
 await build({
   configFile: false,
   publicDir: false,
@@ -17,7 +21,12 @@ await build({
     emptyOutDir: false,
     minify: false,
     lib: {
-      entry: fileURLToPath(new URL('./smoke-main.ts', import.meta.url)),
+      entry: fileURLToPath(
+        new URL(
+          capture ? './capture-smoke-main.ts' : './smoke-main.ts',
+          import.meta.url,
+        ),
+      ),
       formats: ['cjs'],
       fileName: () => 'smoke.cjs',
     },
@@ -35,11 +44,15 @@ const environment: NodeJS.ProcessEnv = {
 };
 // The desktop runtime must run as Electron, regardless of the invoking shell.
 delete environment.ELECTRON_RUN_AS_NODE;
-const child = spawn(electron, [join(directory, 'smoke.cjs')], {
-  env: environment,
-  windowsHide: true,
-  stdio: 'inherit',
-});
+const child = spawn(
+  electron,
+  [join(directory, 'smoke.cjs'), ...(interactive ? ['--interactive'] : [])],
+  {
+    env: environment,
+    windowsHide: true,
+    stdio: 'inherit',
+  },
+);
 child.once('error', () => {
   process.exitCode = 1;
 });
