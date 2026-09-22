@@ -54,6 +54,8 @@ export interface VoiceControllerOptions {
   /** Defaults to 30 seconds; desktop recording may opt in to at most 60 seconds. */
   maxRecordingMs?: number;
   silenceCountdownCues?: boolean;
+  /** Desktop activation needs an audible indication that microphone capture is ready. */
+  recordingStartCue?: boolean;
 }
 
 export interface VoiceSnapshot {
@@ -213,6 +215,7 @@ export class VoiceController {
   private readonly silenceAutoFinish: boolean;
   private readonly silenceCountdownCues: boolean;
   private readonly maxRecordingMs: number;
+  private readonly recordingStartCue: boolean;
   private automaticQuestion: string | null = null;
   private automaticQuestionGeneration: number | null = null;
 
@@ -227,6 +230,7 @@ export class VoiceController {
     this.silenceAutoFinish = options.silenceAutoFinish ?? false;
     this.silenceCountdownCues = options.silenceCountdownCues ?? false;
     this.maxRecordingMs = options.maxRecordingMs ?? RECORDING_MAX_MS;
+    this.recordingStartCue = options.recordingStartCue ?? false;
     if (
       !Number.isInteger(this.maxRecordingMs) ||
       this.maxRecordingMs <= 0 ||
@@ -603,9 +607,22 @@ export class VoiceController {
         this.maxRecordingMs,
       );
       this.update({ phase: 'recording', notice: 'recording' });
-      void this.observeActivity(recording);
-      if (this.snapshot.audioFeedback && !this.silenceAutoFinish)
+      if (
+        !this.current(id) ||
+        this.recording !== recording ||
+        recording.finished
+      )
+        return;
+      if (
+        this.snapshot.audioFeedback &&
+        (this.recordingStartCue || !this.silenceAutoFinish)
+      ) {
+        recording.ignoreActivityUntil =
+          (this.dependencies.now?.() ?? performance.now()) +
+          COUNTDOWN_ECHO_GUARD_MS;
         this.cue('start');
+      }
+      void this.observeActivity(recording);
     } catch (error) {
       if (stream) stopTracks(stream);
       if (!this.current(id)) return;
