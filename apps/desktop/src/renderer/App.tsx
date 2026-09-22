@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
   DESKTOP_SHORTCUTS,
+  DESKTOP_STOP_SHORTCUT,
   type DesktopBridge,
   type DesktopPreferences,
   type DesktopShortcut,
@@ -10,14 +11,22 @@ import {
 import logo from '../../../extension/src/assets/vsual-logo.png';
 import { DesktopAssistant } from './Assistant.tsx';
 import type { AssistantDependencies } from './assistant-controller.ts';
+import type { DesktopSessionState } from '../session-types.ts';
+import { DesktopGuide } from './Guide.tsx';
+import {
+  DesktopGuideController,
+  guideSpeechText,
+  localGuideDependencies,
+  type GuideDependencies,
+} from './guide.ts';
 
 const copy = {
   en: {
     foundation: 'Desktop assistant',
+    guide: 'Instructions and hotkeys',
     limitation: 'Ask about one selected window using a screenshot.',
-    availability: 'On this device',
-    shortcut: 'Show VSual',
-    shortcutReady: 'Shortcut is ready.',
+    stopShortcutUnavailable:
+      'The Stop shortcut is unavailable. Use the Stop controls in VSual, or Escape to hide and stop.',
     shortcutUnavailable:
       'The requested shortcut is unavailable. Choose another shortcut and save, or open VSual from the system tray.',
     notStored:
@@ -32,7 +41,7 @@ const copy = {
     language: 'Language',
     shortcutLabel: 'Keyboard shortcut',
     shortcutHelp:
-      'The shortcut opens or focuses VSual while you use another app.',
+      'From another app, the shortcut opens VSual and starts listening when signed in and ready. While recording it stops for review; while processing it cancels; during answer playback it stops speech and starts listening.',
     save: 'Save settings',
     saving: 'Saving settings…',
     saved: 'Settings saved.',
@@ -46,10 +55,10 @@ const copy = {
   },
   vi: {
     foundation: 'Trợ lý máy tính',
+    guide: 'Hướng dẫn và phím tắt',
     limitation: 'Hỏi về một cửa sổ đã chọn thông qua ảnh chụp màn hình.',
-    availability: 'Trên thiết bị này',
-    shortcut: 'Mở VSual',
-    shortcutReady: 'Phím tắt đã sẵn sàng.',
+    stopShortcutUnavailable:
+      'Không dùng được phím tắt Dừng. Dùng các nút Dừng trong VSual hoặc Escape để ẩn và dừng.',
     shortcutUnavailable:
       'Không thể sử dụng phím tắt đã chọn. Hãy chọn phím tắt khác rồi lưu, hoặc mở VSual từ khay hệ thống.',
     notStored:
@@ -63,7 +72,7 @@ const copy = {
     language: 'Ngôn ngữ',
     shortcutLabel: 'Phím tắt bàn phím',
     shortcutHelp:
-      'Phím tắt mở hoặc đưa VSual lên trước khi bạn đang dùng ứng dụng khác.',
+      'Từ ứng dụng khác, phím tắt mở VSual và bắt đầu nghe khi đã đăng nhập và sẵn sàng. Khi đang ghi âm, phím tắt dừng để xem lại; khi đang xử lý, phím tắt hủy; khi đang đọc câu trả lời, phím tắt dừng phát và bắt đầu nghe.',
     save: 'Lưu cài đặt',
     saving: 'Đang lưu cài đặt…',
     saved: 'Đã lưu cài đặt.',
@@ -90,20 +99,45 @@ function samePreferences(
   );
 }
 
-function shortcutText(shortcut: DesktopShortcut) {
+function shortcutText(
+  shortcut: DesktopShortcut | typeof DESKTOP_STOP_SHORTCUT,
+) {
   return shortcut.replace('Control', 'Ctrl').replaceAll('+', ' + ');
 }
 
 export function App({
   bridge = window.vsualDesktop,
   assistantDependencies,
+  guideDependencies,
 }: {
   bridge?: DesktopBridge;
   assistantDependencies?: AssistantDependencies;
+  guideDependencies?: GuideDependencies;
 }) {
+  const [guide] = useState(
+    () =>
+      new DesktopGuideController(
+        bridge,
+        guideDependencies ?? localGuideDependencies(),
+      ),
+  );
+  const stopAssistant = useRef<(() => void) | null>(null);
+  const registerStopWork = useCallback((stop: (() => void) | null) => {
+    stopAssistant.current = stop;
+  }, []);
+  const stopGuide = useCallback(() => guide.beforeWork(), [guide]);
+  const [narrationReady, setNarrationReady] = useState(false);
+  const acceptSession = useCallback(
+    (session: DesktopSessionState | null) => {
+      guide.setSession(session);
+      setNarrationReady(!!session?.account && session.phase === 'signed_in');
+    },
+    [guide],
+  );
   const [state, setState] = useState<DesktopState | null>(null);
   const [draft, setDraft] = useState<DesktopPreferences | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const [opened, setOpened] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -146,6 +180,31 @@ export function App({
   }, [draft?.language, state?.preferences.language]);
 
   useEffect(() => {
+    const remove = bridge.onSuspend(() => {
+      setOpened(false);
+      guide.interrupt();
+    });
+    return () => {
+      remove();
+      guide.clear();
+    };
+  }, [bridge, guide]);
+
+  useEffect(() => {
+    if (!state || loading || loadFailed || !opened || !narrationReady) return;
+    void guide.automatic(
+      guideSpeechText(
+        state.preferences.language,
+        state.preferences.shortcut,
+        DESKTOP_STOP_SHORTCUT,
+        state.stopShortcutRegistered,
+        state.shortcutRegistered,
+      ),
+      state.preferences.language,
+    );
+  }, [guide, state, loading, loadFailed, opened, narrationReady]);
+
+  useEffect(() => {
     let active = true;
     let receivedEvent = false;
     setLoading(true);
@@ -158,8 +217,12 @@ export function App({
       setLoading(false);
       setLoadFailed(false);
     });
-    const removeActivationListener = bridge.onActivate(() => {
-      if (active) heading.current?.focus();
+    const removeActivationListener = bridge.onActivate((activation) => {
+      if (activation.kind === 'talk') guide.beforeWork();
+      if (active) {
+        setOpened(true);
+        if (activation.kind === 'open') heading.current?.focus();
+      }
     });
     void bridge.getState().then(
       (next) => {
@@ -178,15 +241,16 @@ export function App({
       removeStateListener();
       removeActivationListener();
     };
-  }, [acceptState, bridge, loadAttempt]);
+  }, [acceptState, bridge, guide, loadAttempt]);
 
   const hide = useCallback(async () => {
+    stopGuide();
     try {
       await bridge.hide();
     } catch {
       if (mounted.current) setMessage('hideFailed');
     }
-  }, [bridge]);
+  }, [bridge, stopGuide]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -234,6 +298,7 @@ export function App({
   }
 
   async function quit() {
+    stopGuide();
     try {
       await bridge.quit();
     } catch {
@@ -245,6 +310,9 @@ export function App({
     ? [
         ...(!state.shortcutRegistered || state.issue === 'shortcut_unavailable'
           ? [text.shortcutUnavailable]
+          : []),
+        ...(!state.stopShortcutRegistered
+          ? [text.stopShortcutUnavailable]
           : []),
         ...(!state.preferencesSaved || state.issue === 'preferences_not_saved'
           ? [text.notStored]
@@ -279,16 +347,49 @@ export function App({
 
       <p className="desktop-limitation">{text.limitation}</p>
 
+      {narrationReady && (
+        <a href="#desktop-welcome-title" className="desktop-guide-link">
+          {text.guide}
+        </a>
+      )}
+
       <DesktopAssistant
         bridge={bridge}
         language={draft?.language ?? state?.preferences.language ?? 'en'}
         shortcut={state?.preferences.shortcut ?? 'Control+Alt+Space'}
+        onBeforeWork={stopGuide}
+        registerStopWork={registerStopWork}
+        onSessionChange={acceptSession}
         {...(assistantDependencies
           ? { dependencies: assistantDependencies }
           : {})}
       />
 
-      <div className="desktop-actions">
+      {narrationReady && (
+        <DesktopGuide
+          controller={guide}
+          ready={!!state && narrationReady}
+          desktopState={state}
+          language={draft?.language ?? state?.preferences.language ?? 'en'}
+          onReplay={() => {
+            if (!state || !narrationReady) return;
+            stopAssistant.current?.();
+            const language = draft?.language ?? state.preferences.language;
+            void guide.replay(
+              guideSpeechText(
+                language,
+                state.preferences.shortcut,
+                DESKTOP_STOP_SHORTCUT,
+                state.stopShortcutRegistered,
+                state.shortcutRegistered,
+              ),
+              language,
+            );
+          }}
+        />
+      )}
+
+      <div className="desktop-actions desktop-window-actions">
         <button type="button" onClick={() => void hide()}>
           {text.hide}
         </button>
@@ -318,24 +419,6 @@ export function App({
       {draft && (
         <details className="desktop-settings">
           <summary>{text.settings}</summary>
-          {state && (
-            <section className="desktop-device" aria-labelledby="device-title">
-              <h2 id="device-title">{text.availability}</h2>
-              <dl>
-                <div>
-                  <dt>{text.shortcut}</dt>
-                  <dd>
-                    <kbd>{shortcutText(state.preferences.shortcut)}</kbd>
-                    <span>
-                      {state.shortcutRegistered
-                        ? text.shortcutReady
-                        : text.shortcutUnavailable}
-                    </span>
-                  </dd>
-                </div>
-              </dl>
-            </section>
-          )}
           <p className="desktop-help">{text.settingsHelp}</p>
           <form onSubmit={(event) => void save(event)}>
             <label htmlFor="desktop-language">{text.language}</label>
@@ -346,6 +429,7 @@ export function App({
               onChange={(event) => {
                 const language = event.currentTarget.value;
                 if (language !== 'en' && language !== 'vi') return;
+                stopGuide();
                 setDraft({ ...draft, language });
                 setMessage(null);
               }}
@@ -368,6 +452,7 @@ export function App({
                   (option) => option === event.currentTarget.value,
                 );
                 if (!shortcut) return;
+                stopGuide();
                 setDraft({ ...draft, shortcut });
                 setMessage(null);
               }}

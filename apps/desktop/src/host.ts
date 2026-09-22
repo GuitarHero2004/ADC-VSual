@@ -17,7 +17,11 @@ import {
   rendererAsset,
   trustedDesktopSender,
 } from './security.ts';
-import type { DesktopPreferences, DesktopState } from './bridge.ts';
+import type {
+  DesktopActivationEvent,
+  DesktopPreferences,
+  DesktopState,
+} from './bridge.ts';
 import { DesktopAuth, DesktopAuthError } from './auth.ts';
 import { readDesktopConfiguration } from './config.ts';
 import { DesktopAssistant, DesktopRequestError } from './assistant.ts';
@@ -37,6 +41,7 @@ export interface DesktopHostOptions {
 export async function createDesktopHost(options: DesktopHostOptions) {
   const rendererDirectory = join(options.directory, 'renderer');
   const preferencesFile = join(options.userData, 'preferences.json');
+  const guideSeenFile = join(options.userData, 'guide-seen.json');
   const desktopSession = session.fromPartition('vsual-desktop');
   desktopSession.setPermissionCheckHandler(() => false);
   desktopSession.setPermissionRequestHandler((_contents, _permission, reply) =>
@@ -111,7 +116,12 @@ export async function createDesktopHost(options: DesktopHostOptions) {
   desktopSession.on('will-download', (event) => event.preventDefault());
 
   let publishedAccount = false;
+  let pendingActivationEvent: DesktopActivationEvent | null = null;
+  let pendingShow = false;
+  let rendererReady = false;
   const stopWork = () => {
+    pendingActivationEvent = null;
+    pendingShow = false;
     assistant.suspend();
     if (!window.isDestroyed()) window.webContents.send('assistant:suspend');
   };
@@ -204,12 +214,11 @@ export async function createDesktopHost(options: DesktopHostOptions) {
 
   let disposed = false;
   let tray: Tray | null = null;
-  let pendingActivation = false;
   let ready = false;
   const show = () => {
     if (disposed || window.isDestroyed()) return;
     if (!ready) {
-      pendingActivation = true;
+      pendingShow = true;
       return;
     }
     if (window.isMinimized()) window.restore();
@@ -218,18 +227,43 @@ export async function createDesktopHost(options: DesktopHostOptions) {
     // Windows' default floating level is moved behind the taskbar on focus.
     // Keep this compact companion topmost even when the taskbar isn't topmost.
     window.setAlwaysOnTop(true, 'pop-up-menu');
-    window.webContents.send('desktop:activated');
   };
+  const announce = (event: DesktopActivationEvent) => {
+    if (disposed || window.isDestroyed()) return;
+    if (!rendererReady) {
+      pendingActivationEvent = event;
+      return;
+    }
+    window.webContents.send('desktop:activated', event);
+  };
+  let activated = false;
   const activation = new DesktopActivation({
     foreground: readForegroundWindow,
     ownSource: () => window.getMediaSourceId(),
-    stopWork,
+    stopWork: () => {
+      // Initial launch has no prior assistant work. Suspending its renderer here
+      // would also cancel the first-use welcome that just became ready.
+      if (activated) stopWork();
+    },
     show,
+    announce,
   });
-  const activate = () => {
+  const activate = (kind: DesktopActivationEvent['kind'] = 'open') => {
     if (disposed || window.isDestroyed()) return Promise.resolve();
-    return activation.activate();
+    const work = activation.activate(kind);
+    activated = true;
+    return work;
   };
+  // A lost/reloaded owner cannot leave paid operations or a queued Talk alive.
+  // Initial load still preserves deliberately queued cold-start activation.
+  window.webContents.on('render-process-gone', () => {
+    rendererReady = false;
+    suspend();
+  });
+  window.webContents.on('did-start-loading', () => {
+    rendererReady = false;
+    if (ready) suspend();
+  });
   const hide = () => {
     if (disposed || window.isDestroyed()) return;
     suspend();
@@ -274,8 +308,9 @@ export async function createDesktopHost(options: DesktopHostOptions) {
         await rename(temporary, preferencesFile);
       },
     },
-    () => void activate(),
+    () => void activate('talk'),
     publish,
+    suspend,
   );
   const state = await settings.initialize();
   // A real tray icon is required before enabling close-to-tray.
@@ -304,6 +339,44 @@ export async function createDesktopHost(options: DesktopHostOptions) {
     )
       throw new Error('Desktop request is not allowed');
   };
+  ipcMain.handle('desktop:activation-ready', (event, ...args: unknown[]) => {
+    checkSender(event);
+    if (args.length) throw new Error('Invalid desktop request');
+    rendererReady = true;
+    const pending = pendingActivationEvent;
+    pendingActivationEvent = null;
+    if (pending) announce(pending);
+  });
+  ipcMain.handle('desktop:stop', (event, ...args: unknown[]) => {
+    checkSender(event);
+    if (args.length) throw new Error('Invalid desktop request');
+    suspend();
+  });
+  ipcMain.handle('desktop:guide-version', async (event, ...args: unknown[]) => {
+    checkSender(event);
+    if (args.length) throw new Error('Invalid desktop request');
+    try {
+      if ((await stat(guideSeenFile)).size > 128) return 0;
+      const value: unknown = JSON.parse(await readFile(guideSeenFile, 'utf8'));
+      return value &&
+        typeof value === 'object' &&
+        'version' in value &&
+        value.version === 1
+        ? 1
+        : 0;
+    } catch {
+      return 0;
+    }
+  });
+  ipcMain.handle('desktop:guide-seen', async (event, ...args: unknown[]) => {
+    checkSender(event);
+    if (args.length !== 1 || args[0] !== 1)
+      throw new Error('Invalid desktop request');
+    await mkdir(options.userData, { recursive: true });
+    await writeFile(guideSeenFile, JSON.stringify({ version: 1 }), {
+      mode: 0o600,
+    });
+  });
   ipcMain.handle('desktop:state', (event, ...args: unknown[]) => {
     checkSender(event);
     if (args.length) throw new Error('Invalid desktop request');
@@ -371,6 +444,8 @@ export async function createDesktopHost(options: DesktopHostOptions) {
   });
   handle('active-source', 0, async () => {
     const revision = activation.revision;
+    await activation.ready();
+    if (revision !== activation.revision) return null;
     const source = await nativeAssistant.sourceForNative(activation.nativeId);
     return revision === activation.revision ? source : null;
   });
@@ -394,7 +469,10 @@ export async function createDesktopHost(options: DesktopHostOptions) {
 
   await window.loadURL(DESKTOP_URL);
   ready = true;
-  if (pendingActivation) show();
+  if (pendingShow) {
+    pendingShow = false;
+    show();
+  }
   return {
     window,
     settings,
@@ -410,7 +488,16 @@ export async function createDesktopHost(options: DesktopHostOptions) {
       nativeAssistant.dispose();
       auth.dispose();
       tray?.destroy();
-      for (const action of ['state', 'preferences', 'hide', 'quit'])
+      for (const action of [
+        'state',
+        'preferences',
+        'hide',
+        'quit',
+        'activation-ready',
+        'stop',
+        'guide-version',
+        'guide-seen',
+      ])
         ipcMain.removeHandler(`desktop:${action}`);
       for (const channel of assistantChannels) ipcMain.removeHandler(channel);
       desktopSession.protocol.unhandle('vsual');

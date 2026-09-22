@@ -1,5 +1,9 @@
 import type { DesktopResponse } from '@adc/contracts';
-import type { DesktopBridge, DesktopScreenInput } from '../bridge.ts';
+import type {
+  DesktopActivationEvent,
+  DesktopBridge,
+  DesktopScreenInput,
+} from '../bridge.ts';
 import type { DesktopSessionState } from '../session-types.ts';
 import type {
   Playback,
@@ -67,7 +71,9 @@ export function assistantHarness() {
   };
   const sessionListeners = new Set<(state: DesktopSessionState) => void>();
   const suspendListeners = new Set<() => void>();
-  const activationListeners = new Set<() => void>();
+  const activationListeners = new Set<
+    (event: DesktopActivationEvent) => void
+  >();
   const playbacks: (Playback & {
     plays: number;
     pauses: number;
@@ -180,12 +186,14 @@ export function assistantHarness() {
     getState: async () => ({
       preferences: { language: 'en', shortcut: 'Control+Alt+Space' },
       shortcutRegistered: true,
+      stopShortcutRegistered: true,
       preferencesSaved: true,
       issue: null,
     }),
     updatePreferences: async (preferences) => ({
       preferences,
       shortcutRegistered: true,
+      stopShortcutRegistered: true,
       preferencesSaved: true,
       issue: null,
     }),
@@ -193,6 +201,12 @@ export function assistantHarness() {
       suspendListeners.forEach((listener) => listener());
     },
     quit: async () => {},
+    activationReady: async () => {},
+    stopWork: async () => {
+      suspendListeners.forEach((listener) => listener());
+    },
+    getGuideSeenVersion: async () => 1,
+    markGuideSeenVersion: async () => {},
     onState: () => () => {},
     onActivate: (listener) => {
       activationListeners.add(listener);

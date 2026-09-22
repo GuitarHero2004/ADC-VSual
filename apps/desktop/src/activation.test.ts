@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import type { DesktopActivationEvent } from './bridge.ts';
 import { DesktopActivation } from './activation.ts';
 
 function deferred<T>() {
@@ -10,17 +11,21 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function fixture() {
+function fixture(ownSource = 'window:99:1') {
   let foreground: () => Promise<string | null> = async () => 'window:42:0';
   const calls: string[] = [];
+  const events: DesktopActivationEvent[] = [];
   const activation = new DesktopActivation({
     foreground: () => {
       calls.push('lookup');
       return foreground();
     },
-    ownSource: () => 'window:99:1',
+    ownSource: () => ownSource,
     stopWork: () => {
       calls.push('stop');
+    },
+    announce: (event) => {
+      events.push(event);
     },
     show: () => {
       calls.push('show');
@@ -29,6 +34,7 @@ function fixture() {
   return {
     activation,
     calls,
+    events,
     foreground: (read: typeof foreground) => {
       foreground = read;
     },
@@ -133,4 +139,75 @@ test('an older lookup cannot replace a newer activation after cancellation', asy
   await previous;
   assert.equal(f.activation.nativeId, 'window:55:0');
   assert.equal(f.calls.filter((value) => value === 'show').length, 1);
+});
+
+test('Talk is delivered before native lookup without cancelling the current recording', async () => {
+  const f = fixture();
+  const target = deferred<string | null>();
+  f.foreground(() => target.promise);
+  const work = f.activation.activate('talk');
+  assert.equal(f.events.length, 1);
+  assert.equal(f.events[0]?.kind, 'talk');
+  assert.equal(f.calls.includes('stop'), false);
+  let ready = false;
+  void f.activation.ready().then(() => {
+    ready = true;
+  });
+  await Promise.resolve();
+  assert.equal(ready, false);
+  assert.equal(f.calls.includes('show'), false);
+  assert.equal(f.activation.activate('talk'), work);
+  assert.equal(
+    f.events.length,
+    1,
+    'Repeated shortcut is not delivered twice during lookup',
+  );
+  target.resolve('window:42:0');
+  await work;
+  assert.equal(ready, true);
+  assert.equal(f.activation.nativeId, 'window:42:0');
+  assert.equal(f.events.length, 1);
+  assert.equal(f.calls.includes('show'), true);
+});
+
+test('Talk upgrades a passive cold activation without a second later open event', async () => {
+  const f = fixture();
+  const target = deferred<string | null>();
+  f.foreground(() => target.promise);
+  const opening = f.activation.activate();
+  const talking = f.activation.activate('talk');
+  assert.equal(opening, talking);
+  assert.equal(f.events.length, 1);
+  assert.equal(f.events[0]?.kind, 'talk');
+  target.resolve('window:42:0');
+  await talking;
+  assert.equal(f.events.length, 1);
+});
+
+test('Stop invalidates late Talk lookup and a new intent has its own ID', async () => {
+  const f = fixture();
+  const target = deferred<string | null>();
+  f.foreground(() => target.promise);
+  const work = f.activation.activate('talk');
+  await Promise.resolve();
+  const oldId = f.events[0]?.id;
+  f.activation.invalidate();
+  target.resolve('window:42:0');
+  await work;
+  assert.equal(f.calls.includes('show'), false);
+  f.foreground(async () => 'window:55:0');
+  await f.activation.activate('talk');
+  assert.notEqual(f.events[1]?.id, oldId);
+  assert.equal(f.activation.nativeId, 'window:55:0');
+});
+
+test('Electron own-window suffixes above one preserve the previously selected native target', async () => {
+  for (const suffix of [2, 17]) {
+    const f = fixture(`window:99:${suffix}`);
+    await f.activation.activate();
+    f.foreground(async () => 'window:99:0');
+    await f.activation.activate('talk');
+    assert.equal(f.activation.nativeId, 'window:42:0');
+    assert.equal(f.events.at(-1)?.kind, 'talk');
+  }
 });

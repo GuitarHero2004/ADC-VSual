@@ -4,13 +4,6 @@ import { errorText } from '../../../../packages/voice-ui/src/strings.ts';
 
 const en = {
   title: 'Ask about a window',
-  guideTitle: 'Getting started',
-  guideActivate:
-    'After signing in, open the app you want to read, then press {shortcut}.',
-  guideAsk:
-    'Record a question: pause 5 seconds to send, or choose Stop and review. You can also type and choose Ask VSual.',
-  guideListen:
-    'Listen to the answer. Use Stop answer audio or Play / Repeat answer as needed.',
   introduction: 'Ask about the window you were using before opening VSual.',
   privacy:
     'Ask VSual sends one screenshot of the selected window’s current view and your question for AI analysis. Private information is not automatically masked. Review the window before asking.',
@@ -33,7 +26,9 @@ const en = {
     'Signed out on this device. The server could not confirm sign-out.',
   sources: 'Window to read',
   activeHelp:
-    'Switch to the app you want to read, then press {shortcut} to open VSual.',
+    'Switch to the app you want to read, then press {shortcut} to start listening. While recording, the same shortcut stops for review. While processing, it cancels.',
+  activationRequiresAccess:
+    'Sign in and check workspace access first. Then return to the app you want to read and press the shortcut again. Recording has not started.',
   sourceReady: 'Ready for your question.',
   noActiveSource:
     'No window is selected. Switch to the app you want to read, then press the VSual shortcut again.',
@@ -93,13 +88,6 @@ const en = {
 
 const vi: typeof en = {
   title: 'Hỏi về một cửa sổ',
-  guideTitle: 'Hướng dẫn bắt đầu',
-  guideActivate:
-    'Sau khi đăng nhập, mở ứng dụng bạn muốn đọc, rồi nhấn {shortcut}.',
-  guideAsk:
-    'Ghi âm câu hỏi: im lặng 5 giây để gửi, hoặc chọn Dừng và xem lại. Bạn cũng có thể nhập rồi chọn Hỏi VSual.',
-  guideListen:
-    'Nghe câu trả lời. Dùng Dừng âm thanh trả lời hoặc Phát / Lặp lại câu trả lời khi cần.',
   introduction: 'Hỏi về cửa sổ bạn đang dùng trước khi mở VSual.',
   privacy:
     'Hỏi VSual gửi một ảnh chụp phần đang hiển thị của cửa sổ đã chọn cùng câu hỏi để AI phân tích. Thông tin riêng tư không được tự động che. Hãy kiểm tra cửa sổ trước khi hỏi.',
@@ -123,7 +111,9 @@ const vi: typeof en = {
     'Đã đăng xuất trên thiết bị này. Máy chủ chưa xác nhận đăng xuất.',
   sources: 'Cửa sổ cần đọc',
   activeHelp:
-    'Chuyển đến ứng dụng bạn muốn đọc, rồi nhấn {shortcut} để mở VSual.',
+    'Chuyển đến ứng dụng bạn muốn đọc, rồi nhấn {shortcut} để bắt đầu nghe. Khi đang ghi âm, nhấn lại để dừng và xem lại. Khi đang xử lý, nhấn để hủy.',
+  activationRequiresAccess:
+    'Hãy đăng nhập và kiểm tra quyền truy cập trước. Sau đó quay lại ứng dụng cần đọc và nhấn lại phím tắt. Chưa bắt đầu ghi âm.',
   sourceReady: 'Sẵn sàng nhận câu hỏi.',
   noActiveSource:
     'Chưa chọn cửa sổ. Chuyển đến ứng dụng bạn muốn đọc, rồi nhấn lại phím tắt VSual.',

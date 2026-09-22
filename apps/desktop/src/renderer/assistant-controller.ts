@@ -11,7 +11,11 @@ import {
   type VoiceDependencies,
   type VoiceTransport,
 } from '../../../../packages/voice-ui/src/controller.ts';
-import type { DesktopBridge, DesktopSource } from '../bridge.ts';
+import type {
+  DesktopActivationEvent,
+  DesktopBridge,
+  DesktopSource,
+} from '../bridge.ts';
 
 export const DESKTOP_RECORDING_MAX_MS = 60_000;
 export interface CapturedWindowFrame {
@@ -129,15 +133,19 @@ export class DesktopAssistantController {
   private readonly bridge: DesktopBridge;
   private readonly epoch: string;
   private readonly dependencies: AssistantDependencies;
+  private readonly beforeWork: () => void;
+  private readonly activationIds = new Set<string>();
 
   constructor(
     bridge: DesktopBridge,
     epoch: string,
     dependencies: AssistantDependencies,
+    beforeWork: () => void = () => {},
   ) {
     this.bridge = bridge;
     this.epoch = epoch;
     this.dependencies = dependencies;
+    this.beforeWork = beforeWork;
     this.state = {
       phase: 'idle',
       sources: [],
@@ -153,6 +161,7 @@ export class DesktopAssistantController {
       silenceAutoFinish: true,
       maxRecordingMs: DESKTOP_RECORDING_MAX_MS,
       silenceCountdownCues: true,
+      recordingStartCue: true,
     });
     this.speech = new VoiceController(transport, dependencies.voice, {
       fixedPlaybackRate: COMPANION_PLAYBACK_RATE,
@@ -206,6 +215,43 @@ export class DesktopAssistantController {
     }
   };
 
+  /** One trusted shortcut intent, never inferred from focus, login or rerenders. */
+  activate = async (event: DesktopActivationEvent) => {
+    if (this.disposed || this.activationIds.has(event.id)) return;
+    this.activationIds.add(event.id);
+    // A bounded session-only replay guard. The preload also rejects duplicate IDs.
+    if (this.activationIds.size > 64)
+      this.activationIds.delete(this.activationIds.values().next().value!);
+    if (event.kind === 'open') {
+      await this.useActiveSource();
+      return;
+    }
+    this.beforeWork();
+    const phase = this.question.getSnapshot().phase;
+    if (phase === 'recording') {
+      // Synchronous: disarm the silence timer before waiting on native metadata.
+      this.question.finish();
+      return;
+    }
+    if (
+      this.pending ||
+      this.state.loadingSources ||
+      phase === 'requesting_permission' ||
+      phase === 'transcribing' ||
+      this.speech.getSnapshot().phase === 'generating'
+    ) {
+      this.cancel();
+      return;
+    }
+    // Playback stops before source lookup or a microphone permission request.
+    this.speech.stopPlayback();
+    const selecting = this.useActiveSource();
+    const generation = this.generation;
+    await selecting;
+    if (this.disposed || generation !== this.generation) return;
+    await this.startRecording();
+  };
+
   editQuestion = (text: string) => {
     if (this.disposed) return;
     if (this.pending) this.cancel();
@@ -214,6 +260,7 @@ export class DesktopAssistantController {
 
   startRecording = async () => {
     if (this.disposed || this.pending) return;
+    this.beforeWork();
     if (!this.state.sourceId) {
       this.update({ errorCode: 'source_required', phase: 'error' });
       return;
@@ -225,6 +272,7 @@ export class DesktopAssistantController {
 
   ask = async (supplied = this.question.getSnapshot().text) => {
     if (this.disposed || this.pending) return;
+    this.beforeWork();
     const question = supplied.trim();
     if (
       !question ||

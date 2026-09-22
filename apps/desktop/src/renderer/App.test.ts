@@ -7,23 +7,53 @@ import { act, createElement, StrictMode } from 'react';
 import { JSDOM } from 'jsdom';
 import ts from 'typescript';
 import type {
+  DesktopActivationEvent,
   DesktopBridge,
   DesktopPreferences,
   DesktopState,
 } from '../bridge.ts';
 import type { AssistantDependencies } from './assistant-controller.ts';
+import type { GuideDependencies } from './guide.ts';
 import { assistantHarness, deferred, session, settle } from './test-helpers.ts';
 
 const initialState: DesktopState = {
   preferences: { language: 'en', shortcut: 'Control+Alt+Space' },
   shortcutRegistered: true,
+  stopShortcutRegistered: true,
   preferencesSaved: true,
   issue: null,
 };
 
+function guideHarness() {
+  const calls = { spoken: 0, active: false, texts: [] as string[] };
+  const dependencies: GuideDependencies = {
+    getVoices: () =>
+      [
+        { lang: 'en-US', localService: true, default: true },
+        { lang: 'vi-VN', localService: true, default: false },
+      ] as SpeechSynthesisVoice[],
+    createUtterance: (text) => ({ text }) as SpeechSynthesisUtterance,
+    speak: (utterance) => {
+      calls.spoken++;
+      calls.active = true;
+      calls.texts.push(utterance.text);
+    },
+    cancel: () => {
+      calls.active = false;
+    },
+    onVoicesChanged: () => () => {},
+    schedule: (callback, delay) => {
+      const timer = setTimeout(callback, delay);
+      return () => clearTimeout(timer);
+    },
+  };
+  return { calls, dependencies };
+}
+
 async function renderDesktop(
   overrides: Partial<DesktopBridge> = {},
   dependencies?: AssistantDependencies,
+  guideDependencies?: GuideDependencies,
 ) {
   const hook = registerHooks({
     load(url, context, next) {
@@ -70,7 +100,9 @@ async function renderDesktop(
     expose(key, dom.window[key]);
   expose('IS_REACT_ACT_ENVIRONMENT', true);
   const stateListeners = new Set<(state: DesktopState) => void>();
-  const activationListeners = new Set<() => void>();
+  const activationListeners = new Set<
+    (event: DesktopActivationEvent) => void
+  >();
   const calls = { hide: 0, quit: 0, saves: [] as DesktopPreferences[] };
   const fixture = assistantHarness();
   const bridge: DesktopBridge = {
@@ -116,6 +148,7 @@ async function renderDesktop(
         createElement(App, {
           bridge,
           assistantDependencies: dependencies ?? fixture.dependencies,
+          guideDependencies: guideDependencies ?? guideHarness().dependencies,
         }),
       ),
     );
@@ -185,11 +218,9 @@ test('desktop labels real controls, saves language explicitly, reports failures 
     );
     assert.ok(page.button('Sign in'));
     assert.ok(page.button('Hide to tray'));
-    const guide = document.querySelector('.desktop-quickstart');
-    assert.equal(guide?.querySelectorAll('ol > li').length, 3);
-    assert.match(guide?.textContent ?? '', /Ctrl \+ Alt \+ Space/);
+    const guide = document.querySelector('.desktop-guide');
+    assert.equal(guide, null, 'Instructions belong to the signed-in screen');
     assert.match(page.text(), /Ctrl \+ Alt \+ Space/);
-    assert.match(page.text(), /Shortcut is ready/);
     assert.equal(document.activeElement?.id, 'desktop-title');
     assert.equal(document.querySelector('textarea, audio, video'), null);
     assert.equal(document.querySelectorAll('.desktop-status').length, 1);
@@ -198,9 +229,10 @@ test('desktop labels real controls, saves language explicitly, reports failures 
       1,
       'StrictMode must clean up its first subscription',
     );
-    assert.equal(page.activationListeners.size, 1);
+    assert.equal(page.activationListeners.size, 2);
 
-    const settings = document.querySelector('details');
+    const settings =
+      document.querySelector<HTMLDetailsElement>('.desktop-settings');
     assert.ok(settings);
     assert.equal(settings.querySelector('summary')?.textContent, 'Settings');
     settings.open = true;
@@ -214,7 +246,6 @@ test('desktop labels real controls, saves language explicitly, reports failures 
     await page.choose('desktop-language', 'vi');
     await page.choose('desktop-shortcut', 'Control+Alt+V');
     assert.equal(document.documentElement.lang, 'vi');
-    assert.match(guide?.textContent ?? '', /Hướng dẫn bắt đầu/);
     assert.equal(
       page.calls.saves.length,
       0,
@@ -235,6 +266,7 @@ test('desktop labels real controls, saves language explicitly, reports failures 
         listener({
           preferences: { language: 'vi', shortcut: 'Control+Alt+V' },
           shortcutRegistered: false,
+          stopShortcutRegistered: true,
           preferencesSaved: false,
           issue: 'shortcut_unavailable',
         });
@@ -261,7 +293,8 @@ test('desktop labels real controls, saves language explicitly, reports failures 
     );
 
     await act(async () => {
-      for (const listener of page.activationListeners) listener();
+      for (const listener of page.activationListeners)
+        listener({ id: crypto.randomUUID(), kind: 'open' });
     });
     assert.equal(document.activeElement?.id, 'desktop-title');
     await act(async () => page.button('Ẩn xuống khay hệ thống').click());
@@ -346,7 +379,7 @@ test('desktop loading failure offers recovery and action failures stay visible',
 
 test('a rejected replacement keeps the working shortcut and the unsaved choice without announcing success', async () => {
   const submitted: DesktopPreferences[] = [];
-  const page = await renderDesktop();
+  const page = await renderDesktop({ getSession: async () => session });
   page.bridge.updatePreferences = async (preferences) => {
     submitted.push(preferences);
     const next: DesktopState =
@@ -372,7 +405,10 @@ test('a rejected replacement keeps the working shortcut and the unsaved choice w
       'Ctrl + Alt + Space',
       'The current shortcut remains the registered working shortcut',
     );
-    assert.match(page.text(), /Shortcut is ready/);
+    const talkRow = page.dom.window.document.querySelector(
+      '.desktop-hotkeys dl > div',
+    );
+    assert.match(talkRow?.textContent ?? '', /Ctrl \+ Alt \+ SpaceAvailable/);
     assert.match(page.status(), /requested shortcut is unavailable/);
     assert.match(page.status(), /changes to save/);
     assert.doesNotMatch(page.status(), /Settings saved/);
@@ -429,12 +465,12 @@ test('signed-in desktop captures explicitly, exposes evidence, keeps audio acros
     assert.match(page.text(), /does not read the window’s DOM/);
     assert.equal(h.calls.captures, 0);
     assert.equal(h.sessionListeners.size, 1);
-    assert.equal(h.suspendListeners.size, 1);
+    assert.equal(h.suspendListeners.size, 2);
     assert.match(
       document.querySelector('.desktop-current-source')?.textContent ?? '',
       /Quarterly report/,
     );
-    assert.match(page.text(), /press Ctrl \+ Alt \+ Space to open VSual/);
+    assert.match(page.text(), /press Ctrl \+ Alt \+ Space to start listening/);
     assert.equal(document.querySelector('#desktop-source'), null);
     assert.equal(document.querySelector('.desktop-source-fallback'), null);
     assert.equal(document.querySelector('input[type="checkbox"]'), null);
@@ -445,7 +481,10 @@ test('signed-in desktop captures explicitly, exposes evidence, keeps audio acros
     assert.equal(h.calls.captures, 0);
     assert.ok(document.querySelector('label[for="desktop-question"]'));
     await act(async () => page.button('Record question').click());
-    await act(async () => h.activity());
+    await act(async () => {
+      h.advance(300);
+      h.activity();
+    });
     const countdown = document.querySelector('.desktop-countdown');
     assert.match(countdown?.textContent ?? '', /5 seconds/);
     assert.equal(countdown?.getAttribute('aria-live'), 'off');
@@ -512,11 +551,11 @@ test('signed-in desktop captures explicitly, exposes evidence, keeps audio acros
     assert.equal(document.querySelector('textarea'), null);
     assert.equal(document.querySelector('.answer-text'), null);
     assert.ok(page.button('Sign in'));
-    assert.equal(h.suspendListeners.size, 0);
+    assert.equal(h.suspendListeners.size, 2);
     assert.equal(
       h.activationListeners.size,
-      1,
-      'Sign-out removes the source activation listener while preserving shell focus',
+      2,
+      'Signed-out activation remains available for sign-in guidance without a recording controller',
     );
     assert.equal(h.playbacks[0]!.releases, 1);
     await page.unmount();
@@ -540,7 +579,8 @@ test('activation without a foreground source requires returning to the app and u
     // The injected bridge is the object captured by the component.
     page.bridge.getActiveSource = h.bridge.getActiveSource;
     await act(async () => {
-      for (const listener of h.activationListeners) listener();
+      for (const listener of h.activationListeners)
+        listener({ id: crypto.randomUUID(), kind: 'open' });
       await settle();
     });
     assert.match(page.text(), /No window is selected/);
@@ -658,5 +698,312 @@ test('screen failures show safe request details and never describe the model fai
     } finally {
       await page.dispose();
     }
+  }
+});
+
+test('cold Talk waits for authenticated controller readiness and duplicate intent records once', async () => {
+  const h = assistantHarness();
+  const pendingSession = deferred<typeof session>();
+  const intent: DesktopActivationEvent = {
+    id: crypto.randomUUID(),
+    kind: 'talk',
+  };
+  let readyCalls = 0;
+  h.bridge.getSession = () => pendingSession.promise;
+  h.bridge.activationReady = async () => {
+    readyCalls++;
+    for (const listener of h.activationListeners) listener(intent);
+  };
+  const page = await renderDesktop(h.bridge, h.dependencies);
+  try {
+    assert.equal(readyCalls, 0);
+    assert.equal(h.recorders.length, 0);
+    await act(async () => {
+      pendingSession.resolve(session);
+      await settle();
+    });
+    assert.ok(readyCalls > 0);
+    assert.equal(h.recorders.length, 1);
+    assert.ok(page.button('Stop and review'));
+    assert.equal(
+      page.dom.window.document.activeElement?.id,
+      'desktop-question',
+    );
+    await act(async () => {
+      for (const listener of h.activationListeners) listener(intent);
+    });
+    assert.equal(h.recorders.length, 1);
+    assert.equal(h.calls.captures, 0);
+  } finally {
+    await page.dispose();
+  }
+});
+
+test('signed-out Talk guides sign-in but successful authentication requires a fresh activation', async () => {
+  const h = assistantHarness();
+  h.bridge.getSession = async () => ({
+    ...session,
+    phase: 'signed_out',
+    account: null,
+    workspace: 'unknown',
+  });
+  const page = await renderDesktop(h.bridge, h.dependencies);
+  try {
+    await act(async () => {
+      const intent: DesktopActivationEvent = {
+        id: crypto.randomUUID(),
+        kind: 'talk',
+      };
+      for (const listener of h.activationListeners) listener(intent);
+    });
+    assert.match(page.text(), /Recording has not started/);
+    assert.equal(
+      page.dom.window.document.activeElement?.id,
+      'desktop-signin-title',
+    );
+    await act(async () => {
+      for (const listener of h.sessionListeners) listener(session);
+    });
+    assert.equal(h.recorders.length, 0);
+    assert.equal(h.calls.captures, 0);
+    await act(async () => {
+      const intent: DesktopActivationEvent = {
+        id: crypto.randomUUID(),
+        kind: 'talk',
+      };
+      for (const listener of h.activationListeners) listener(intent);
+      await settle();
+    });
+    assert.equal(h.recorders.length, 1);
+  } finally {
+    await page.dispose();
+  }
+});
+
+test('cancelled Talk does not move focus or record when microphone permission later resolves', async () => {
+  const h = assistantHarness();
+  const permission =
+    deferred<Awaited<ReturnType<typeof h.dependencies.voice.getMicrophone>>>();
+  h.dependencies.voice.getMicrophone = () => permission.promise;
+  const page = await renderDesktop(h.bridge, h.dependencies);
+  try {
+    await act(async () => {
+      const intent: DesktopActivationEvent = {
+        id: crypto.randomUUID(),
+        kind: 'talk',
+      };
+      for (const listener of h.activationListeners) listener(intent);
+      await settle();
+    });
+    await act(async () => page.button('Cancel operation').click());
+    const focus = page.button('Hide to tray');
+    focus.focus();
+    let stops = 0;
+    await act(async () => {
+      permission.resolve({
+        getTracks: () => [
+          {
+            stop: () => {
+              stops++;
+            },
+          },
+        ],
+      });
+      await settle();
+    });
+    assert.equal(stops, 1);
+    assert.equal(h.recorders.length, 0);
+    assert.equal(page.dom.window.document.activeElement, focus);
+    assert.equal(h.calls.reads.length, 0);
+  } finally {
+    await page.dispose();
+  }
+});
+
+test('Stop, account loss and logout cancel shortcut recording and never rearm on recovery', async () => {
+  const h = assistantHarness();
+  const page = await renderDesktop(h.bridge, h.dependencies);
+  const activate = () => {
+    const intent: DesktopActivationEvent = {
+      id: crypto.randomUUID(),
+      kind: 'talk',
+    };
+    for (const listener of h.activationListeners) listener(intent);
+  };
+  try {
+    await act(async () => {
+      activate();
+      await settle();
+    });
+    await act(async () => h.bridge.stopWork());
+    assert.equal(h.recorders[0]?.state, 'inactive');
+    await act(async () => {
+      activate();
+      await settle();
+    });
+    await act(async () => {
+      for (const listener of h.sessionListeners)
+        listener({ ...session, phase: 'unavailable' });
+    });
+    assert.equal(h.recorders[1]?.state, 'inactive');
+    await act(async () => {
+      for (const listener of h.sessionListeners) listener(session);
+    });
+    assert.equal(h.recorders.length, 2);
+    await act(async () => {
+      activate();
+      await settle();
+    });
+    await act(async () => page.button('Sign out').click());
+    assert.equal(h.recorders[2]?.state, 'inactive');
+    assert.equal(h.calls.transcriptions, 0);
+    assert.equal(h.calls.captures, 0);
+  } finally {
+    await page.dispose();
+  }
+});
+
+test('local Windows welcome speaks after login and stops before recording without provider calls', async () => {
+  const h = assistantHarness();
+  const guide = guideHarness();
+  const getMicrophone = h.dependencies.voice.getMicrophone;
+  h.dependencies.voice.getMicrophone = async () => {
+    assert.equal(
+      guide.calls.active,
+      false,
+      'Introduction stops before microphone capture',
+    );
+    return getMicrophone();
+  };
+  const page = await renderDesktop(
+    h.bridge,
+    h.dependencies,
+    guide.dependencies,
+  );
+  const activate = (kind: DesktopActivationEvent['kind']) => {
+    for (const listener of h.activationListeners)
+      listener({ id: crypto.randomUUID(), kind });
+  };
+  try {
+    assert.equal(guide.calls.spoken, 0);
+    await act(async () => {
+      activate('open');
+      await settle();
+    });
+    assert.equal(guide.calls.spoken, 1);
+    await act(async () => {
+      activate('open');
+      await settle();
+    });
+    assert.equal(
+      guide.calls.spoken,
+      1,
+      'Opening again does not replay the welcome',
+    );
+    await act(async () => {
+      activate('talk');
+      await settle();
+    });
+    assert.equal(guide.calls.active, false);
+    assert.equal(h.recorders.length, 1);
+    await act(async () => {
+      page.button('Hear instructions again').click();
+      await settle();
+    });
+    assert.equal(h.recorders[0]?.state, 'inactive');
+    assert.equal(guide.calls.spoken, 2);
+    await act(async () => h.bridge.stopWork());
+    assert.equal(guide.calls.active, false);
+    assert.equal(h.calls.transcriptions, 0);
+    assert.equal(
+      h.calls.speech.length,
+      0,
+      'Windows instructions make no ElevenLabs requests',
+    );
+    assert.equal(h.calls.captures, 0);
+  } finally {
+    await page.dispose();
+  }
+});
+
+test('instructions appear only after sign-in, stay expanded, and disappear on logout', async () => {
+  const h = assistantHarness();
+  const guide = guideHarness();
+  h.bridge.getSession = async () => ({
+    ...session,
+    phase: 'signed_out',
+    account: null,
+    workspace: 'unknown',
+  });
+  const page = await renderDesktop(
+    h.bridge,
+    h.dependencies,
+    guide.dependencies,
+  );
+  try {
+    const document = page.dom.window.document;
+    assert.equal(document.querySelector('.desktop-guide'), null);
+    assert.equal(
+      document.querySelector('a[href="#desktop-welcome-title"]'),
+      null,
+    );
+    await act(async () => {
+      for (const listener of h.activationListeners)
+        listener({ id: crypto.randomUUID(), kind: 'talk' });
+      await settle();
+    });
+    assert.equal(guide.calls.spoken, 0);
+    await act(async () => {
+      for (const listener of h.sessionListeners)
+        listener({ ...session, workspace: 'denied' });
+      await settle();
+    });
+    const surface = document.querySelector('.desktop-guide');
+    assert.ok(
+      surface,
+      'Local help is available to a signed-in account even when workspace access is denied',
+    );
+    assert.equal(surface.querySelectorAll('ol > li').length, 3);
+    assert.equal(
+      surface.querySelector('details, summary'),
+      null,
+      'Instructions and Talk states are not collapsed',
+    );
+    assert.equal(
+      surface.closest('[aria-live], [role="status"], [role="alert"]'),
+      null,
+    );
+    assert.deepEqual(
+      [...surface.querySelectorAll('kbd')].map((node) => node.textContent),
+      [
+        'Ctrl + Alt + Space',
+        'Ctrl + Alt + Backspace',
+        'Escape',
+        'Tab',
+        'Shift + Tab',
+        'Enter',
+        'Space',
+      ],
+    );
+    assert.ok(
+      document.querySelector(
+        '.desktop-guide-return[href="#desktop-assistant"]',
+      ),
+    );
+    assert.ok(document.querySelector('.desktop-window-actions'));
+    assert.doesNotMatch(surface.textContent ?? '', /Back to sign-in/);
+    assert.match(surface.textContent ?? '', /local Windows voice/);
+    assert.equal(
+      guide.calls.spoken,
+      1,
+      'Returning users hear local guidance without a saved-marker blocker',
+    );
+    assert.equal(guide.calls.active, true);
+    await act(async () => page.button('Sign out').click());
+    assert.equal(guide.calls.active, false);
+    assert.equal(document.querySelector('.desktop-guide'), null);
+    assert.equal(h.calls.speech.length, 0);
+  } finally {
+    await page.dispose();
   }
 });

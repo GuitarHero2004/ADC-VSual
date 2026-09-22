@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   DEFAULT_DESKTOP_PREFERENCES,
+  DESKTOP_STOP_SHORTCUT,
   type DesktopPreferences,
   type DesktopShortcut,
   type DesktopState,
@@ -34,6 +35,7 @@ function fixture(overrides: Partial<DesktopPreferencesStore> = {}) {
   const writes: DesktopPreferences[] = [];
   const publications: DesktopState[] = [];
   let activations = 0;
+  let stops = 0;
   const registry: DesktopShortcutRegistry = {
     register(accelerator, callback) {
       events.push(`register:${accelerator}`);
@@ -62,6 +64,7 @@ function fixture(overrides: Partial<DesktopPreferencesStore> = {}) {
     store,
     () => activations++,
     (state) => publications.push(state),
+    () => stops++,
   );
   return {
     settings,
@@ -71,6 +74,7 @@ function fixture(overrides: Partial<DesktopPreferencesStore> = {}) {
     writes,
     publications,
     activations: () => activations,
+    stops: () => stops,
   };
 }
 
@@ -83,12 +87,13 @@ test('first launch uses defaults and initialization registers only once', async 
   assert.deepEqual(first, {
     preferences: DEFAULT_DESKTOP_PREFERENCES,
     shortcutRegistered: true,
+    stopShortcutRegistered: true,
     preferencesSaved: true,
     issue: null,
   });
   assert.deepEqual(second, first);
   assert.notEqual(second.preferences, first.preferences);
-  assert.equal(f.events.length, 1);
+  assert.equal(f.events.length, 2);
   assert.equal(f.writes.length, 0);
   f.callbacks.get(first.preferences.shortcut)?.();
   assert.equal(f.activations(), 1);
@@ -117,6 +122,7 @@ test('saved preferences restore and corrupt or unreadable records use defaults',
     assert.deepEqual(
       (await f.settings.initialize()).preferences,
       DEFAULT_DESKTOP_PREFERENCES,
+      DESKTOP_STOP_SHORTCUT,
     );
   }
   const unreadable = fixture({
@@ -138,6 +144,7 @@ test('shortcut collision keeps working settings and does not save or unregister'
   assert.equal(f.writes.length, 0);
   assert.deepEqual(f.events, [
     `register:${DEFAULT_DESKTOP_PREFERENCES.shortcut}`,
+    `register:${DESKTOP_STOP_SHORTCUT}`,
     `register:${replacement.shortcut}`,
   ]);
   f.callbacks.get(DEFAULT_DESKTOP_PREFERENCES.shortcut)?.();
@@ -162,8 +169,10 @@ test('initial shortcut conflict remains recoverable through another shortcut', a
   f.settings.dispose();
   assert.deepEqual(f.events, [
     `register:${DEFAULT_DESKTOP_PREFERENCES.shortcut}`,
+    `register:${DESKTOP_STOP_SHORTCUT}`,
     `register:${replacement.shortcut}`,
     `unregister:${replacement.shortcut}`,
+    `unregister:${DESKTOP_STOP_SHORTCUT}`,
   ]);
 });
 
@@ -175,7 +184,7 @@ test('language updates do not register a duplicate shortcut', async () => {
     language: 'vi',
   });
   assert.equal(state.preferences.language, 'vi');
-  assert.equal(f.events.length, 1);
+  assert.equal(f.events.length, 2);
   assert.equal(f.writes.length, 1);
 });
 
@@ -327,6 +336,7 @@ test('registration exceptions become safe issues and disposal releases only owne
     },
     () => undefined,
     () => undefined,
+    () => undefined,
   );
   assert.equal((await settings.initialize()).issue, 'shortcut_unavailable');
   assert.equal(
@@ -335,4 +345,36 @@ test('registration exceptions become safe issues and disposal releases only owne
   );
   settings.dispose();
   assert.deepEqual(unregistered, []);
+});
+
+test('Stop shortcut stays registered across preference changes and releases on disposal', async () => {
+  const f = fixture();
+  const state = await f.settings.initialize();
+  assert.equal(state.stopShortcutRegistered, true);
+  const stop = f.callbacks.get(DESKTOP_STOP_SHORTCUT);
+  stop?.();
+  assert.equal(f.stops(), 1);
+  assert.equal(f.activations(), 0);
+  await f.settings.update(replacement);
+  assert.equal(f.callbacks.get(DESKTOP_STOP_SHORTCUT), stop);
+  f.settings.dispose();
+  stop?.();
+  assert.equal(f.stops(), 1, 'Disposed callbacks cannot stop a later session');
+  assert.equal(f.settings.snapshot().stopShortcutRegistered, false);
+});
+
+test('Stop collision is separate from Talk and can recover on a settings retry', async () => {
+  const f = fixture();
+  f.conflicts.add(DESKTOP_STOP_SHORTCUT);
+  const state = await f.settings.initialize();
+  assert.equal(state.shortcutRegistered, true);
+  assert.equal(state.stopShortcutRegistered, false);
+  assert.equal(state.issue, null);
+  f.callbacks.get(DEFAULT_DESKTOP_PREFERENCES.shortcut)?.();
+  assert.equal(f.activations(), 1);
+  f.conflicts.clear();
+  const recovered = await f.settings.update(DEFAULT_DESKTOP_PREFERENCES);
+  assert.equal(recovered.stopShortcutRegistered, true);
+  f.callbacks.get(DESKTOP_STOP_SHORTCUT)?.();
+  assert.equal(f.stops(), 1);
 });

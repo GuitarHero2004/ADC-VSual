@@ -52,6 +52,145 @@
   margin-block-end: 0;
 }
 
+.desktop-guide,
+.desktop-guide > *,
+.desktop-keyboard-list > div {
+  min-width: 0;
+}
+
+.desktop-guide-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding-block: 0.35rem;
+}
+
+.desktop-guide h2 {
+  margin-block: 0 0.5rem;
+  font-size: 1.35rem;
+}
+
+.desktop-guide h3 {
+  margin-block: 0 0.35rem;
+  font-size: 1.05rem;
+}
+
+.desktop-guide-steps {
+  padding-inline-start: 1.5rem;
+  margin-block: 1rem;
+}
+
+.desktop-guide-steps li {
+  padding-inline-start: 0.3rem;
+}
+
+.desktop-guide-steps li + li {
+  margin-block-start: 1rem;
+}
+
+.desktop-guide-steps li::marker {
+  color: var(--color-accent);
+  font-weight: 700;
+}
+
+.desktop-guide-steps p {
+  margin-block: 0.3rem 0;
+}
+
+.desktop-guide-audio {
+  border-block-start: 1px solid var(--color-border);
+  padding-block-start: 1rem;
+  margin-block: 1rem 0.75rem;
+}
+
+.desktop-keyboard {
+  margin-block: 1.25rem;
+}
+
+.desktop-keyboard > h3 {
+  margin-block: 1rem 0.5rem;
+  color: var(--color-muted);
+}
+
+.desktop-keyboard-list,
+.desktop-talk-states {
+  margin: 0;
+}
+
+.desktop-keyboard-list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  gap: 0.3rem 1rem;
+  padding-block: 0.65rem;
+  border-block-end: 1px solid var(--color-border);
+}
+
+.desktop-keyboard-list dt,
+.desktop-talk-states dt {
+  font-weight: 650;
+}
+
+.desktop-keyboard-list dd,
+.desktop-talk-states dd {
+  margin: 0;
+}
+
+.desktop-keyboard-list p {
+  margin-block: 0.4rem 0;
+}
+
+.desktop-shortcut-keys {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.3rem;
+  font: inherit;
+  font-weight: 650;
+  background: var(--color-surface);
+  overflow-wrap: anywhere;
+}
+
+.desktop-shortcut-state {
+  display: block;
+  margin-block-start: 0.2rem;
+  color: var(--color-muted);
+}
+
+.desktop-talk-details {
+  margin-block-start: 1.5rem;
+  padding-block-start: 1rem;
+  border-block-start: 1px solid var(--color-border);
+}
+
+.desktop-guide-return {
+  margin-block-start: 0.75rem;
+}
+
+.desktop-window-actions {
+  margin-block-start: 1.5rem;
+  padding-block-start: 1.25rem;
+  border-block-start: 1px solid var(--color-border);
+}
+
+.desktop-window-actions > button {
+  flex: 1 1 10rem;
+}
+
+.desktop-talk-states > div {
+  margin-block: 0.75rem;
+}
+
+.desktop-talk-states dd {
+  margin-block-start: 0.2rem;
+}
+
+@media (max-width: 32rem) {
+  .desktop-keyboard-list > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .desktop-lead {
   font-size: 1.25rem;
   font-weight: 700;
@@ -59,46 +198,6 @@
 
 .desktop-limitation {
   font-weight: 600;
-}
-
-.desktop-device {
-  margin-block: 1.5rem;
-}
-
-.desktop-device h2 {
-  font-size: 1.2rem;
-  margin: 0 0 0.75rem;
-}
-
-.desktop-device dl {
-  margin: 0;
-  display: grid;
-  gap: 1rem;
-}
-
-.desktop-device dt {
-  font-weight: 700;
-}
-
-.desktop-device dd {
-  margin: 0.3rem 0 0;
-}
-
-.desktop-device dd > span {
-  display: block;
-  margin-block-start: 0.35rem;
-}
-
-.desktop-device kbd {
-  display: inline-block;
-  max-width: 100%;
-  padding: 0.15rem 0.5rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0.3rem;
-  font: inherit;
-  font-weight: 650;
-  background: var(--color-subtle);
-  overflow-wrap: anywhere;
 }
 
 .desktop-actions {
@@ -112,13 +211,15 @@
   margin-block: 0.75rem 1rem;
 }
 
-.desktop-status {
+.desktop-status,
+.desktop-guide-status {
   margin-block: 1rem;
   font-weight: 600;
   overflow-wrap: anywhere;
 }
 
-.desktop-status:empty {
+.desktop-status:empty,
+.desktop-guide-status:empty {
   margin: 0;
 }
 
@@ -149,28 +250,6 @@
 
 .desktop-assistant h2 {
   font-size: 1.35rem;
-}
-
-.desktop-quickstart {
-  margin-block: 1rem 1.5rem;
-  padding: 0.75rem 1rem;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-surface);
-}
-
-.desktop-quickstart h2 {
-  margin-block: 0 0.5rem;
-  font-size: 1.1rem;
-}
-
-.desktop-quickstart ol {
-  margin: 0;
-  padding-inline-start: 1.25rem;
-}
-
-.desktop-quickstart li + li {
-  margin-block-start: 0.5rem;
 }
 
 .desktop-account {
