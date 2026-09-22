@@ -6,6 +6,8 @@ import {
   prepareVisualInput,
   validateVisualImages,
   visualRouteVerification,
+  VisualFailure,
+  type VisualProviderDiagnostics,
 } from '../utils/grounded/visual-server.ts';
 import { requireGroundedConfiguration } from '../utils/grounded/server.ts';
 import {
@@ -18,6 +20,8 @@ import { VoiceError } from '../utils/voice/errors.ts';
 // Deliberately uses the production decoder, budgets, prompt, fields and adapter.
 const started = performance.now();
 let stage = 'configuration';
+let requestId: string | undefined;
+const diagnostics: VisualProviderDiagnostics = { provider_attempted: false };
 let validation:
   | {
       answer_status: string;
@@ -45,6 +49,7 @@ try {
     ),
   );
   const input = await visualFixture(images);
+  requestId = input.request_id;
   input.question = VISUAL_SMOKE_QUESTION;
   // Only this process bypasses the deployment verification gate to perform the
   // check. No real environment file is modified and no API caller can do this.
@@ -58,7 +63,7 @@ try {
     'Making one synthetic multi-image Avis request; no automatic retries.',
   );
   stage = 'provider_request';
-  const answer = await answerVisualPage(input, signal);
+  const answer = await answerVisualPage(input, signal, diagnostics);
   stage = 'image_content_assertions';
   validation = {
     answer_status: answer.status,
@@ -89,6 +94,8 @@ try {
   console.log(
     JSON.stringify({
       status: 'passed',
+      request_id: requestId,
+      ...diagnostics,
       model: configuration.model,
       images: images.length,
       input_token_bound: budget.inputTokenBound,
@@ -101,8 +108,11 @@ try {
   console.error(
     JSON.stringify({
       status: 'failed',
+      request_id: requestId,
       code: error instanceof VoiceError ? error.code : 'CHECK_FAILED',
       stage,
+      reason: error instanceof VisualFailure ? error.reason : undefined,
+      ...diagnostics,
       ...(validation ? { validation } : {}),
       duration_ms: Math.round(performance.now() - started),
     }),

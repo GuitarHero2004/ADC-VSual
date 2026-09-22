@@ -178,6 +178,7 @@ type VisualFailureReason =
   | 'incomplete_response'
   | 'refusal'
   | 'invalid_json'
+  | 'invalid_response'
   | 'schema'
   | 'unknown_image'
   | 'redaction_overlap'
@@ -204,6 +205,61 @@ export class VisualFailure extends VoiceError {
 }
 const invalidAnswer = (reason: VisualFailureReason) =>
   new VisualFailure(reason);
+
+const upstreamErrorCodes = [
+  'invalid_request_error',
+  'invalid_value',
+  'invalid_json_schema',
+  'unsupported_parameter',
+  'unsupported_value',
+  'model_not_found',
+  'invalid_api_key',
+  'insufficient_quota',
+  'rate_limit_exceeded',
+  'context_length_exceeded',
+  'server_error',
+  'invalid_prompt',
+  'invalid_image',
+  'invalid_image_format',
+  'invalid_base64_image',
+  'image_parse_error',
+  'image_too_large',
+  'image_too_small',
+  'image_download_failed',
+  'image_content_policy_violation',
+] as const;
+type UpstreamErrorCode = (typeof upstreamErrorCodes)[number];
+
+/** Bounded operational metadata only; never copy an error, body, or source URL. */
+export type VisualProviderDiagnostics = {
+  provider_attempted: boolean;
+  provider_stage?:
+    'provider_dispatch' | 'provider_response' | 'answer_validation';
+  upstream_status?: number;
+  upstream_error_code?: UpstreamErrorCode;
+  upstream_request_id?: string;
+  response_id?: string;
+  model?: string;
+  route_origin?: string;
+};
+
+function safeUpstreamErrorCode(value: unknown): UpstreamErrorCode | undefined {
+  return upstreamErrorCodes.find((code) => code === value);
+}
+function safeUpstreamRequestId(value: unknown): string | undefined {
+  return typeof value === 'string' &&
+    (/^req_[a-zA-Z0-9]{16,128}$/.test(value) ||
+      /^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$/.test(
+        value,
+      ))
+    ? value
+    : undefined;
+}
+function safeResponseId(value: unknown): string | undefined {
+  return typeof value === 'string' && /^resp_[a-zA-Z0-9]{8,128}$/.test(value)
+    ? value
+    : undefined;
+}
 
 /** Guard explicit calculation requests; a disclaimer is not a request to calculate. */
 export function requestsVisualCalculation(question: string) {
@@ -294,9 +350,14 @@ export function validateVisualAnswer(
 export async function answerVisualPage(
   input: VisualRequest,
   signal: AbortSignal,
+  diagnostics?: VisualProviderDiagnostics,
 ): Promise<VisualResponse> {
   signal.throwIfAborted();
   const { configuration, modelInput, format } = prepareVisualInput(input);
+  if (diagnostics) {
+    diagnostics.model = configuration.model;
+    diagnostics.route_origin = new URL(configuration.baseURL).origin;
+  }
   const client = new OpenAI({
     apiKey: configuration.apiKey,
     baseURL: configuration.baseURL,
@@ -312,7 +373,11 @@ export async function answerVisualPage(
   const timeout = AbortSignal.timeout(VISUAL_LIMITS.modelTimeoutMs);
   const bounded = AbortSignal.any([signal, timeout]);
   try {
-    const response = await client.responses.create(
+    if (diagnostics) {
+      diagnostics.provider_attempted = true;
+      diagnostics.provider_stage = 'provider_dispatch';
+    }
+    const pending = client.responses.create(
       {
         model: configuration.model,
         instructions,
@@ -322,7 +387,10 @@ export async function answerVisualPage(
             content: [
               { type: 'input_text', text: modelInput },
               ...input.images.flatMap((image) => [
-                { type: 'input_text' as const, text: `Image ID: ${image.id}` },
+                {
+                  type: 'input_text' as const,
+                  text: `Image ID: ${image.id}`,
+                },
                 {
                   type: 'input_image' as const,
                   detail: 'original' as const,
@@ -337,8 +405,35 @@ export async function answerVisualPage(
         reasoning: { effort: 'low' },
         store: false,
       },
-      { signal: bounded },
+      {
+        signal: bounded,
+        headers: { 'X-Client-Request-Id': input.request_id },
+      },
     );
+    // Both helpers share the SDK's cached request. Capture HTTP metadata before
+    // its JSON/parser step can reject a malformed successful response.
+    const upstream = await pending.asResponse();
+    if (diagnostics) {
+      diagnostics.provider_stage = 'provider_response';
+      diagnostics.upstream_status = upstream.status;
+      const requestId = safeUpstreamRequestId(
+        upstream.headers.get('x-request-id'),
+      );
+      if (requestId) diagnostics.upstream_request_id = requestId;
+    }
+    const { data: response } = await pending
+      .withResponse()
+      .catch((error: unknown) => {
+        if (error instanceof SyntaxError || error instanceof TypeError)
+          throw invalidAnswer('invalid_response');
+        throw error;
+      });
+    if (diagnostics) {
+      const responseId = safeResponseId(response.id);
+      const errorCode = safeUpstreamErrorCode(response.error?.code);
+      if (responseId) diagnostics.response_id = responseId;
+      if (errorCode) diagnostics.upstream_error_code = errorCode;
+    }
     bounded.throwIfAborted();
     if (response.status !== 'completed')
       throw invalidAnswer(
@@ -360,8 +455,24 @@ export async function answerVisualPage(
     } catch {
       throw invalidAnswer('invalid_json');
     }
+    if (diagnostics) diagnostics.provider_stage = 'answer_validation';
     return validateVisualAnswer(input, value);
   } catch (error) {
+    if (diagnostics && error instanceof OpenAI.APIError) {
+      if (
+        typeof error.status === 'number' &&
+        Number.isInteger(error.status) &&
+        error.status >= 100 &&
+        error.status <= 599
+      ) {
+        diagnostics.provider_stage = 'provider_response';
+        diagnostics.upstream_status = error.status;
+      }
+      const requestId = safeUpstreamRequestId(error.requestID);
+      const errorCode = safeUpstreamErrorCode(error.code);
+      if (requestId) diagnostics.upstream_request_id = requestId;
+      if (errorCode) diagnostics.upstream_error_code = errorCode;
+    }
     if (signal.aborted)
       throw new VoiceError('CANCELLED', 'Visual reading was cancelled.', 499);
     if (timeout.aborted)

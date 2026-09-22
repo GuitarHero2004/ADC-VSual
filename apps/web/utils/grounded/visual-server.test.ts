@@ -19,6 +19,7 @@ import {
   visualRouteVerification,
   requestsVisualCalculation,
   VisualFailure,
+  type VisualProviderDiagnostics,
 } from './visual-server.ts';
 import {
   visualFixture,
@@ -291,6 +292,241 @@ test('multi-image request preserves order and image IDs in one generation', asyn
   );
   assert.equal(requests.length, 1);
 });
+
+test('optional provider diagnostics retain safe response metadata with one correlated dispatch', async () => {
+  const input = await visualFixture();
+  const upstreamRequestId = 'req_0123456789abcdef0123456789abcdef';
+  const responseId = 'resp_0123456789abcdef0123456789abcdef';
+  process.env.AVIS_API_BASE_URL = 'https://api.avis.xyz/private-route/v1';
+  process.env.AVIS_VISUAL_VERIFIED_ROUTE = visualRouteVerification(
+    requireGroundedConfiguration(),
+  );
+  respond = async () => {
+    const body = await providerResponse().json();
+    return Response.json(
+      { ...body, id: responseId },
+      { headers: { 'x-request-id': upstreamRequestId } },
+    );
+  };
+  const diagnostics: VisualProviderDiagnostics = { provider_attempted: false };
+  await answerVisualPage(input, new AbortController().signal, diagnostics);
+  assert.equal(requests.length, 1);
+  assert.equal(
+    requests[0]!.headers.get('X-Client-Request-Id'),
+    input.request_id,
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(diagnostics)), {
+    provider_attempted: true,
+    provider_stage: 'answer_validation',
+    upstream_status: 200,
+    upstream_request_id: upstreamRequestId,
+    response_id: responseId,
+    model: 'gpt-6-astra',
+    route_origin: 'https://api.avis.xyz',
+  });
+  assert.ok(!JSON.stringify(diagnostics).includes('private-route'));
+});
+
+test('provider metadata remains available after a successful HTTP response fails evidence validation', async () => {
+  const input = await visualFixture();
+  input.snapshot.images[0]!.redactions = [
+    { x: 0.1, y: 0.1, width: 0.1, height: 0.1 },
+  ];
+  const upstreamRequestId = 'b367454b-56ed-48c0-97b4-c5dc5ef0b35e';
+  respond = async () => {
+    const response = providerResponse();
+    response.headers.set('x-request-id', upstreamRequestId);
+    return response;
+  };
+  const diagnostics: VisualProviderDiagnostics = { provider_attempted: false };
+  await assert.rejects(
+    answerVisualPage(input, new AbortController().signal, diagnostics),
+    (error) => {
+      assert.ok(error instanceof VisualFailure);
+      assert.equal(error.reason, 'redaction_overlap');
+      return true;
+    },
+  );
+  assert.equal(requests.length, 1);
+  assert.equal(diagnostics.provider_stage, 'answer_validation');
+  assert.equal(diagnostics.upstream_status, 200);
+  assert.equal(diagnostics.upstream_request_id, upstreamRequestId);
+  assert.equal(diagnostics.response_id, 'resp_synthetic');
+});
+
+test('upstream diagnostics allowlist codes and identifiers without copying error bodies or headers', async () => {
+  const input = await visualFixture();
+  for (const safeIdentifiers of [true, false]) {
+    requests = [];
+    respond = () =>
+      Response.json(
+        {
+          error: {
+            code: safeIdentifiers
+              ? 'unsupported_parameter'
+              : 'sensitive-payload',
+            message: 'sensitive-payload',
+            param: 'sensitive-payload',
+            type: 'sensitive-payload',
+          },
+        },
+        {
+          status: 400,
+          headers: {
+            'x-request-id': safeIdentifiers
+              ? 'req_0123456789abcdef0123456789abcdef'
+              : 'req_sensitivedata-with-invalid-separators',
+            'set-cookie': 'sensitive-payload',
+          },
+        },
+      );
+    const diagnostics: VisualProviderDiagnostics = {
+      provider_attempted: false,
+    };
+    await assert.rejects(
+      answerVisualPage(input, new AbortController().signal, diagnostics),
+      code('PROVIDER_FAILURE'),
+    );
+    assert.equal(requests.length, 1);
+    assert.equal(diagnostics.provider_stage, 'provider_response');
+    assert.equal(diagnostics.upstream_status, 400);
+    assert.equal(
+      diagnostics.upstream_error_code,
+      safeIdentifiers ? 'unsupported_parameter' : undefined,
+    );
+    assert.equal(
+      diagnostics.upstream_request_id,
+      safeIdentifiers ? 'req_0123456789abcdef0123456789abcdef' : undefined,
+    );
+    assert.ok(!JSON.stringify(diagnostics).includes('sensitive'));
+    assert.ok(!JSON.stringify(diagnostics).includes(input.question));
+    assert.ok(!JSON.stringify(diagnostics).includes(input.images[0]!.base64));
+  }
+});
+
+test('invalid response identifiers and failed preflight cannot introduce unsafe diagnostics', async () => {
+  const input = await visualFixture();
+  respond = () =>
+    Response.json({
+      id: 'resp_sensitivedata/with/invalid/separators',
+      object: 'response',
+      status: 'failed',
+      error: { code: 'sensitive-payload', message: 'sensitive-payload' },
+      output: [],
+    });
+  const diagnostics: VisualProviderDiagnostics = { provider_attempted: false };
+  await assert.rejects(
+    answerVisualPage(input, new AbortController().signal, diagnostics),
+    code('PROVIDER_FAILURE'),
+  );
+  assert.equal(requests.length, 1);
+  assert.equal(diagnostics.upstream_status, 200);
+  assert.equal(diagnostics.provider_stage, 'provider_response');
+  assert.equal(diagnostics.response_id, undefined);
+  assert.equal(diagnostics.upstream_error_code, undefined);
+  assert.ok(!JSON.stringify(diagnostics).includes('sensitive'));
+
+  requests = [];
+  delete process.env.AVIS_VISUAL_VERIFIED_ROUTE;
+  const preflight: VisualProviderDiagnostics = { provider_attempted: false };
+  await assert.rejects(
+    answerVisualPage(input, new AbortController().signal, preflight),
+    code('SETUP_REQUIRED'),
+  );
+  assert.equal(requests.length, 0);
+  assert.deepEqual(preflight, { provider_attempted: false });
+});
+
+test('transport failure records a dispatch without inventing an upstream HTTP response', async () => {
+  const input = await visualFixture();
+  respond = () => {
+    throw new Error('sensitive-payload');
+  };
+  const diagnostics: VisualProviderDiagnostics = { provider_attempted: false };
+  await assert.rejects(
+    answerVisualPage(input, new AbortController().signal, diagnostics),
+    code('PROVIDER_FAILURE'),
+  );
+  assert.equal(requests.length, 1);
+  assert.equal(diagnostics.provider_attempted, true);
+  assert.equal(diagnostics.provider_stage, 'provider_dispatch');
+  assert.equal(diagnostics.upstream_status, undefined);
+  assert.equal(diagnostics.upstream_request_id, undefined);
+  assert.ok(!JSON.stringify(diagnostics).includes('sensitive-payload'));
+});
+test('malformed successful provider responses retain HTTP metadata without another dispatch', async () => {
+  const input = await visualFixture();
+  const upstreamRequestId = 'req_0123456789abcdef0123456789abcdef';
+  for (const body of [
+    'sensitive-payload',
+    JSON.stringify({
+      object: 'response',
+      status: 'completed',
+      output: null,
+      private_field: 'sensitive-payload',
+    }),
+  ]) {
+    requests = [];
+    respond = () =>
+      new Response(body, {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+          'x-request-id': upstreamRequestId,
+        },
+      });
+    const diagnostics: VisualProviderDiagnostics = {
+      provider_attempted: false,
+    };
+    await assert.rejects(
+      answerVisualPage(input, new AbortController().signal, diagnostics),
+      (error) => {
+        assert.ok(error instanceof VisualFailure);
+        assert.equal(error.reason, 'invalid_response');
+        assert.equal(error.code, 'PROVIDER_FAILURE');
+        assert.equal(error.status, 502);
+        assert.ok(!JSON.stringify(error).includes('sensitive-payload'));
+        return true;
+      },
+    );
+    assert.equal(requests.length, 1);
+    assert.equal(diagnostics.provider_attempted, true);
+    assert.equal(diagnostics.provider_stage, 'provider_response');
+    assert.equal(diagnostics.upstream_status, 200);
+    assert.equal(diagnostics.upstream_request_id, upstreamRequestId);
+    assert.equal(diagnostics.response_id, undefined);
+    assert.ok(!JSON.stringify(diagnostics).includes('sensitive-payload'));
+  }
+});
+
+test('cancellation during response parsing retains received HTTP metadata and cancellation status', async () => {
+  const input = await visualFixture();
+  const abort = new AbortController();
+  respond = () =>
+    new Response(
+      new ReadableStream(
+        {
+          pull(controller) {
+            abort.abort();
+            controller.enqueue(new TextEncoder().encode('sensitive-payload'));
+            controller.close();
+          },
+        },
+        { highWaterMark: 0 },
+      ),
+      { headers: { 'content-type': 'application/json' } },
+    );
+  const diagnostics: VisualProviderDiagnostics = { provider_attempted: false };
+  await assert.rejects(
+    answerVisualPage(input, abort.signal, diagnostics),
+    code('CANCELLED'),
+  );
+  assert.equal(requests.length, 1);
+  assert.equal(diagnostics.provider_stage, 'provider_response');
+  assert.equal(diagnostics.upstream_status, 200);
+  assert.ok(!JSON.stringify(diagnostics).includes('sensitive-payload'));
+});
+
 test('evidence rejects missing images, invalid regions, masked areas and long text', async () => {
   const input = await visualFixture();
   for (const value of [
