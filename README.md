@@ -114,25 +114,9 @@ an already dispatched provider request stopped processing or was refunded.
 
 ## Tech stack and how it connects
 
-```mermaid
-flowchart TB
-    accTitle: VSual technology and request flow
-    accDescr: The desktop and browser companions authenticate with Supabase, then send user requests to the Next.js backend. The backend checks identity and workspace access, calls Avis for interpretation and ElevenLabs for speech, validates results, and returns them to the companion.
-    Client["VSual companions<br/>Windows: Electron + React<br/>Browser: Chromium MV3 + React + Vite"]
-    API["Next.js / Node.js backend<br/>Vercel or local development<br/>Authorisation, limits and response validation"]
-    Auth["Supabase Auth"]
-    DB["Supabase PostgreSQL<br/>Restricted runtime role + RLS"]
-    Model["Avis gateway<br/>Configured AI model"]
-    Voice["ElevenLabs<br/>Scribe v2 transcription / Flash v2.5 speech"]
+[![VSual's Windows app and browser extension connect to Supabase Auth and a shared Next.js backend. The backend checks workspace access in PostgreSQL, calls Avis for interpretation and ElevenLabs for speech, and returns answers, evidence and audio.](docs/assets/vsual-architecture.png)](docs/assets/vsual-architecture.png)
 
-    Client -->|"Sign-in and session refresh"| Auth
-    Client -->|"Question, permitted capture or recording + session"| API
-    API -->|"Verify identity"| Auth
-    API <-->|"Workspace access and usage metadata"| DB
-    API <-->|"Question + capture / structured model output"| Model
-    API <-->|"Recording / transcript; answer text / audio"| Voice
-    API -->|"Transcript, validated answer, evidence or audio"| Client
-```
+[View full-size diagram](docs/assets/vsual-architecture.png) · [Editable SVG](docs/assets/vsual-architecture.svg)
 
 Capture, microphone controls and playback run in the client. Only the backend
 holds provider secrets and calls the AI services. Shared **TypeScript + Zod**

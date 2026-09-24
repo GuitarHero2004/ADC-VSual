@@ -1,0 +1,160 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1480" height="1010" viewBox="0 0 1480 1010" role="img" aria-labelledby="title description">
+  <title id="title">VSual: from your screen to understanding</title>
+  <desc id="description">The Windows Electron app and Chromium extension share React voice controls. They sign in through Supabase Auth and send questions, permitted captures or recordings to the Next.js backend. The backend verifies identity, checks workspace access and usage in Supabase PostgreSQL, calls Avis for model interpretation and ElevenLabs for transcription and speech, and returns validated answers, evidence and audio. Capture and playback stay on the device. Provider secrets stay on the backend.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#f8faff"/>
+      <stop offset="1" stop-color="#f1f5fb"/>
+    </linearGradient>
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#eef2ff"/>
+      <stop offset="1" stop-color="#ffffff"/>
+    </linearGradient>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#1d355c" flood-opacity="0.08"/>
+    </filter>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+      <path d="M1 1 L7 4.5 L1 8" fill="none" stroke="#516bc1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="authArrow" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+      <path d="M1 1 L7 4.5 L1 8" fill="none" stroke="#0f766e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      text { font-family: 'Segoe UI', Arial, sans-serif; fill: #14233e; }
+      .heading { font-size: 40px; font-weight: 700; letter-spacing: -1px; }
+      .section { font-size: 18px; font-weight: 700; letter-spacing: 1.6px; fill: #4e5e7a; }
+      .name { font-size: 25px; font-weight: 700; }
+      .body { font-size: 21px; fill: #465570; }
+      .small { font-size: 18px; fill: #465570; }
+      .chip { font-size: 18px; font-weight: 600; }
+      .wire { fill: none; stroke: #516bc1; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+      .icon { fill: none; stroke: currentColor; stroke-width: 2.7; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+  </defs>
+
+  <rect width="1480" height="1010" rx="30" fill="url(#background)"/>
+  <text x="60" y="66" class="heading">From your screen to understanding</text>
+  <text x="60" y="102" class="body">The technology behind VSual's capture, question and spoken-answer journey.</text>
+  <rect x="1250" y="39" width="170" height="38" rx="19" fill="#e9edfa"/>
+  <text x="1335" y="64" text-anchor="middle" class="chip" fill="#304ba8">CURRENT MVP</text>
+
+  <text x="60" y="157" class="section">01 / ON YOUR DEVICE</text>
+  <text x="600" y="157" class="section">02 / VSUAL BACKEND</text>
+  <text x="1050" y="157" class="section">03 / CONNECTED SERVICES</text>
+
+  <!-- Authentication is the only direct client-to-cloud connection shown. -->
+  <path d="M265 288 V226 Q265 212 279 212 H1050" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="7 6" marker-start="url(#authArrow)" marker-end="url(#authArrow)"/>
+  <rect x="487" y="195" width="283" height="34" rx="17" fill="#edf7f5"/>
+  <text x="628" y="218" text-anchor="middle" class="small" style="fill:#0f665f;font-weight:600">Sign-in + session refresh</text>
+
+  <!-- Main request/response connection; each provider is reached by the backend. -->
+  <path d="M470 523 H600" class="wire" marker-end="url(#arrow)"/>
+  <path d="M600 574 H470" class="wire" marker-end="url(#arrow)"/>
+  <text x="535" y="480" text-anchor="middle" class="small" style="fill:#304ba8">Question</text>
+  <text x="535" y="503" text-anchor="middle" class="small" style="fill:#304ba8">+ source</text>
+  <text x="535" y="608" text-anchor="middle" class="small" style="fill:#304ba8">Answer</text>
+  <text x="535" y="631" text-anchor="middle" class="small" style="fill:#304ba8">+ audio</text>
+  <path d="M930 545 H997 M997 270 V820" class="wire"/>
+  <path d="M997 270 H1050" class="wire" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <path d="M997 435 H1050" class="wire" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <path d="M997 628 H1050" class="wire" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <path d="M997 820 H1050" class="wire" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <circle cx="997" cy="545" r="5" fill="#516bc1"/>
+  <text x="962" y="508" text-anchor="middle" class="small" style="font-size:16px;fill:#304ba8">API</text>
+  <text x="962" y="529" text-anchor="middle" class="small" style="font-size:16px;fill:#304ba8">calls</text>
+
+  <!-- VSual is the prominent application card, with its existing unmodified logo. -->
+  <rect x="60" y="290" width="410" height="504" rx="26" fill="url(#brand)" stroke="#b8c8f5" stroke-width="2" filter="url(#shadow)"/>
+  <image x="91" y="321" width="106" height="106" preserveAspectRatio="xMidYMid meet" xlink:href="../../apps/extension/src/assets/vsual-logo.png"/>
+  <text x="219" y="369" style="font-size:47px;font-weight:750;letter-spacing:-1.5px">VSual</text>
+  <text x="219" y="403" class="body">Capture · Ask · Listen</text>
+  <line x1="90" y1="451" x2="440" y2="451" stroke="#d6dff3"/>
+
+  <rect x="88" y="476" width="354" height="100" rx="16" fill="#ffffff" stroke="#d8e1f1"/>
+  <g transform="translate(109 500)" class="icon" style="color:#3858bd">
+    <rect x="0" y="0" width="48" height="33" rx="4"/>
+    <path d="M24 34 V44 M11 44 H37"/>
+    <path d="M20 9 V24 M29 9 V24 M14 16 H35" stroke-width="1.6"/>
+  </g>
+  <text x="181" y="518" class="name">Windows app</text>
+  <text x="181" y="549" class="body">Electron + React</text>
+
+  <rect x="88" y="592" width="354" height="100" rx="16" fill="#ffffff" stroke="#d8e1f1"/>
+  <g transform="translate(109 618)" class="icon" style="color:#3858bd">
+    <rect x="0" y="0" width="48" height="39" rx="5"/>
+    <path d="M0 11 H48"/>
+    <circle cx="8" cy="6" r="1.2" fill="#3858bd" stroke="none"/>
+    <circle cx="14" cy="6" r="1.2" fill="#3858bd" stroke="none"/>
+    <path d="M10 23 H32 M10 30 H25" stroke-width="2"/>
+  </g>
+  <text x="181" y="632" class="name">Browser extension</text>
+  <text x="181" y="664" class="body" style="font-size:20px">MV3 · React · Vite</text>
+
+  <text x="265" y="733" text-anchor="middle" class="small">Local capture · microphone · playback</text>
+  <rect x="127" y="750" width="276" height="28" rx="14" fill="#e9edfa"/>
+  <text x="265" y="770" text-anchor="middle" class="small" style="font-size:16px;fill:#304ba8">Trusted session ownership</text>
+
+  <!-- One backend, shared by both companion interfaces. -->
+  <rect x="600" y="366" width="330" height="351" rx="24" fill="#ffffff" stroke="#ccd8ee" stroke-width="2" filter="url(#shadow)"/>
+  <rect x="622" y="389" width="54" height="54" rx="14" fill="#14233e"/>
+  <path d="M637 427 V404 L661 428 V404" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="691" y="426" class="name" style="font-size:30px">Next.js</text>
+  <text x="625" y="478" class="body">Website + Node.js API</text>
+  <line x1="625" y1="498" x2="905" y2="498" stroke="#e0e6f1"/>
+  <circle cx="633" cy="528" r="4" fill="#2c4dc4"/>
+  <text x="648" y="535" class="body">Identity + workspace checks</text>
+  <circle cx="633" cy="565" r="4" fill="#2c4dc4"/>
+  <text x="648" y="572" class="body">Limits + evidence validation</text>
+  <circle cx="633" cy="602" r="4" fill="#2c4dc4"/>
+  <text x="648" y="609" class="body">Provider calls + secret keys</text>
+  <rect x="624" y="642" width="282" height="48" rx="12" fill="#f1f4fa"/>
+  <path d="M642 674 L652 656 L662 674 Z" fill="#14233e"/>
+  <text x="677" y="673" class="chip">Vercel / local server</text>
+
+  <!-- Cloud capabilities use small distinct symbols, alongside readable labels. -->
+  <rect x="1050" y="186" width="370" height="124" rx="20" fill="#ffffff" stroke="#b9dcd5" filter="url(#shadow)"/>
+  <rect x="1070" y="206" width="43" height="43" rx="12" fill="#e3f5ee"/>
+  <g transform="translate(1080 215)" class="icon" style="color:#0f766e">
+    <circle cx="8" cy="8" r="6"/><path d="M13 12 L23 22 M19 18 L22 15"/>
+  </g>
+  <text x="1127" y="238" class="name">Supabase Auth</text>
+  <text x="1073" y="277" class="body">Sign-in · refresh · verify identity</text>
+
+  <rect x="1050" y="352" width="370" height="150" rx="20" fill="#ffffff" stroke="#b9dcd5" filter="url(#shadow)"/>
+  <rect x="1070" y="372" width="43" height="43" rx="12" fill="#e3f5ee"/>
+  <g transform="translate(1079 380)" class="icon" style="color:#0f766e;stroke-width:2">
+    <ellipse cx="13" cy="5" rx="12" ry="4"/>
+    <path d="M1 5 V23 C1 29 25 29 25 23 V5 M1 14 C1 20 25 20 25 14"/>
+  </g>
+  <text x="1127" y="402" class="name" style="font-size:23px">Supabase PostgreSQL</text>
+  <text x="1073" y="446" class="body">Workspace + usage metadata</text>
+  <text x="1073" y="478" class="small">Restricted runtime role · RLS</text>
+
+  <rect x="1050" y="545" width="370" height="155" rx="20" fill="#ffffff" stroke="#d3cbed" filter="url(#shadow)"/>
+  <rect x="1070" y="565" width="43" height="43" rx="12" fill="#f0eaff"/>
+  <path d="M1091 574 L1096 584 L1106 587 L1096 591 L1091 601 L1087 591 L1077 587 L1087 584 Z" fill="none" stroke="#7042aa" stroke-width="2" stroke-linejoin="round"/>
+  <text x="1127" y="597" class="name">Avis</text>
+  <text x="1073" y="641" class="body">Gateway + configured AI model</text>
+  <text x="1073" y="675" class="small">Capture + question → interpretation</text>
+
+  <rect x="1050" y="744" width="370" height="155" rx="20" fill="#ffffff" stroke="#e0d0bd" filter="url(#shadow)"/>
+  <rect x="1070" y="764" width="43" height="43" rx="12" fill="#fbf0df"/>
+  <g stroke="#8c5a17" stroke-width="3" stroke-linecap="round">
+    <path d="M1080 781 V791 M1087 774 V798 M1095 771 V801 M1103 780 V792"/>
+  </g>
+  <text x="1127" y="796" class="name">ElevenLabs</text>
+  <text x="1073" y="840" class="body">Audio → text · text → speech</text>
+  <text x="1073" y="874" class="small">Scribe v2 · Flash v2.5</text>
+
+  <text x="60" y="846" class="body" style="font-weight:600">Your question starts the flow.</text>
+  <text x="60" y="879" class="body">Capture stays deliberate. Stop stays available.</text>
+
+  <rect x="60" y="931" width="1360" height="54" rx="15" fill="#e7edf7"/>
+  <text x="87" y="965" class="chip">SHARED FOUNDATION</text>
+  <line x1="320" y1="945" x2="320" y2="972" stroke="#b8c5dc"/>
+  <text x="345" y="965" class="body">TypeScript + Zod contracts</text>
+  <circle cx="638" cy="958" r="3" fill="#657592"/>
+  <text x="660" y="965" class="body">Shared React voice UI</text>
+  <circle cx="914" cy="958" r="3" fill="#657592"/>
+  <text x="936" y="965" class="body">npm workspaces · one backend</text>
+</svg>
